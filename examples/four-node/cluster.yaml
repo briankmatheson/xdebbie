@@ -91,7 +91,7 @@ spec:
             hostNetwork: true
             containers:
               - name: kube-vip
-                image: ghcr.io/kube-vip/kube-vip:v1.0.1
+                image: ghcr.io/kube-vip/kube-vip:v1.0.1   # pin to the current kube-vip release
                 args: [manager]
                 env:
                   - {name: vip_arp, value: "true"}
