@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! flockd — a small VM scheduler and lifecycle manager for libvirt hosts.
+//! qfodufk8sd — a small VM scheduler and lifecycle manager for libvirt hosts.
 
 mod api;
 mod config;
@@ -14,13 +14,13 @@ use clap::{Parser, Subcommand};
 use tracing::info;
 
 #[derive(Parser)]
-#[command(version, about = "Flock VM orchestrator daemon")]
+#[command(version, about = "Qfodufk8s VM orchestrator daemon")]
 struct Cli {
     #[arg(
         short,
         long,
-        env = "FLOCKD_CONFIG",
-        default_value = "/etc/flock/flockd.toml"
+        env = "QFODUFK8SD_CONFIG",
+        default_value = "/etc/qfodufk8s/qfodufk8sd.toml"
     )]
     config: PathBuf,
     #[command(subcommand)]
@@ -122,7 +122,7 @@ async fn main() -> anyhow::Result<()> {
                 let _ = tokio::signal::ctrl_c().await;
                 h2.graceful_shutdown(Some(std::time::Duration::from_secs(10)));
             });
-            info!(listen = %cfg.listen, "flockd serving https");
+            info!(listen = %cfg.listen, "qfodufk8sd serving https");
             axum_server::bind_rustls(cfg.listen, tls)
                 .handle(h)
                 .serve(app.into_make_service())
@@ -135,7 +135,7 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
             let l = tokio::net::TcpListener::bind(cfg.listen).await?;
-            info!(listen = %cfg.listen, "flockd serving http");
+            info!(listen = %cfg.listen, "qfodufk8sd serving http");
             axum::serve(l, app)
                 .with_graceful_shutdown(async {
                     let _ = tokio::signal::ctrl_c().await;

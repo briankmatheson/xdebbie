@@ -3,18 +3,18 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   labels:
-    cluster.x-k8s.io/provider: infrastructure-flock
+    cluster.x-k8s.io/provider: infrastructure-qfodufk8s
     cluster.x-k8s.io/v1beta2: v1alpha1
     clusterctl.cluster.x-k8s.io: ''
-  name: flockclusters.infrastructure.cluster.x-k8s.io
+  name: qfodufk8sclusters.infrastructure.cluster.x-k8s.io
 spec:
   group: infrastructure.cluster.x-k8s.io
   names:
-    kind: FlockCluster
-    plural: flockclusters
+    kind: Qfodufk8sCluster
+    plural: qfodufk8sclusters
     shortNames:
     - fc
-    singular: flockcluster
+    singular: qfodufk8scluster
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
@@ -30,7 +30,7 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Auto-generated derived type for FlockClusterSpec via `CustomResource`
+        description: Auto-generated derived type for Qfodufk8sClusterSpec via `CustomResource`
         properties:
           spec:
             properties:
@@ -39,7 +39,7 @@ spec:
                   host: ''
                   port: 0
                 description: |-
-                  The API server endpoint. Flock does not run load balancers; point this
+                  The API server endpoint. Qfodufk8s does not run load balancers; point this
                   at a VIP managed by kube-vip (static pod on control-plane VMs) or an
                   external LB. Required by the CAPI contract.
                 properties:
@@ -112,7 +112,7 @@ spec:
             type: object
         required:
         - spec
-        title: FlockCluster
+        title: Qfodufk8sCluster
         type: object
     served: true
     storage: true
@@ -123,22 +123,22 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   labels:
-    cluster.x-k8s.io/provider: infrastructure-flock
+    cluster.x-k8s.io/provider: infrastructure-qfodufk8s
     cluster.x-k8s.io/v1beta2: v1alpha1
     clusterctl.cluster.x-k8s.io: ''
-  name: flockclustertemplates.infrastructure.cluster.x-k8s.io
+  name: qfodufk8sclustertemplates.infrastructure.cluster.x-k8s.io
 spec:
   group: infrastructure.cluster.x-k8s.io
   names:
-    kind: FlockClusterTemplate
-    plural: flockclustertemplates
-    singular: flockclustertemplate
+    kind: Qfodufk8sClusterTemplate
+    plural: qfodufk8sclustertemplates
+    singular: qfodufk8sclustertemplate
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Auto-generated derived type for FlockClusterTemplateSpec via `CustomResource`
+        description: Auto-generated derived type for Qfodufk8sClusterTemplateSpec via `CustomResource`
         properties:
           spec:
             properties:
@@ -151,7 +151,7 @@ spec:
                           host: ''
                           port: 0
                         description: |-
-                          The API server endpoint. Flock does not run load balancers; point this
+                          The API server endpoint. Qfodufk8s does not run load balancers; point this
                           at a VIP managed by kube-vip (static pod on control-plane VMs) or an
                           external LB. Required by the CAPI contract.
                         properties:
@@ -177,7 +177,7 @@ spec:
             type: object
         required:
         - spec
-        title: FlockClusterTemplate
+        title: Qfodufk8sClusterTemplate
         type: object
     served: true
     storage: true
@@ -186,18 +186,18 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   labels:
-    cluster.x-k8s.io/provider: infrastructure-flock
+    cluster.x-k8s.io/provider: infrastructure-qfodufk8s
     cluster.x-k8s.io/v1beta2: v1alpha1
     clusterctl.cluster.x-k8s.io: ''
-  name: flockmachines.infrastructure.cluster.x-k8s.io
+  name: qfodufk8smachines.infrastructure.cluster.x-k8s.io
 spec:
   group: infrastructure.cluster.x-k8s.io
   names:
-    kind: FlockMachine
-    plural: flockmachines
+    kind: Qfodufk8sMachine
+    plural: qfodufk8smachines
     shortNames:
     - fm
-    singular: flockmachine
+    singular: qfodufk8smachine
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
@@ -219,7 +219,7 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Auto-generated derived type for FlockMachineSpec via `CustomResource`
+        description: Auto-generated derived type for Qfodufk8sMachineSpec via `CustomResource`
         properties:
           spec:
             properties:
@@ -240,7 +240,7 @@ spec:
                 minimum: 0.0
                 type: integer
               providerID:
-                description: Set by capf to `flock://<vm-uuid>`. Never set this yourself.
+                description: Set by capq to `qfodufk8s://<vm-uuid>`. Never set this yourself.
                 nullable: true
                 type: string
               strictAntiAffinity:
@@ -319,7 +319,7 @@ spec:
             type: object
         required:
         - spec
-        title: FlockMachine
+        title: Qfodufk8sMachine
         type: object
     served: true
     storage: true
@@ -330,24 +330,24 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   labels:
-    cluster.x-k8s.io/provider: infrastructure-flock
+    cluster.x-k8s.io/provider: infrastructure-qfodufk8s
     cluster.x-k8s.io/v1beta2: v1alpha1
     clusterctl.cluster.x-k8s.io: ''
-  name: flockmachinetemplates.infrastructure.cluster.x-k8s.io
+  name: qfodufk8smachinetemplates.infrastructure.cluster.x-k8s.io
 spec:
   group: infrastructure.cluster.x-k8s.io
   names:
-    kind: FlockMachineTemplate
-    plural: flockmachinetemplates
+    kind: Qfodufk8sMachineTemplate
+    plural: qfodufk8smachinetemplates
     shortNames:
     - fmt
-    singular: flockmachinetemplate
+    singular: qfodufk8smachinetemplate
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Auto-generated derived type for FlockMachineTemplateSpec via `CustomResource`
+        description: Auto-generated derived type for Qfodufk8sMachineTemplateSpec via `CustomResource`
         properties:
           spec:
             properties:
@@ -372,7 +372,7 @@ spec:
                         minimum: 0.0
                         type: integer
                       providerID:
-                        description: Set by capf to `flock://<vm-uuid>`. Never set this yourself.
+                        description: Set by capq to `qfodufk8s://<vm-uuid>`. Never set this yourself.
                         nullable: true
                         type: string
                       strictAntiAffinity:
@@ -399,7 +399,7 @@ spec:
             type: object
         required:
         - spec
-        title: FlockMachineTemplate
+        title: Qfodufk8sMachineTemplate
         type: object
     served: true
     storage: true

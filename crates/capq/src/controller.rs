@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! FlockCluster and FlockMachine reconcilers.
+//! Qfodufk8sCluster and Qfodufk8sMachine reconcilers.
 
 use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context as _, anyhow};
 use chrono::Utc;
-use flock_core::{Placement, VmPhase, VmSpec};
 use k8s_openapi::api::core::v1::Secret;
 use kube::{
     Api, Client, ResourceExt,
@@ -15,14 +14,15 @@ use kube::{
         finalizer::{Event, finalizer},
     },
 };
+use qfodufk8s_core::{Placement, VmPhase, VmSpec};
 use serde_json::{Value, json};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::{crd::*, flock::Flock};
+use crate::{crd::*, qfodufk8s::Qfodufk8s};
 
-pub const CLUSTER_FINALIZER: &str = "flockcluster.infrastructure.cluster.x-k8s.io";
-pub const MACHINE_FINALIZER: &str = "flockmachine.infrastructure.cluster.x-k8s.io";
+pub const CLUSTER_FINALIZER: &str = "qfodufk8scluster.infrastructure.cluster.x-k8s.io";
+pub const MACHINE_FINALIZER: &str = "qfodufk8smachine.infrastructure.cluster.x-k8s.io";
 const CLUSTER_NAME: &str = "cluster.x-k8s.io/cluster-name";
 const PAUSED: &str = "cluster.x-k8s.io/paused";
 const CP_LABEL: &str = "cluster.x-k8s.io/control-plane";
@@ -32,7 +32,7 @@ pub const PROVIDER_ID_TOKEN: &str = "{{ ds.meta_data.provider_id }}";
 
 pub struct Ctx {
     pub client: Client,
-    pub flock: Flock,
+    pub qfodufk8s: Qfodufk8s,
     pub capi_version: String,
 }
 
@@ -123,11 +123,11 @@ fn finalizer_err<E: std::fmt::Display>(e: E) -> Error {
     Error::Finalizer(e.to_string())
 }
 
-// ===================== FlockCluster =====================
+// ===================== Qfodufk8sCluster =====================
 
-pub async fn reconcile_cluster(fc: Arc<FlockCluster>, ctx: Arc<Ctx>) -> Result<Action> {
+pub async fn reconcile_cluster(fc: Arc<Qfodufk8sCluster>, ctx: Arc<Ctx>) -> Result<Action> {
     let ns = fc.namespace().unwrap_or_default();
-    let api: Api<FlockCluster> = Api::namespaced(ctx.client.clone(), &ns);
+    let api: Api<Qfodufk8sCluster> = Api::namespaced(ctx.client.clone(), &ns);
     finalizer(&api, CLUSTER_FINALIZER, fc, |ev| async {
         match ev {
             Event::Apply(fc) => apply_cluster(&api, &fc, &ctx).await,
@@ -138,7 +138,11 @@ pub async fn reconcile_cluster(fc: Arc<FlockCluster>, ctx: Arc<Ctx>) -> Result<A
     .map_err(finalizer_err)
 }
 
-async fn apply_cluster(api: &Api<FlockCluster>, fc: &FlockCluster, ctx: &Ctx) -> Result<Action> {
+async fn apply_cluster(
+    api: &Api<Qfodufk8sCluster>,
+    fc: &Qfodufk8sCluster,
+    ctx: &Ctx,
+) -> Result<Action> {
     let cluster = ctx.owner(&fc.metadata, "Cluster").await?;
     let Some(cluster) = cluster else {
         info!(name = %fc.name_any(), "waiting for Cluster controller to set ownerRef");
@@ -152,7 +156,7 @@ async fn apply_cluster(api: &Api<FlockCluster>, fc: &FlockCluster, ctx: &Ctx) ->
     let generation = fc.metadata.generation;
     let ep = &fc.spec.control_plane_endpoint;
     let fds = ctx
-        .flock
+        .qfodufk8s
         .failure_domains()
         .await
         .context("listing failure domains")?;
@@ -174,11 +178,11 @@ async fn apply_cluster(api: &Api<FlockCluster>, fc: &FlockCluster, ctx: &Ctx) ->
             "spec.controlPlaneEndpoint host and port are required (use a kube-vip VIP)".to_string(),
         )
     } else if !fd_ok {
-        Some("no control-plane-eligible failure domain registered in flockd".to_string())
+        Some("no control-plane-eligible failure domain registered in qfodufk8sd".to_string())
     } else {
         None
     };
-    let status = FlockClusterStatus {
+    let status = Qfodufk8sClusterStatus {
         initialization: Some(Initialization {
             provisioned: Some(ready),
         }),
@@ -208,27 +212,27 @@ async fn apply_cluster(api: &Api<FlockCluster>, fc: &FlockCluster, ctx: &Ctx) ->
 }
 
 /// Belt and braces: remove any VMs still labelled with this cluster.
-async fn cleanup_cluster(fc: &FlockCluster, ctx: &Ctx) -> Result<Action> {
+async fn cleanup_cluster(fc: &Qfodufk8sCluster, ctx: &Ctx) -> Result<Action> {
     let sel = format!(
-        "flock.dev/cluster={}.{}",
+        "qfodufk8s.dev/cluster={}.{}",
         fc.namespace().unwrap_or_default(),
         fc.name_any()
     );
-    let left = ctx.flock.list_vms(&sel).await?;
+    let left = ctx.qfodufk8s.list_vms(&sel).await?;
     if left.is_empty() {
         return Ok(Action::await_change());
     }
     for vm in &left {
-        ctx.flock.delete_vm(vm.id).await?;
+        ctx.qfodufk8s.delete_vm(vm.id).await?;
     }
     Err(anyhow!("{} VMs still deleting", left.len()).into())
 }
 
-// ===================== FlockMachine =====================
+// ===================== Qfodufk8sMachine =====================
 
-pub async fn reconcile_machine(fm: Arc<FlockMachine>, ctx: Arc<Ctx>) -> Result<Action> {
+pub async fn reconcile_machine(fm: Arc<Qfodufk8sMachine>, ctx: Arc<Ctx>) -> Result<Action> {
     let ns = fm.namespace().unwrap_or_default();
-    let api: Api<FlockMachine> = Api::namespaced(ctx.client.clone(), &ns);
+    let api: Api<Qfodufk8sMachine> = Api::namespaced(ctx.client.clone(), &ns);
     finalizer(&api, MACHINE_FINALIZER, fm, |ev| async {
         match ev {
             Event::Apply(fm) => apply_machine(&api, &fm, &ctx).await,
@@ -239,15 +243,15 @@ pub async fn reconcile_machine(fm: Arc<FlockMachine>, ctx: Arc<Ctx>) -> Result<A
     .map_err(finalizer_err)
 }
 
-/// The VM's identity. On first reconcile it is the FlockMachine's UID; after
+/// The VM's identity. On first reconcile it is the Qfodufk8sMachine's UID; after
 /// that it is read back from `spec.providerID`, which survives
 /// `clusterctl move` (UIDs do not).
-pub fn vm_id(fm: &FlockMachine) -> Result<Uuid> {
+pub fn vm_id(fm: &Qfodufk8sMachine) -> Result<Uuid> {
     if let Some(id) = fm
         .spec
         .provider_id
         .as_deref()
-        .and_then(|p| p.strip_prefix("flock://"))
+        .and_then(|p| p.strip_prefix("qfodufk8s://"))
     {
         return Ok(Uuid::parse_str(id).map_err(anyhow::Error::from)?);
     }
@@ -260,17 +264,21 @@ pub fn vm_id(fm: &FlockMachine) -> Result<Uuid> {
     .map_err(anyhow::Error::from)?)
 }
 
-async fn cleanup_machine(fm: &FlockMachine, ctx: &Ctx) -> Result<Action> {
+async fn cleanup_machine(fm: &Qfodufk8sMachine, ctx: &Ctx) -> Result<Action> {
     let id = vm_id(fm)?;
-    if ctx.flock.delete_vm(id).await? {
+    if ctx.qfodufk8s.delete_vm(id).await? {
         info!(machine = %fm.name_any(), "vm gone");
         return Ok(Action::await_change());
     }
-    // Keep the finalizer until flockd confirms the VM is gone.
+    // Keep the finalizer until qfodufk8sd confirms the VM is gone.
     Err(anyhow!("vm {id} still deleting").into())
 }
 
-async fn apply_machine(api: &Api<FlockMachine>, fm: &FlockMachine, ctx: &Ctx) -> Result<Action> {
+async fn apply_machine(
+    api: &Api<Qfodufk8sMachine>,
+    fm: &Qfodufk8sMachine,
+    ctx: &Ctx,
+) -> Result<Action> {
     let name = fm.name_any();
     let ns = fm.namespace().unwrap_or_default();
     let wait = |s| Ok(Action::requeue(Duration::from_secs(s)));
@@ -292,11 +300,11 @@ async fn apply_machine(api: &Api<FlockMachine>, fm: &FlockMachine, ctx: &Ctx) ->
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let id = vm_id(fm)?;
-    let provider_id = format!("flock://{id}");
+    let provider_id = format!("qfodufk8s://{id}");
     let prev = fm.status.clone().unwrap_or_default();
     let generation = fm.metadata.generation;
 
-    let mut vm = ctx.flock.get_vm(id).await?;
+    let mut vm = ctx.qfodufk8s.get_vm(id).await?;
     if vm.is_none() {
         if !infra_ready {
             return wait(10);
@@ -309,7 +317,7 @@ async fn apply_machine(api: &Api<FlockMachine>, fm: &FlockMachine, ctx: &Ctx) ->
             set_status(
                 api,
                 fm,
-                FlockMachineStatus {
+                Qfodufk8sMachineStatus {
                     conditions: vec![cond(
                         "Ready",
                         false,
@@ -368,7 +376,7 @@ async fn apply_machine(api: &Api<FlockMachine>, fm: &FlockMachine, ctx: &Ctx) ->
             meta_data: [("cluster".to_string(), cluster_name.clone())].into(),
             labels: [
                 (
-                    "flock.dev/cluster".to_string(),
+                    "qfodufk8s.dev/cluster".to_string(),
                     format!(
                         "{ns}.{}",
                         fm.labels()
@@ -377,12 +385,12 @@ async fn apply_machine(api: &Api<FlockMachine>, fm: &FlockMachine, ctx: &Ctx) ->
                             .unwrap_or(cluster_name.clone())
                     ),
                 ),
-                ("flock.dev/machine".to_string(), format!("{ns}.{name}")),
+                ("qfodufk8s.dev/machine".to_string(), format!("{ns}.{name}")),
             ]
             .into(),
         };
         info!(machine = %name, %id, "creating vm");
-        vm = Some(ctx.flock.put_vm(id, &spec).await?);
+        vm = Some(ctx.qfodufk8s.put_vm(id, &spec).await?);
     }
     let vm = vm.unwrap();
 
@@ -399,7 +407,7 @@ async fn apply_machine(api: &Api<FlockMachine>, fm: &FlockMachine, ctx: &Ctx) ->
     let provisioned = vm.phase == VmPhase::Running && has_ip;
     let fd = match &vm.host {
         Some(h) => ctx
-            .flock
+            .qfodufk8s
             .failure_domains()
             .await?
             .into_iter()
@@ -419,7 +427,7 @@ async fn apply_machine(api: &Api<FlockMachine>, fm: &FlockMachine, ctx: &Ctx) ->
             vm.message.clone().or(Some(format!("{p:?}"))),
         ),
     };
-    let status = FlockMachineStatus {
+    let status = Qfodufk8sMachineStatus {
         // Once provisioned, stays provisioned (contract: never flip back).
         initialization: Some(Initialization {
             provisioned: Some(
@@ -456,9 +464,9 @@ async fn apply_machine(api: &Api<FlockMachine>, fm: &FlockMachine, ctx: &Ctx) ->
 }
 
 async fn set_status(
-    api: &Api<FlockMachine>,
-    fm: &FlockMachine,
-    s: FlockMachineStatus,
+    api: &Api<Qfodufk8sMachine>,
+    fm: &Qfodufk8sMachine,
+    s: Qfodufk8sMachineStatus,
 ) -> Result<()> {
     if fm.status.as_ref() == Some(&s) {
         return Ok(());
@@ -486,13 +494,13 @@ mod tests {
     }
     #[test]
     fn provider_id_wins_over_uid() {
-        let mut fm = FlockMachine::new("m", FlockMachineSpec::default());
+        let mut fm = Qfodufk8sMachine::new("m", Qfodufk8sMachineSpec::default());
         fm.metadata.uid = Some("11111111-1111-1111-1111-111111111111".into());
         assert_eq!(
             vm_id(&fm).unwrap().to_string(),
             "11111111-1111-1111-1111-111111111111"
         );
-        fm.spec.provider_id = Some("flock://22222222-2222-2222-2222-222222222222".into());
+        fm.spec.provider_id = Some("qfodufk8s://22222222-2222-2222-2222-222222222222".into());
         assert_eq!(
             vm_id(&fm).unwrap().to_string(),
             "22222222-2222-2222-2222-222222222222"

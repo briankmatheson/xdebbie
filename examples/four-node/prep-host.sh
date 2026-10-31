@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Prepare a Debian 13 (trixie) server as a Flock hypervisor host.
+# Prepare a Debian 13 (trixie) server as a Qfodufk8s hypervisor host.
 #
-#   sudo ./prep-host.sh --nic eno1 --pubkey "ssh-ed25519 AAAA... flockd@srv1"
+#   sudo ./prep-host.sh --nic eno1 --pubkey "ssh-ed25519 AAAA... qfodufk8sd@srv1"
 #
-# Idempotent. Installs KVM/libvirt, creates the `flock` user that flockd
+# Idempotent. Installs KVM/libvirt, creates the `qfodufk8s` user that qfodufk8sd
 # connects as, defines the `default` dir pool, and (optionally) converts
 # --nic into a Linux bridge `br0` with DHCP.
 set -euo pipefail
@@ -28,13 +28,13 @@ apt-get install -yq --no-install-recommends \
   qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients \
   bridge-utils ifupdown chrony
 
-# The account flockd uses. libvirt's ssh transport runs virt-ssh-helper as it.
-id flock >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib/flock-host --shell /bin/bash flock
-usermod -aG libvirt,kvm flock
-install -d -m 700 -o flock -g flock /var/lib/flock-host/.ssh
+# The account qfodufk8sd uses. libvirt's ssh transport runs virt-ssh-helper as it.
+id qfodufk8s >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib/qfodufk8s-host --shell /bin/bash qfodufk8s
+usermod -aG libvirt,kvm qfodufk8s
+install -d -m 700 -o qfodufk8s -g qfodufk8s /var/lib/qfodufk8s-host/.ssh
 if [[ -n $PUBKEY ]]; then
-  grep -qxF "$PUBKEY" /var/lib/flock-host/.ssh/authorized_keys 2>/dev/null || echo "$PUBKEY" >> /var/lib/flock-host/.ssh/authorized_keys
-  chown flock:flock /var/lib/flock-host/.ssh/authorized_keys; chmod 600 /var/lib/flock-host/.ssh/authorized_keys
+  grep -qxF "$PUBKEY" /var/lib/qfodufk8s-host/.ssh/authorized_keys 2>/dev/null || echo "$PUBKEY" >> /var/lib/qfodufk8s-host/.ssh/authorized_keys
+  chown qfodufk8s:qfodufk8s /var/lib/qfodufk8s-host/.ssh/authorized_keys; chmod 600 /var/lib/qfodufk8s-host/.ssh/authorized_keys
 fi
 
 # Storage pool for base images and VM overlays.
@@ -47,7 +47,7 @@ virsh pool-autostart default
 
 # Bridge. Only touched when --nic is given; keep a console handy.
 if [[ -n $NIC ]] && ! ip link show "$BRIDGE" >/dev/null 2>&1; then
-  cp /etc/network/interfaces /etc/network/interfaces.pre-flock
+  cp /etc/network/interfaces /etc/network/interfaces.pre-qfodufk8s
   cat > /etc/network/interfaces <<EOT
 source /etc/network/interfaces.d/*
 auto lo

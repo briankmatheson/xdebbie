@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! libvirt driver. Talks to each host with `virsh -c qemu+ssh://...`, so the
-//! only thing a host needs is libvirtd, QEMU/KVM, an SSH key for the flock
+//! only thing a host needs is libvirtd, QEMU/KVM, an SSH key for the qfodufk8s
 //! user, a storage pool holding base images, and a bridge.
 
 use std::{collections::BTreeMap, future::Future, path::Path};
 
 use anyhow::{Context, Result, bail};
-use flock_core::{Address, Capacity, Host, Vm};
+use qfodufk8s_core::{Address, Capacity, Host, Vm};
 use tokio::process::Command;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -200,7 +200,7 @@ pub fn domain_xml(host: &Host, vm: &Vm) -> String {
   <name>{name}</name>
   <uuid>{uuid}</uuid>
   <metadata>
-    <flock:vm xmlns:flock='https://flock.dev/xmlns/vm/1'><flock:name>{vmname}</flock:name></flock:vm>
+    <qfodufk8s:vm xmlns:qfodufk8s='https://qfodufk8s.dev/xmlns/vm/1'><qfodufk8s:name>{vmname}</qfodufk8s:name></qfodufk8s:vm>
   </metadata>
   <memory unit='MiB'>{mem}</memory>
   <vcpu placement='static'>{cpu}</vcpu>

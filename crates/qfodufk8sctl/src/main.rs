@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! flockctl — command-line client for flockd.
+//! qfodufk8sctl — command-line client for qfodufk8sd.
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use flock_core::*;
+use qfodufk8s_core::*;
 use reqwest::{Method, blocking::Client};
 use serde_json::Value;
 
 #[derive(Parser)]
-#[command(version, about = "Flock CLI")]
+#[command(version, about = "Qfodufk8s CLI")]
 struct Cli {
-    #[arg(long, env = "FLOCK_URL", default_value = "http://127.0.0.1:7443")]
+    #[arg(long, env = "QFODUFK8S_URL", default_value = "http://127.0.0.1:7443")]
     url: String,
-    #[arg(long, env = "FLOCK_TOKEN", hide_env_values = true)]
+    #[arg(long, env = "QFODUFK8S_TOKEN", hide_env_values = true)]
     token: Option<String>,
     /// Print raw JSON.
     #[arg(short, long, global = true)]
@@ -150,7 +150,7 @@ impl Api {
         if let Some(b) = body {
             r = r.json(&b);
         }
-        let resp = r.send().context("contacting flockd")?;
+        let resp = r.send().context("contacting qfodufk8sd")?;
         let code = resp.status();
         let text = resp.text()?;
         let v: Value = if text.is_empty() {

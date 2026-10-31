@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Cluster API infrastructure types, contract v1beta2.
 //!
-//! | CAPI contract object   | Flock kind                |
+//! | CAPI contract object   | Qfodufk8s kind                |
 //! |------------------------|---------------------------|
-//! | InfraCluster           | FlockCluster              |
-//! | InfraClusterTemplate   | FlockClusterTemplate      |
-//! | InfraMachine           | FlockMachine              |
-//! | InfraMachineTemplate   | FlockMachineTemplate      |
+//! | InfraCluster           | Qfodufk8sCluster              |
+//! | InfraClusterTemplate   | Qfodufk8sClusterTemplate      |
+//! | InfraMachine           | Qfodufk8sMachine              |
+//! | InfraMachineTemplate   | Qfodufk8sMachineTemplate      |
 
 use std::collections::BTreeMap;
 
@@ -48,23 +48,23 @@ pub struct Initialization {
     pub provisioned: Option<bool>,
 }
 
-// ---------------- FlockCluster ----------------
+// ---------------- Qfodufk8sCluster ----------------
 
 #[derive(CustomResource, Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
 #[kube(
     group = "infrastructure.cluster.x-k8s.io",
     version = "v1alpha1",
-    kind = "FlockCluster",
+    kind = "Qfodufk8sCluster",
     namespaced,
-    status = "FlockClusterStatus",
+    status = "Qfodufk8sClusterStatus",
     shortname = "fc",
     printcolumn = r#"{"name":"Cluster","type":"string","jsonPath":".metadata.labels['cluster\\.x-k8s\\.io/cluster-name']"}"#,
     printcolumn = r#"{"name":"Endpoint","type":"string","jsonPath":".spec.controlPlaneEndpoint.host"}"#,
     printcolumn = r#"{"name":"Provisioned","type":"boolean","jsonPath":".status.initialization.provisioned"}"#
 )]
 #[serde(rename_all = "camelCase")]
-pub struct FlockClusterSpec {
-    /// The API server endpoint. Flock does not run load balancers; point this
+pub struct Qfodufk8sClusterSpec {
+    /// The API server endpoint. Qfodufk8s does not run load balancers; point this
     /// at a VIP managed by kube-vip (static pod on control-plane VMs) or an
     /// external LB. Required by the CAPI contract.
     #[serde(default)]
@@ -86,7 +86,7 @@ pub struct FailureDomain {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct FlockClusterStatus {
+pub struct Qfodufk8sClusterStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initialization: Option<Initialization>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -99,28 +99,28 @@ pub struct FlockClusterStatus {
 #[kube(
     group = "infrastructure.cluster.x-k8s.io",
     version = "v1alpha1",
-    kind = "FlockClusterTemplate",
+    kind = "Qfodufk8sClusterTemplate",
     namespaced
 )]
 #[serde(rename_all = "camelCase")]
-pub struct FlockClusterTemplateSpec {
-    pub template: FlockClusterTemplateResource,
+pub struct Qfodufk8sClusterTemplateSpec {
+    pub template: Qfodufk8sClusterTemplateResource,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct FlockClusterTemplateResource {
-    pub spec: FlockClusterSpec,
+pub struct Qfodufk8sClusterTemplateResource {
+    pub spec: Qfodufk8sClusterSpec,
 }
 
-// ---------------- FlockMachine ----------------
+// ---------------- Qfodufk8sMachine ----------------
 
 #[derive(CustomResource, Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
 #[kube(
     group = "infrastructure.cluster.x-k8s.io",
     version = "v1alpha1",
-    kind = "FlockMachine",
+    kind = "Qfodufk8sMachine",
     namespaced,
-    status = "FlockMachineStatus",
+    status = "Qfodufk8sMachineStatus",
     shortname = "fm",
     printcolumn = r#"{"name":"Cluster","type":"string","jsonPath":".metadata.labels['cluster\\.x-k8s\\.io/cluster-name']"}"#,
     printcolumn = r#"{"name":"Host","type":"string","jsonPath":".status.host"}"#,
@@ -129,8 +129,8 @@ pub struct FlockClusterTemplateResource {
     printcolumn = r#"{"name":"Provisioned","type":"boolean","jsonPath":".status.initialization.provisioned"}"#
 )]
 #[serde(rename_all = "camelCase")]
-pub struct FlockMachineSpec {
-    /// Set by capf to `flock://<vm-uuid>`. Never set this yourself.
+pub struct Qfodufk8sMachineSpec {
+    /// Set by capq to `qfodufk8s://<vm-uuid>`. Never set this yourself.
     #[serde(
         default,
         rename = "providerID",
@@ -161,7 +161,7 @@ pub struct MachineAddress {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct FlockMachineStatus {
+pub struct Qfodufk8sMachineStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initialization: Option<Initialization>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -180,18 +180,18 @@ pub struct FlockMachineStatus {
 #[kube(
     group = "infrastructure.cluster.x-k8s.io",
     version = "v1alpha1",
-    kind = "FlockMachineTemplate",
+    kind = "Qfodufk8sMachineTemplate",
     namespaced,
     shortname = "fmt"
 )]
 #[serde(rename_all = "camelCase")]
-pub struct FlockMachineTemplateSpec {
-    pub template: FlockMachineTemplateResource,
+pub struct Qfodufk8sMachineTemplateSpec {
+    pub template: Qfodufk8sMachineTemplateResource,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct FlockMachineTemplateResource {
-    pub spec: FlockMachineSpec,
+pub struct Qfodufk8sMachineTemplateResource {
+    pub spec: Qfodufk8sMachineSpec,
 }
 
 /// All CRDs, labelled so CAPI maps its contract to our served version.
@@ -200,17 +200,17 @@ pub fn all_crds()
 {
     use kube::CustomResourceExt;
     let mut v = vec![
-        FlockCluster::crd(),
-        FlockClusterTemplate::crd(),
-        FlockMachine::crd(),
-        FlockMachineTemplate::crd(),
+        Qfodufk8sCluster::crd(),
+        Qfodufk8sClusterTemplate::crd(),
+        Qfodufk8sMachine::crd(),
+        Qfodufk8sMachineTemplate::crd(),
     ];
     for c in &mut v {
         let l = c.metadata.labels.get_or_insert_with(Default::default);
         l.insert("cluster.x-k8s.io/v1beta2".into(), VERSION.into());
         l.insert(
             "cluster.x-k8s.io/provider".into(),
-            "infrastructure-flock".into(),
+            "infrastructure-qfodufk8s".into(),
         );
         // Lets `clusterctl move` discover and relocate these objects.
         l.insert("clusterctl.cluster.x-k8s.io".into(), String::new());

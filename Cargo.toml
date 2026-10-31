@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["crates/flock-core", "crates/flockd", "crates/flockctl", "crates/capf"]
+members = ["crates/qfodufk8s-core", "crates/qfodufk8sd", "crates/qfodufk8sctl", "crates/capq"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
-repository = "https://github.com/bmatheson/flock"
+repository = "https://github.com/bmatheson/qfodufk8s"
 authors = ["Brian Matheson <bmath@brianmatheson.com>"]

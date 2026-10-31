@@ -1,15 +1,15 @@
-# Contributing to Flock
+# Contributing to Qfodufk8s
 
-Thanks for helping. Flock is GPL-3.0-or-later; by contributing you agree your
+Thanks for helping. Qfodufk8s is GPL-3.0-or-later; by contributing you agree your
 work is released under that license.
 
 ## Ground rules
 
 - `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, and `cargo test`
   must pass. CI runs all three, and checks that `deploy/crds.yaml` matches
-  `capf crds`.
+  `capq crds`.
 - New source files start with `// SPDX-License-Identifier: GPL-3.0-or-later`.
-- Scheduler changes need a test in `flock-core/src/scheduler.rs`.
+- Scheduler changes need a test in `qfodufk8s-core/src/scheduler.rs`.
   Reconciler changes need a test against the fake hypervisor.
 - Keep hosts agentless. If a feature needs software on the hypervisor beyond
   libvirt and QEMU, open an issue first.
@@ -26,5 +26,5 @@ git commit -s -m "scheduler: prefer hosts with warm base images"
 ## Regenerating CRDs
 
 ```
-cargo run -q -p capf -- crds > deploy/crds.yaml
+cargo run -q -p capq -- crds > deploy/crds.yaml
 ```

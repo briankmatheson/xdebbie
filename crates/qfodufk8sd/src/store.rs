@@ -4,7 +4,7 @@
 
 use std::{collections::BTreeMap, io::Write, path::PathBuf, sync::Arc};
 
-use flock_core::{Host, Vm};
+use qfodufk8s_core::{Host, Vm};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use uuid::Uuid;

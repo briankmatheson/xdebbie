@@ -10,8 +10,8 @@
 use std::{sync::Arc, time::Duration};
 
 use chrono::Utc;
-use flock_core::{Address, Host, PowerIntent, Vm, VmPhase, place};
 use futures::future::join_all;
+use qfodufk8s_core::{Address, Host, PowerIntent, Vm, VmPhase, place};
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -318,7 +318,7 @@ impl<H: Hypervisor> Reconciler<H> {
 mod tests {
     use super::*;
     use crate::libvirt::DomState;
-    use flock_core::{Capacity, Placement, VmSpec};
+    use qfodufk8s_core::{Capacity, Placement, VmSpec};
     use std::{collections::BTreeMap, sync::Mutex};
 
     #[derive(Default)]

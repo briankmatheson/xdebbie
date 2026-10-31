@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Wire and storage types shared by `flockd`, `flockctl`, and `capf`.
+//! Wire and storage types shared by `qfodufk8sd`, `qfodufk8sctl`, and `capq`.
 
 use std::collections::BTreeMap;
 
@@ -13,7 +13,7 @@ use uuid::Uuid;
 pub struct Host {
     /// Unique short name, e.g. `node-a`.
     pub name: String,
-    /// libvirt connection URI, e.g. `qemu+ssh://flock@10.0.0.11/system`.
+    /// libvirt connection URI, e.g. `qemu+ssh://qfodufk8s@10.0.0.11/system`.
     pub uri: String,
     /// Failure domain (rack, PDU, room). CAPI spreads control planes across these.
     #[serde(alias = "failure_domain", default = "default_fd")]
@@ -45,7 +45,7 @@ pub struct Host {
     /// Cordoned hosts accept no new VMs.
     #[serde(default)]
     pub cordoned: bool,
-    /// Discovered capacity; filled by flockd's inventory loop.
+    /// Discovered capacity; filled by qfodufk8sd's inventory loop.
     #[serde(default)]
     pub capacity: Option<Capacity>,
     /// Last successful contact with libvirtd.
@@ -208,14 +208,14 @@ impl Vm {
     /// libvirt domain name: stable, unique, human-readable.
     pub fn domain_name(&self) -> String {
         format!(
-            "flock-{}-{}",
+            "qfodufk8s-{}-{}",
             self.spec.name,
             &self.id.simple().to_string()[..8]
         )
     }
     /// Cluster API providerID.
     pub fn provider_id(&self) -> String {
-        format!("flock://{}", self.id)
+        format!("qfodufk8s://{}", self.id)
     }
     /// Locally-administered, deterministic MAC derived from the VM id.
     pub fn mac(&self) -> String {

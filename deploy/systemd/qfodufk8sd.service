@@ -1,0 +1,22 @@
+[Unit]
+Description=Qfodufk8s VM orchestrator
+Documentation=https://github.com/bmatheson/qfodufk8s
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=qfodufk8s
+Group=qfodufk8s
+ExecStart=/usr/local/bin/qfodufk8sd --config /etc/qfodufk8s/qfodufk8sd.toml serve
+Restart=always
+RestartSec=2
+StateDirectory=qfodufk8s
+ConfigurationDirectory=qfodufk8s
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ReadWritePaths=/var/lib/qfodufk8s
+
+[Install]
+WantedBy=multi-user.target

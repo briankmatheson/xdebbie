@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use std::{net::SocketAddr, path::PathBuf};
 
-use flock_core::{Host, PlacementPolicy};
+use qfodufk8s_core::{Host, PlacementPolicy};
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -25,7 +25,7 @@ pub struct Config {
     pub reconcile_interval_secs: u64,
     #[serde(default = "d_stale")]
     pub host_stale_secs: i64,
-    /// Path to the `virsh` binary on the flockd machine.
+    /// Path to the `virsh` binary on the qfodufk8sd machine.
     #[serde(default = "d_virsh")]
     pub virsh: String,
     /// Command used to build the NoCloud seed ISO. `{out}`, `{user}`,
@@ -41,7 +41,7 @@ fn d_listen() -> SocketAddr {
     "127.0.0.1:7443".parse().unwrap()
 }
 fn d_state() -> PathBuf {
-    "/var/lib/flock/state.json".into()
+    "/var/lib/qfodufk8s/state.json".into()
 }
 fn d_interval() -> u64 {
     5

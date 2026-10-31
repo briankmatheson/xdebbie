@@ -312,16 +312,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
-name = "capf"
+name = "capq"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
- "flock-core",
  "futures",
  "k8s-openapi",
  "kube",
+ "qfodufk8s-core",
  "reqwest",
  "schemars",
  "serde",
@@ -696,52 +696,6 @@ name = "find-msvc-tools"
 version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
-
-[[package]]
-name = "flock-core"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "serde",
- "serde_json",
- "thiserror",
- "uuid",
-]
-
-[[package]]
-name = "flockctl"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "flock-core",
- "reqwest",
- "serde",
- "serde_json",
- "uuid",
-]
-
-[[package]]
-name = "flockd"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "axum-server",
- "chrono",
- "clap",
- "flock-core",
- "futures",
- "rustls",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
 
 [[package]]
 name = "fnv"
@@ -1840,6 +1794,52 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "200b9ff220857e53e184257720a14553b2f4aa02577d2ed9842d45d4b9654810"
 dependencies = [
  "cc",
+]
+
+[[package]]
+name = "qfodufk8s-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
+name = "qfodufk8sctl"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "qfodufk8s-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "qfodufk8sd"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "axum-server",
+ "chrono",
+ "clap",
+ "futures",
+ "qfodufk8s-core",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

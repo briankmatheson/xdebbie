@@ -1,30 +1,30 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Cluster API Provider Flock (capf). Apply after deploy/crds.yaml:
-#   kubectl apply -f deploy/crds.yaml -f deploy/capf.yaml
-# then create the flockd credentials secret (see docs/install.md).
+# Cluster API Provider Qfodufk8s (capq). Apply after deploy/crds.yaml:
+#   kubectl apply -f deploy/crds.yaml -f deploy/capq.yaml
+# then create the qfodufk8sd credentials secret (see docs/install.md).
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: capf-system
+  name: capq-system
   labels:
-    cluster.x-k8s.io/provider: infrastructure-flock
+    cluster.x-k8s.io/provider: infrastructure-qfodufk8s
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: capf-manager
-  namespace: capf-system
+  name: capq-manager
+  namespace: capq-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: capf-manager
+  name: capq-manager
 rules:
   - apiGroups: [infrastructure.cluster.x-k8s.io]
-    resources: [flockclusters, flockmachines, flockclustertemplates, flockmachinetemplates]
+    resources: [qfodufk8sclusters, qfodufk8smachines, qfodufk8sclustertemplates, qfodufk8smachinetemplates]
     verbs: [get, list, watch, patch, update]
   - apiGroups: [infrastructure.cluster.x-k8s.io]
-    resources: [flockclusters/status, flockmachines/status]
+    resources: [qfodufk8sclusters/status, qfodufk8smachines/status]
     verbs: [get, patch, update]
   - apiGroups: [cluster.x-k8s.io]
     resources: [clusters, machines]
@@ -40,46 +40,46 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: capf-aggregate-to-capi
+  name: capq-aggregate-to-capi
   labels:
     cluster.x-k8s.io/aggregate-to-manager: "true"
 rules:
   - apiGroups: [infrastructure.cluster.x-k8s.io]
-    resources: [flockclusters, flockmachines, flockclustertemplates, flockmachinetemplates]
+    resources: [qfodufk8sclusters, qfodufk8smachines, qfodufk8sclustertemplates, qfodufk8smachinetemplates]
     verbs: [get, list, watch, create, update, patch, delete]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: capf-manager
-roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: capf-manager}
-subjects: [{kind: ServiceAccount, name: capf-manager, namespace: capf-system}]
+  name: capq-manager
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: capq-manager}
+subjects: [{kind: ServiceAccount, name: capq-manager, namespace: capq-system}]
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: capf-controller-manager
-  namespace: capf-system
-  labels: {app: capf}
+  name: capq-controller-manager
+  namespace: capq-system
+  labels: {app: capq}
 spec:
   replicas: 1
   strategy: {type: Recreate}   # single writer; no leader election yet
-  selector: {matchLabels: {app: capf}}
+  selector: {matchLabels: {app: capq}}
   template:
-    metadata: {labels: {app: capf}}
+    metadata: {labels: {app: capq}}
     spec:
-      serviceAccountName: capf-manager
+      serviceAccountName: capq-manager
       securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: manager
-          image: ghcr.io/bmatheson/capf:v0.1.0
+          image: ghcr.io/bmatheson/capq:v0.1.0
           args: [run]
           env:
             - {name: RUST_LOG, value: "info,kube=warn"}
-            - name: FLOCK_URL
-              valueFrom: {secretKeyRef: {name: capf-flock-credentials, key: url}}
-            - name: FLOCK_TOKEN
-              valueFrom: {secretKeyRef: {name: capf-flock-credentials, key: token}}
+            - name: QFODUFK8S_URL
+              valueFrom: {secretKeyRef: {name: capq-qfodufk8s-credentials, key: url}}
+            - name: QFODUFK8S_TOKEN
+              valueFrom: {secretKeyRef: {name: capq-qfodufk8s-credentials, key: token}}
           resources:
             requests: {cpu: 10m, memory: 32Mi}
             limits: {memory: 128Mi}

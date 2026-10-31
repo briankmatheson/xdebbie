@@ -4,7 +4,7 @@
 
 1. **Nothing on the hosts but libvirt.** No agent to upgrade, no daemon to
    secure. A host is a URI.
-2. **One source of truth.** flockd owns desired state; libvirt reports
+2. **One source of truth.** qfodufk8sd owns desired state; libvirt reports
    actual state; the reconciler closes the gap.
 3. **Idempotent everything.** Every API write can be retried; every
    reconcile step can be interrupted and re-run.
@@ -12,14 +12,14 @@
 
 ## State
 
-`flockd` keeps one JSON document (`state_file`) containing hosts and VMs. It
+`qfodufk8sd` keeps one JSON document (`state_file`) containing hosts and VMs. It
 is rewritten atomically (temp file → `fsync` → `rename`) under the write
 lock on every change, so readers never observe state that is not on disk.
 For tens of hosts and hundreds of VMs this is fast and trivially backed up.
 
 VM ids are UUIDs chosen by the **client** (`PUT /v1/vms/{id}`). The id is
 also the libvirt domain UUID, the cloud-init `instance-id`, and the CAPI
-`providerID` (`flock://<id>`), so every layer agrees on identity.
+`providerID` (`qfodufk8s://<id>`), so every layer agrees on identity.
 
 ## Reconcile loop
 
@@ -59,7 +59,7 @@ reservations survive re-creation.
 
 ## Scheduler
 
-`flock_core::place(spec, hosts, vms, policy, healthy, exclude)` is a pure
+`qfodufk8s_core::place(spec, hosts, vms, policy, healthy, exclude)` is a pure
 function returning a ranked list.
 
 **Filters** (any failure removes the host): pinned host, cordon, health,
@@ -78,12 +78,12 @@ Memory overcommit defaults to 1.0; CPU to 4.0.
    `spread`, highest first for `pack`.
 4. Host name, so results are reproducible.
 
-`POST /v1/schedule` and `flockctl vm create --dry-run` return the whole
+`POST /v1/schedule` and `qfodufk8sctl vm create --dry-run` return the whole
 ranking without creating anything.
 
 ## Live migration
 
 `virsh migrate --live --persistent --undefinesource --copy-storage-inc`
 from source to destination. Because base images exist in every pool, only
-the overlay and seed travel. flockd pre-creates both on the destination,
+the overlay and seed travel. qfodufk8sd pre-creates both on the destination,
 then deletes them from the source after success.

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! capf — Cluster API infrastructure provider for Flock.
+//! capq — Cluster API infrastructure provider for Qfodufk8s.
 
 mod controller;
 mod crd;
-mod flock;
+mod qfodufk8s;
 
 use std::sync::Arc;
 
@@ -15,7 +15,7 @@ use kube::{
 };
 
 #[derive(Parser)]
-#[command(version, about = "Cluster API Provider Flock")]
+#[command(version, about = "Cluster API Provider Qfodufk8s")]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -27,10 +27,10 @@ enum Cmd {
     Crds,
     /// Run the controllers.
     Run {
-        #[arg(long, env = "FLOCK_URL")]
-        flock_url: String,
-        #[arg(long, env = "FLOCK_TOKEN", hide_env_values = true)]
-        flock_token: Option<String>,
+        #[arg(long, env = "QFODUFK8S_URL")]
+        qfodufk8s_url: String,
+        #[arg(long, env = "QFODUFK8S_TOKEN", hide_env_values = true)]
+        qfodufk8s_token: Option<String>,
         /// Served version of the CAPI core API to read Cluster / Machine from.
         #[arg(long, env = "CAPI_VERSION", default_value = "v1beta2")]
         capi_version: String,
@@ -56,24 +56,25 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Cmd::Run {
-            flock_url,
-            flock_token,
+            qfodufk8s_url,
+            qfodufk8s_token,
             capi_version,
             namespace,
         } => {
             let client = Client::try_default().await?;
             let ctx = Arc::new(controller::Ctx {
                 client: client.clone(),
-                flock: flock::Flock::new(flock_url, flock_token),
+                qfodufk8s: qfodufk8s::Qfodufk8s::new(qfodufk8s_url, qfodufk8s_token),
                 capi_version,
             });
-            let (fc, fm): (Api<crd::FlockCluster>, Api<crd::FlockMachine>) = match &namespace {
-                Some(ns) => (
-                    Api::namespaced(client.clone(), ns),
-                    Api::namespaced(client.clone(), ns),
-                ),
-                None => (Api::all(client.clone()), Api::all(client.clone())),
-            };
+            let (fc, fm): (Api<crd::Qfodufk8sCluster>, Api<crd::Qfodufk8sMachine>) =
+                match &namespace {
+                    Some(ns) => (
+                        Api::namespaced(client.clone(), ns),
+                        Api::namespaced(client.clone(), ns),
+                    ),
+                    None => (Api::all(client.clone()), Api::all(client.clone())),
+                };
             let clusters = Controller::new(fc, watcher::Config::default())
                 .shutdown_on_signal()
                 .run(
@@ -86,7 +87,7 @@ async fn main() -> anyhow::Result<()> {
                 .shutdown_on_signal()
                 .run(controller::reconcile_machine, controller::error_policy, ctx)
                 .for_each(|_| async {});
-            tracing::info!("capf controllers running");
+            tracing::info!("capq controllers running");
             tokio::join!(clusters, machines);
             Ok(())
         }

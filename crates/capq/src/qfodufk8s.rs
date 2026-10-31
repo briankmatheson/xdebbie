@@ -1,19 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Minimal async client for the flockd REST API.
+//! Minimal async client for the qfodufk8sd REST API.
 
 use anyhow::{Result, bail};
-use flock_core::{FailureDomain, Vm, VmSpec};
+use qfodufk8s_core::{FailureDomain, Vm, VmSpec};
 use reqwest::{Client, StatusCode};
 use uuid::Uuid;
 
 #[derive(Clone)]
-pub struct Flock {
+pub struct Qfodufk8s {
     c: Client,
     url: String,
     token: Option<String>,
 }
 
-impl Flock {
+impl Qfodufk8s {
     pub fn new(url: String, token: Option<String>) -> Self {
         Self {
             c: Client::builder()
@@ -42,7 +42,7 @@ impl Flock {
             StatusCode::NOT_FOUND => Ok(None),
             s if s.is_success() => Ok(Some(r.json().await?)),
             s => bail!(
-                "flockd GET vm {id}: {s}: {}",
+                "qfodufk8sd GET vm {id}: {s}: {}",
                 r.text().await.unwrap_or_default()
             ),
         }
@@ -55,7 +55,7 @@ impl Flock {
             .await?;
         if !r.status().is_success() {
             bail!(
-                "flockd PUT vm {id}: {}: {}",
+                "qfodufk8sd PUT vm {id}: {}: {}",
                 r.status(),
                 r.text().await.unwrap_or_default()
             );
@@ -71,7 +71,7 @@ impl Flock {
         match r.status() {
             StatusCode::NOT_FOUND => Ok(true),
             s if s.is_success() => Ok(false),
-            s => bail!("flockd DELETE vm {id}: {s}"),
+            s => bail!("qfodufk8sd DELETE vm {id}: {s}"),
         }
     }
     pub async fn list_vms(&self, selector: &str) -> Result<Vec<Vm>> {
@@ -81,7 +81,7 @@ impl Flock {
             .send()
             .await?;
         if !r.status().is_success() {
-            bail!("flockd list vms: {}", r.status());
+            bail!("qfodufk8sd list vms: {}", r.status());
         }
         Ok(r.json().await?)
     }
@@ -91,7 +91,7 @@ impl Flock {
             .send()
             .await?;
         if !r.status().is_success() {
-            bail!("flockd failure-domains: {}", r.status());
+            bail!("qfodufk8sd failure-domains: {}", r.status());
         }
         Ok(r.json().await?)
     }

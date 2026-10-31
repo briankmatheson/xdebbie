@@ -1,9 +1,9 @@
-# /etc/flock/flockd.toml on srv1 (the box that runs flockd).
+# /etc/qfodufk8s/qfodufk8sd.toml on srv1 (the box that runs qfodufk8sd).
 listen = "0.0.0.0:7443"
-state_file = "/var/lib/flock/state.json"
-token_file = "/etc/flock/token"
-tls_cert = "/etc/flock/tls/flockd.crt"
-tls_key = "/etc/flock/tls/flockd.key"
+state_file = "/var/lib/qfodufk8s/state.json"
+token_file = "/etc/qfodufk8s/token"
+tls_cert = "/etc/qfodufk8s/tls/qfodufk8sd.crt"
+tls_key = "/etc/qfodufk8s/tls/qfodufk8sd.key"
 policy = "spread"             # or "pack"
 reconcile_interval_secs = 5
 host_stale_secs = 60
@@ -13,31 +13,31 @@ host_stale_secs = 60
 
 [[hosts]]
 name = "srv1"
-uri = "qemu+ssh://flock@srv1/system?keyfile=/var/lib/flock/.ssh/id_ed25519"
+uri = "qemu+ssh://qfodufk8s@srv1/system?keyfile=/var/lib/qfodufk8s/.ssh/id_ed25519"
 failure_domain = "fd-1"
 bridge = "br0"
 storage_pool = "default"
 cpu_overcommit = 4.0
-reserved_cpus = 2           # flockd + the host itself
+reserved_cpus = 2           # qfodufk8sd + the host itself
 reserved_memory_mib = 6144
 
 [[hosts]]
 name = "srv2"
-uri = "qemu+ssh://flock@srv2/system?keyfile=/var/lib/flock/.ssh/id_ed25519"
+uri = "qemu+ssh://qfodufk8s@srv2/system?keyfile=/var/lib/qfodufk8s/.ssh/id_ed25519"
 failure_domain = "fd-2"
 bridge = "br0"
 cpu_overcommit = 4.0
 
 [[hosts]]
 name = "srv3"
-uri = "qemu+ssh://flock@srv3/system?keyfile=/var/lib/flock/.ssh/id_ed25519"
+uri = "qemu+ssh://qfodufk8s@srv3/system?keyfile=/var/lib/qfodufk8s/.ssh/id_ed25519"
 failure_domain = "fd-3"
 bridge = "br0"
 cpu_overcommit = 4.0
 
 [[hosts]]
 name = "srv4"
-uri = "qemu+ssh://flock@srv4/system?keyfile=/var/lib/flock/.ssh/id_ed25519"
+uri = "qemu+ssh://qfodufk8s@srv4/system?keyfile=/var/lib/qfodufk8s/.ssh/id_ed25519"
 failure_domain = "fd-4"
 bridge = "br0"
 cpu_overcommit = 4.0

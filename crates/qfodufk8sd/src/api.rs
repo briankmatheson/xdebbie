@@ -13,7 +13,7 @@ use axum::{
     routing::{get, post},
 };
 use chrono::Utc;
-use flock_core::*;
+use qfodufk8s_core::*;
 use serde::Deserialize;
 use uuid::Uuid;
 

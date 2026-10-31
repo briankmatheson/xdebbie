@@ -1,40 +1,40 @@
-# Flock
+# Qfodufk8s
 
 A lightweight VM scheduler, orchestrator, and lifecycle manager for small
 clouds of Linux boxes — and a Cluster API infrastructure provider on top of it.
 
-Flock turns three to thirty ordinary servers running QEMU/KVM + libvirt into a
+Qfodufk8s turns three to thirty ordinary servers running QEMU/KVM + libvirt into a
 pool that places, boots, migrates, and deletes VMs on demand. It talks to every
-host with plain `virsh -c qemu+ssh://…`, so a host needs nothing Flock-specific:
+host with plain `virsh -c qemu+ssh://…`, so a host needs nothing Qfodufk8s-specific:
 no agent, no shared storage, no special network.
 
 ```
-                ┌──────────────── management cluster ───────────────┐
-                │  CAPI core + kubeadm providers                    │
-  kubectl ───▶  │  capf  (FlockCluster / FlockMachine controllers)  │
-                └────────────────────────┬──────────────────────────┘
-                                         │ HTTPS + bearer token
-                              ┌──────────▼──────────┐
-  flockctl ─────────────────▶ │       flockd        │  state.json
-                              │ API · scheduler ·   │
-                              │ reconciler          │
-                              └──┬──────┬──────┬────┘
-                    libvirt over │ ssh  │      │
-                ┌────────────────▼┐ ┌───▼────┐ ┌▼────────────────┐
-                │ srv1  KVM       │ │ srv2   │ │ srvN            │
-                │ pool: base imgs │ │  ...   │ │  ...            │
-                │ br0 ── VMs      │ │        │ │                 │
-                └─────────────────┘ └────────┘ └─────────────────┘
+                ┌─────────────────── management cluster ───────────────────┐
+                │  CAPI core + kubeadm providers                           │
+  kubectl ───▶  │  capq  (Qfodufk8sCluster / Qfodufk8sMachine controllers) │
+                └─────────────────────────────┬────────────────────────────┘
+                                              │ HTTPS + bearer token
+                                   ┌──────────▼──────────┐
+  qfodufk8sctl ──────────────────▶ │     qfodufk8sd      │  state.json
+                                   │ API · scheduler ·   │
+                                   │ reconciler          │
+                                   └──┬──────┬──────┬────┘
+                         libvirt over │ ssh  │      │
+                ┌─────────────────────▼┐ ┌───▼────┐ ┌▼────────────────┐
+                │ srv1  KVM            │ │ srv2   │ │ srvN            │
+                │ pool: base images    │ │  ...   │ │  ...            │
+                │ br0 ── VMs           │ │        │ │                 │
+                └──────────────────────┘ └────────┘ └─────────────────┘
 ```
 
 ## Components
 
 | Crate | Binary | What it does |
 |---|---|---|
-| `flock-core` | — | Data model and the placement engine (pure, exhaustively tested) |
-| `flockd` | `flockd` | REST API, durable state, reconciler, libvirt-over-SSH driver |
-| `flockctl` | `flockctl` | CLI for hosts, VMs, failure domains, drain, migrate |
-| `capf` | `capf` | Cluster API infrastructure provider (contract **v1beta2**) |
+| `qfodufk8s-core` | — | Data model and the placement engine (pure, exhaustively tested) |
+| `qfodufk8sd` | `qfodufk8sd` | REST API, durable state, reconciler, libvirt-over-SSH driver |
+| `qfodufk8sctl` | `qfodufk8sctl` | CLI for hosts, VMs, failure domains, drain, migrate |
+| `capq` | `capq` | Cluster API infrastructure provider (contract **v1beta2**) |
 
 ## What it does
 
@@ -57,12 +57,12 @@ no agent, no shared storage, no special network.
 ```sh
 cargo build --release
 # on each server
-sudo examples/four-node/prep-host.sh --nic eno1 --pubkey "$(cat flockd.pub)"
-# on the flockd box
-flockd --config /etc/flock/flockd.toml check     # can we reach every host?
-flockd --config /etc/flock/flockd.toml serve
-flockctl host ls
-flockctl vm create web1 --image debian-13-k8s-v1.36 --cpus 2 --memory-mib 4096 --dry-run
+sudo examples/four-node/prep-host.sh --nic eno1 --pubkey "$(cat qfodufk8sd.pub)"
+# on the qfodufk8sd box
+qfodufk8sd --config /etc/qfodufk8s/qfodufk8sd.toml check     # can we reach every host?
+qfodufk8sd --config /etc/qfodufk8s/qfodufk8sd.toml serve
+qfodufk8sctl host ls
+qfodufk8sctl vm create web1 --image debian-13-k8s-v1.36 --cpus 2 --memory-mib 4096 --dry-run
 ```
 
 The full walkthrough — four physical servers, a 3+4 node Kubernetes cluster
@@ -71,7 +71,7 @@ through Cluster API — is in [examples/four-node](examples/four-node/README.md)
 ## Documentation
 
 - [Architecture](docs/architecture.md) — state, reconcile loop, scheduler
-- [Cluster API contract](docs/capi-contract.md) — what CAPI asks, how capf answers
+- [Cluster API contract](docs/capi-contract.md) — what CAPI asks, how capq answers
 - [REST API](docs/api.md)
 - [Operations](docs/operations.md) — drain, upgrades, backup, security, limits
 
@@ -84,9 +84,9 @@ before you trust them with anything you care about. Known gaps are listed in
 
 ## License
 
-Copyright © 2026 Brian Matheson and Flock contributors.
+Copyright © 2026 Brian Matheson and Qfodufk8s contributors.
 
-Flock is free software: you can redistribute it and/or modify it under the
+Qfodufk8s is free software: you can redistribute it and/or modify it under the
 terms of the GNU General Public License as published by the Free Software
 Foundation, either version 3 of the License, or (at your option) any later
 version. See [LICENSE](LICENSE). Every source file carries an
