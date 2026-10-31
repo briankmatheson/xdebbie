@@ -1,0 +1,46 @@
+# /etc/flock/flockd.toml on srv1 (the box that runs flockd).
+listen = "0.0.0.0:7443"
+state_file = "/var/lib/flock/state.json"
+token_file = "/etc/flock/token"
+tls_cert = "/etc/flock/tls/flockd.crt"
+tls_key = "/etc/flock/tls/flockd.key"
+policy = "spread"             # or "pack"
+reconcile_interval_secs = 5
+host_stale_secs = 60
+
+# One failure domain per server: CAPI's KubeadmControlPlane spreads its
+# replicas across failure domains, so 3 control planes land on 3 boxes.
+
+[[hosts]]
+name = "srv1"
+uri = "qemu+ssh://flock@srv1/system?keyfile=/var/lib/flock/.ssh/id_ed25519"
+failure_domain = "fd-1"
+bridge = "br0"
+storage_pool = "default"
+cpu_overcommit = 4.0
+reserved_cpus = 2           # flockd + the host itself
+reserved_memory_mib = 6144
+
+[[hosts]]
+name = "srv2"
+uri = "qemu+ssh://flock@srv2/system?keyfile=/var/lib/flock/.ssh/id_ed25519"
+failure_domain = "fd-2"
+bridge = "br0"
+cpu_overcommit = 4.0
+
+[[hosts]]
+name = "srv3"
+uri = "qemu+ssh://flock@srv3/system?keyfile=/var/lib/flock/.ssh/id_ed25519"
+failure_domain = "fd-3"
+bridge = "br0"
+cpu_overcommit = 4.0
+
+[[hosts]]
+name = "srv4"
+uri = "qemu+ssh://flock@srv4/system?keyfile=/var/lib/flock/.ssh/id_ed25519"
+failure_domain = "fd-4"
+bridge = "br0"
+cpu_overcommit = 4.0
+# Keep srv4 for workers only (e.g. it has the GPU or the big disks).
+control_plane_eligible = false
+labels = { gpu = "none", disk = "nvme" }

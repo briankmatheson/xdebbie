@@ -1,0 +1,405 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: infrastructure-flock
+    cluster.x-k8s.io/v1beta2: v1alpha1
+    clusterctl.cluster.x-k8s.io: ''
+  name: flockclusters.infrastructure.cluster.x-k8s.io
+spec:
+  group: infrastructure.cluster.x-k8s.io
+  names:
+    kind: FlockCluster
+    plural: flockclusters
+    shortNames:
+    - fc
+    singular: flockcluster
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .metadata.labels['cluster\.x-k8s\.io/cluster-name']
+      name: Cluster
+      type: string
+    - jsonPath: .spec.controlPlaneEndpoint.host
+      name: Endpoint
+      type: string
+    - jsonPath: .status.initialization.provisioned
+      name: Provisioned
+      type: boolean
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for FlockClusterSpec via `CustomResource`
+        properties:
+          spec:
+            properties:
+              controlPlaneEndpoint:
+                default:
+                  host: ''
+                  port: 0
+                description: |-
+                  The API server endpoint. Flock does not run load balancers; point this
+                  at a VIP managed by kube-vip (static pod on control-plane VMs) or an
+                  external LB. Required by the CAPI contract.
+                properties:
+                  host:
+                    default: ''
+                    type: string
+                  port:
+                    default: 0
+                    format: int32
+                    type: integer
+                type: object
+              failureDomains:
+                description: 'Restrict the cluster to these failure domains (default: all).'
+                items:
+                  type: string
+                type: array
+            type: object
+          status:
+            nullable: true
+            properties:
+              conditions:
+                items:
+                  properties:
+                    lastTransitionTime:
+                      type: string
+                    message:
+                      nullable: true
+                      type: string
+                    observedGeneration:
+                      format: int64
+                      nullable: true
+                      type: integer
+                    reason:
+                      nullable: true
+                      type: string
+                    status:
+                      description: '"True", "False" or "Unknown".'
+                      type: string
+                    type:
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - status
+                  - type
+                  type: object
+                type: array
+              failureDomains:
+                items:
+                  properties:
+                    attributes:
+                      additionalProperties:
+                        type: string
+                      type: object
+                    controlPlane:
+                      default: false
+                      type: boolean
+                    name:
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+              initialization:
+                nullable: true
+                properties:
+                  provisioned:
+                    nullable: true
+                    type: boolean
+                type: object
+            type: object
+        required:
+        - spec
+        title: FlockCluster
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: infrastructure-flock
+    cluster.x-k8s.io/v1beta2: v1alpha1
+    clusterctl.cluster.x-k8s.io: ''
+  name: flockclustertemplates.infrastructure.cluster.x-k8s.io
+spec:
+  group: infrastructure.cluster.x-k8s.io
+  names:
+    kind: FlockClusterTemplate
+    plural: flockclustertemplates
+    singular: flockclustertemplate
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for FlockClusterTemplateSpec via `CustomResource`
+        properties:
+          spec:
+            properties:
+              template:
+                properties:
+                  spec:
+                    properties:
+                      controlPlaneEndpoint:
+                        default:
+                          host: ''
+                          port: 0
+                        description: |-
+                          The API server endpoint. Flock does not run load balancers; point this
+                          at a VIP managed by kube-vip (static pod on control-plane VMs) or an
+                          external LB. Required by the CAPI contract.
+                        properties:
+                          host:
+                            default: ''
+                            type: string
+                          port:
+                            default: 0
+                            format: int32
+                            type: integer
+                        type: object
+                      failureDomains:
+                        description: 'Restrict the cluster to these failure domains (default: all).'
+                        items:
+                          type: string
+                        type: array
+                    type: object
+                required:
+                - spec
+                type: object
+            required:
+            - template
+            type: object
+        required:
+        - spec
+        title: FlockClusterTemplate
+        type: object
+    served: true
+    storage: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: infrastructure-flock
+    cluster.x-k8s.io/v1beta2: v1alpha1
+    clusterctl.cluster.x-k8s.io: ''
+  name: flockmachines.infrastructure.cluster.x-k8s.io
+spec:
+  group: infrastructure.cluster.x-k8s.io
+  names:
+    kind: FlockMachine
+    plural: flockmachines
+    shortNames:
+    - fm
+    singular: flockmachine
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .metadata.labels['cluster\.x-k8s\.io/cluster-name']
+      name: Cluster
+      type: string
+    - jsonPath: .status.host
+      name: Host
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .spec.providerID
+      name: ProviderID
+      type: string
+    - jsonPath: .status.initialization.provisioned
+      name: Provisioned
+      type: boolean
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for FlockMachineSpec via `CustomResource`
+        properties:
+          spec:
+            properties:
+              diskGib:
+                format: uint64
+                minimum: 0.0
+                type: integer
+              hostSelector:
+                additionalProperties:
+                  type: string
+                description: Host labels the VM's host must carry.
+                type: object
+              image:
+                description: Base image volume present in every host's storage pool.
+                type: string
+              memoryMib:
+                format: uint64
+                minimum: 0.0
+                type: integer
+              providerID:
+                description: Set by capf to `flock://<vm-uuid>`. Never set this yourself.
+                nullable: true
+                type: string
+              strictAntiAffinity:
+                default: false
+                description: |-
+                  Never co-locate two machines of the same group (control plane or
+                  MachineDeployment) on one host. Default: soft spreading only.
+                type: boolean
+              vcpus:
+                format: uint32
+                minimum: 0.0
+                type: integer
+            required:
+            - diskGib
+            - image
+            - memoryMib
+            - vcpus
+            type: object
+          status:
+            nullable: true
+            properties:
+              addresses:
+                items:
+                  properties:
+                    address:
+                      type: string
+                    type:
+                      type: string
+                  required:
+                  - address
+                  - type
+                  type: object
+                type: array
+              conditions:
+                items:
+                  properties:
+                    lastTransitionTime:
+                      type: string
+                    message:
+                      nullable: true
+                      type: string
+                    observedGeneration:
+                      format: int64
+                      nullable: true
+                      type: integer
+                    reason:
+                      nullable: true
+                      type: string
+                    status:
+                      description: '"True", "False" or "Unknown".'
+                      type: string
+                    type:
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - status
+                  - type
+                  type: object
+                type: array
+              failureDomain:
+                nullable: true
+                type: string
+              host:
+                nullable: true
+                type: string
+              initialization:
+                nullable: true
+                properties:
+                  provisioned:
+                    nullable: true
+                    type: boolean
+                type: object
+              phase:
+                nullable: true
+                type: string
+            type: object
+        required:
+        - spec
+        title: FlockMachine
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: infrastructure-flock
+    cluster.x-k8s.io/v1beta2: v1alpha1
+    clusterctl.cluster.x-k8s.io: ''
+  name: flockmachinetemplates.infrastructure.cluster.x-k8s.io
+spec:
+  group: infrastructure.cluster.x-k8s.io
+  names:
+    kind: FlockMachineTemplate
+    plural: flockmachinetemplates
+    shortNames:
+    - fmt
+    singular: flockmachinetemplate
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for FlockMachineTemplateSpec via `CustomResource`
+        properties:
+          spec:
+            properties:
+              template:
+                properties:
+                  spec:
+                    properties:
+                      diskGib:
+                        format: uint64
+                        minimum: 0.0
+                        type: integer
+                      hostSelector:
+                        additionalProperties:
+                          type: string
+                        description: Host labels the VM's host must carry.
+                        type: object
+                      image:
+                        description: Base image volume present in every host's storage pool.
+                        type: string
+                      memoryMib:
+                        format: uint64
+                        minimum: 0.0
+                        type: integer
+                      providerID:
+                        description: Set by capf to `flock://<vm-uuid>`. Never set this yourself.
+                        nullable: true
+                        type: string
+                      strictAntiAffinity:
+                        default: false
+                        description: |-
+                          Never co-locate two machines of the same group (control plane or
+                          MachineDeployment) on one host. Default: soft spreading only.
+                        type: boolean
+                      vcpus:
+                        format: uint32
+                        minimum: 0.0
+                        type: integer
+                    required:
+                    - diskGib
+                    - image
+                    - memoryMib
+                    - vcpus
+                    type: object
+                required:
+                - spec
+                type: object
+            required:
+            - template
+            type: object
+        required:
+        - spec
+        title: FlockMachineTemplate
+        type: object
+    served: true
+    storage: true

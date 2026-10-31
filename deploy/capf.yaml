@@ -1,0 +1,89 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Cluster API Provider Flock (capf). Apply after deploy/crds.yaml:
+#   kubectl apply -f deploy/crds.yaml -f deploy/capf.yaml
+# then create the flockd credentials secret (see docs/install.md).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: capf-system
+  labels:
+    cluster.x-k8s.io/provider: infrastructure-flock
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: capf-manager
+  namespace: capf-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: capf-manager
+rules:
+  - apiGroups: [infrastructure.cluster.x-k8s.io]
+    resources: [flockclusters, flockmachines, flockclustertemplates, flockmachinetemplates]
+    verbs: [get, list, watch, patch, update]
+  - apiGroups: [infrastructure.cluster.x-k8s.io]
+    resources: [flockclusters/status, flockmachines/status]
+    verbs: [get, patch, update]
+  - apiGroups: [cluster.x-k8s.io]
+    resources: [clusters, machines]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch]
+---
+# CAPI core controllers read and own our objects; this aggregates into their role.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: capf-aggregate-to-capi
+  labels:
+    cluster.x-k8s.io/aggregate-to-manager: "true"
+rules:
+  - apiGroups: [infrastructure.cluster.x-k8s.io]
+    resources: [flockclusters, flockmachines, flockclustertemplates, flockmachinetemplates]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: capf-manager
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: capf-manager}
+subjects: [{kind: ServiceAccount, name: capf-manager, namespace: capf-system}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: capf-controller-manager
+  namespace: capf-system
+  labels: {app: capf}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}   # single writer; no leader election yet
+  selector: {matchLabels: {app: capf}}
+  template:
+    metadata: {labels: {app: capf}}
+    spec:
+      serviceAccountName: capf-manager
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: manager
+          image: ghcr.io/bmatheson/capf:v0.1.0
+          args: [run]
+          env:
+            - {name: RUST_LOG, value: "info,kube=warn"}
+            - name: FLOCK_URL
+              valueFrom: {secretKeyRef: {name: capf-flock-credentials, key: url}}
+            - name: FLOCK_TOKEN
+              valueFrom: {secretKeyRef: {name: capf-flock-credentials, key: token}}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}

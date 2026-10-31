@@ -1,0 +1,190 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# A 3 control-plane + 4 worker cluster on the four-server Flock cloud.
+#
+#   LAN 10.0.0.0/24, DHCP for VMs from the router, VIP 10.0.0.50 reserved
+#   (outside the DHCP range) for the Kubernetes API via kube-vip.
+#
+# Apply to the management cluster:  kubectl apply -f cluster.yaml
+# Adjust: KUBERNETES_VERSION, image name, VIP, SSH key, kube-vip version.
+---
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: Cluster
+metadata:
+  name: demo
+  namespace: default
+spec:
+  clusterNetwork:
+    pods: {cidrBlocks: ["10.244.0.0/16"]}
+    services: {cidrBlocks: ["10.96.0.0/12"]}
+  infrastructureRef:
+    apiGroup: infrastructure.cluster.x-k8s.io
+    kind: FlockCluster
+    name: demo
+  controlPlaneRef:
+    apiGroup: controlplane.cluster.x-k8s.io
+    kind: KubeadmControlPlane
+    name: demo-cp
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: FlockCluster
+metadata:
+  name: demo
+  namespace: default
+spec:
+  controlPlaneEndpoint:
+    host: 10.0.0.50
+    port: 6443
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: FlockMachineTemplate
+metadata:
+  name: demo-cp
+  namespace: default
+spec:
+  template:
+    spec:
+      vcpus: 2
+      memoryMib: 4096
+      diskGib: 40
+      image: debian-13-k8s-v1.36
+      strictAntiAffinity: true    # never two control planes on one box
+---
+apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+kind: KubeadmControlPlane
+metadata:
+  name: demo-cp
+  namespace: default
+spec:
+  replicas: 3
+  version: v1.36.5
+  machineTemplate:
+    spec:
+      infrastructureRef:
+        apiGroup: infrastructure.cluster.x-k8s.io
+        kind: FlockMachineTemplate
+        name: demo-cp
+  kubeadmConfigSpec:
+    # capf substitutes the literal {{ ds.meta_data.provider_id }} with
+    # flock://<vm-uuid> before handing user-data to cloud-init, so CAPI can
+    # match each Node to its Machine without a cloud controller manager.
+    initConfiguration:
+      nodeRegistration:
+        kubeletExtraArgs:
+          - {name: provider-id, value: "{{ ds.meta_data.provider_id }}"}
+    joinConfiguration:
+      nodeRegistration:
+        kubeletExtraArgs:
+          - {name: provider-id, value: "{{ ds.meta_data.provider_id }}"}
+    users:
+      - name: debian
+        sudo: "ALL=(ALL) NOPASSWD:ALL"
+        sshAuthorizedKeys: ["ssh-ed25519 AAAA...replace-me you@workstation"]
+    files:
+      - path: /etc/kubernetes/manifests/kube-vip.yaml
+        owner: root:root
+        permissions: "0644"
+        content: |
+          apiVersion: v1
+          kind: Pod
+          metadata: {name: kube-vip, namespace: kube-system}
+          spec:
+            hostNetwork: true
+            containers:
+              - name: kube-vip
+                image: ghcr.io/kube-vip/kube-vip:v1.0.1
+                args: [manager]
+                env:
+                  - {name: vip_arp, value: "true"}
+                  - {name: port, value: "6443"}
+                  - {name: vip_interface, value: enp1s0}
+                  - {name: cp_enable, value: "true"}
+                  - {name: cp_namespace, value: kube-system}
+                  - {name: vip_leaderelection, value: "true"}
+                  - {name: address, value: "10.0.0.50"}
+                securityContext:
+                  capabilities: {add: [NET_ADMIN, NET_RAW]}
+                volumeMounts:
+                  - {name: kubeconfig, mountPath: /etc/kubernetes/admin.conf}
+            hostAliases:
+              - {hostnames: [kubernetes], ip: 127.0.0.1}
+            volumes:
+              - name: kubeconfig
+                hostPath: {path: /etc/kubernetes/admin.conf}
+    preKubeadmCommands:
+      # kubeadm >= 1.29: admin.conf has no RBAC until init finishes, so the
+      # first control plane's kube-vip uses super-admin.conf temporarily.
+      - "if [ -f /run/kubeadm/kubeadm.yaml ]; then sed -i 's#path: /etc/kubernetes/admin.conf#path: /etc/kubernetes/super-admin.conf#' /etc/kubernetes/manifests/kube-vip.yaml; fi"
+    postKubeadmCommands:
+      - "sed -i 's#path: /etc/kubernetes/super-admin.conf#path: /etc/kubernetes/admin.conf#' /etc/kubernetes/manifests/kube-vip.yaml"
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: FlockMachineTemplate
+metadata:
+  name: demo-workers
+  namespace: default
+spec:
+  template:
+    spec:
+      vcpus: 4
+      memoryMib: 12288
+      diskGib: 80
+      image: debian-13-k8s-v1.36
+---
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+kind: KubeadmConfigTemplate
+metadata:
+  name: demo-workers
+  namespace: default
+spec:
+  template:
+    spec:
+      joinConfiguration:
+        nodeRegistration:
+          kubeletExtraArgs:
+            - {name: provider-id, value: "{{ ds.meta_data.provider_id }}"}
+      users:
+        - name: debian
+          sudo: "ALL=(ALL) NOPASSWD:ALL"
+          sshAuthorizedKeys: ["ssh-ed25519 AAAA...replace-me you@workstation"]
+---
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: MachineDeployment
+metadata:
+  name: demo-workers
+  namespace: default
+spec:
+  clusterName: demo
+  replicas: 4
+  selector:
+    matchLabels: {cluster.x-k8s.io/cluster-name: demo, pool: workers}
+  template:
+    metadata:
+      labels: {cluster.x-k8s.io/cluster-name: demo, pool: workers}
+    spec:
+      clusterName: demo
+      version: v1.36.5
+      bootstrap:
+        configRef:
+          apiGroup: bootstrap.cluster.x-k8s.io
+          kind: KubeadmConfigTemplate
+          name: demo-workers
+      infrastructureRef:
+        apiGroup: infrastructure.cluster.x-k8s.io
+        kind: FlockMachineTemplate
+        name: demo-workers
+---
+# Replace unhealthy machines automatically; Flock just sees create/delete.
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: MachineHealthCheck
+metadata:
+  name: demo-workers
+  namespace: default
+spec:
+  clusterName: demo
+  selector:
+    matchLabels: {pool: workers}
+  checks:
+    nodeStartupTimeoutSeconds: 900
+    unhealthyNodeConditions:
+      - {type: Ready, status: Unknown, timeoutSeconds: 300}
+      - {type: Ready, status: "False", timeoutSeconds: 300}
