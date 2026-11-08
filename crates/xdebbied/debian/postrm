@@ -1,0 +1,33 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    purge)
+        echo "Purging xdebbied configuration and state..."
+        
+        # Remove configuration
+        rm -rf /etc/xdebbie
+        
+        # Remove state
+        rm -rf /var/lib/xdebbie
+        
+        # Reload systemd
+        systemctl daemon-reload || true
+        
+        echo "xdebbied completely removed."
+        ;;
+        
+    remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        # Reload systemd
+        systemctl daemon-reload || true
+        ;;
+        
+    *)
+        echo "postrm called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

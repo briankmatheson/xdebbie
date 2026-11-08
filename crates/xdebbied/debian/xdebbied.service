@@ -1,0 +1,36 @@
+[Unit]
+Description=xdebbie VM Orchestrator
+Documentation=https://github.com/yourusername/xdebbie
+After=network-online.target libvirtd.service local-fs.target
+Wants=network-online.target
+Requires=libvirtd.service
+
+[Service]
+Type=simple
+ExecStartPre=/usr/bin/xdebbied bootstrap
+ExecStart=/usr/bin/xdebbied serve
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=xdebbied
+
+# Run as root to access libvirt
+User=root
+Group=root
+
+# Working directory
+WorkingDirectory=/var/lib/xdebbie
+
+# Security hardening (relaxed for libvirt access)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/etc/xdebbie /var/lib/xdebbie /var/lib/libvirt /run/libvirt
+
+# Resource limits
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

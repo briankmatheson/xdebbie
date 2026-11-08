@@ -40,9 +40,10 @@ if [ -f "$HOME/.cargo/env" ]; then
     source "$HOME/.cargo/env"
 fi
 
-# Build release binary first
-info "Building release binary..."
+# Build release binaries first
+info "Building release binaries..."
 cargo build --release --package xdebbied
+cargo build --release --package xdctl
 
 # Strip binary to reduce size
 if command -v strip &> /dev/null; then

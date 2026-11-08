@@ -1,0 +1,57 @@
+[package]
+name = "xdebbied"
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+edition = "2024"
+description = "Self-bootstrapping VM orchestrator for libvirt with cluster support"
+
+[package.metadata.deb]
+maintainer = "xdebbie Team"
+copyright = "2026, xdebbie Team"
+license-file = ["../../LICENSE", "0"]
+extended-description = """\
+XDebbie is a self-bootstrapping VM orchestrator that provides:
+- Automatic bootstrapping with dependency installation
+- Self-discovery via multicast (coming in v0.3.0)
+- Leader election for high availability (coming in v0.3.0)
+- Cluster API provider (CAPX) integration
+- Simple HTTP API for VM management
+- CLI tool (xdctl) for easy management
+.
+Includes both xdebbied (daemon) and xdctl (CLI tool).
+"""
+depends = "libvirt-daemon-system, libvirt-clients, qemu-kvm, qemu-utils, cloud-image-utils, systemd"
+section = "admin"
+priority = "optional"
+assets = [
+    ["target/release/xdebbied", "usr/bin/", "755"],
+    ["target/release/xdctl", "usr/bin/", "755"],
+    ["../../README.md", "usr/share/doc/xdebbie/", "644"],
+    ["../../BOOTSTRAP.md", "usr/share/doc/xdebbie/", "644"],
+]
+maintainer-scripts = "debian/"
+systemd-units = { unit-name = "xdebbied", enable = true }
+
+[dependencies]
+anyhow = "1.0.104"
+axum = "0.8.9"
+axum-server = { version = "0.8.0", features = ["tls-rustls"] }
+chrono = "0.4.45"
+clap = { version = "4.6.7", features = ["derive", "env"] }
+xdebbie-core = { version = "0.1.0", path = "../xdebbie-core" }
+futures = "0.3.34"
+hex = "0.4.3"
+hostname = "0.4.0"
+libc = "0.2.172"
+rand = "0.8.5"
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "std"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tempfile = "3.27.0"
+tokio = { version = "1.54.1", features = ["full"] }
+toml = "1.1.8"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+uuid = { version = "1.29.0", features = ["v4"] }

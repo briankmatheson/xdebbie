@@ -1,0 +1,56 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        # Create directories
+        mkdir -p /etc/xdebbie
+        mkdir -p /var/lib/xdebbie
+        
+        # Set permissions (root owned for libvirt access)
+        chmod 755 /etc/xdebbie
+        chmod 755 /var/lib/xdebbie
+        
+        # Reload systemd
+        systemctl daemon-reload || true
+        
+        # Enable service (will start on boot)
+        systemctl enable xdebbied.service || true
+        
+        # Run bootstrap on first install
+        if [ ! -f /etc/xdebbie/xdebbied.toml ]; then
+            echo "Running initial bootstrap..."
+            /usr/bin/xdebbied bootstrap || true
+        fi
+        
+        # Start service
+        echo "Starting xdebbied service..."
+        systemctl start xdebbied.service || true
+        
+        echo ""
+        echo "xdebbied installed successfully!"
+        echo ""
+        echo "Check status:"
+        echo "  systemctl status xdebbied"
+        echo ""
+        echo "View logs:"
+        echo "  journalctl -u xdebbied -f"
+        echo ""
+        echo "Configure client (as your user):"
+        echo "  source ~/.xdebbie_env"
+        echo "  xdctl host ls"
+        echo ""
+        ;;
+        
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+        
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0
