@@ -5,6 +5,21 @@ All notable changes to XDebbie will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-11-08
+
+### Fixed
+- **Bootstrap systemd failure**: Environment file now written to `/etc/xdebbie/xdebbie_env` instead of `/root/.xdebbie_env`
+  - Resolves "Read-only file system" error when service runs with ProtectHome=true
+  - System-wide environment file accessible to all users
+  - Graceful error handling (warns instead of failing)
+- **Documentation**: Updated all references from `~/.xdebbie_env` to `/etc/xdebbie/xdebbie_env`
+- **Installation**: Service now starts successfully after `dpkg -i`
+
+### Changed
+- Environment file constant: `.xdebbie_env` → `xdebbie_env`
+- Bootstrap now writes to system directory instead of home directory
+- postinst script updated with correct environment file location
+
 ## [0.3.0] - 2026-11-08
 
 ### Added
@@ -52,7 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Auto-creates storage pool (/var/lib/libvirt/xdebbie)
   - Generates configuration file (/etc/xdebbie/xdebbied.toml)
   - Generates secure API token (256-bit)
-  - Creates client environment file (~/.xdebbie_env)
+  - Creates client environment file (/etc/xdebbie/xdebbie_env)
 - **Debian Package**: Professional .deb with systemd integration
   - Systemd service with proper network/disk ordering
   - Auto-runs bootstrap on first install
@@ -97,6 +112,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cluster API Provider (CAPQ)
 - Basic CLI tool (qfodufk8sctl)
 
+[0.3.1]: https://github.com/yourusername/xdebbie/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/yourusername/xdebbie/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/yourusername/xdebbie/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/yourusername/xdebbie/releases/tag/v0.1.0

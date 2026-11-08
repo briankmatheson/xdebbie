@@ -36,9 +36,13 @@ case "$1" in
         echo "View logs:"
         echo "  journalctl -u xdebbied -f"
         echo ""
-        echo "Configure client (as your user):"
-        echo "  source ~/.xdebbie_env"
+        echo "Configure client (run as your user):"
+        echo "  export XDEBBIE_URL=http://127.0.0.1:7443"
+        echo "  export XDEBBIE_TOKEN=\$(sudo cat /etc/xdebbie/token)"
         echo "  xdctl host ls"
+        echo ""
+        echo "Or source system-wide environment:"
+        echo "  source /etc/xdebbie/xdebbie_env"
         echo ""
         ;;
         

@@ -122,7 +122,7 @@ ssh node3 sudo dpkg -i /tmp/xdebbied_0.3.0-1_amd64.deb
 
 ```bash
 # Source the environment (on any node)
-source ~/.xdebbie_env
+source /etc/xdebbie/xdebbie_env
 
 # List nodes (should show all 3)
 xdctl host ls

@@ -20,7 +20,7 @@ pub const DEFAULT_CONFIG_FILE: &str = "/etc/xdebbie/xdebbied.toml";
 pub const DEFAULT_TOKEN_FILE: &str = "/etc/xdebbie/token";
 pub const DEFAULT_STATE_DIR: &str = "/var/lib/xdebbie";
 pub const DEFAULT_STATE_FILE: &str = "/var/lib/xdebbie/state.json";
-pub const DEFAULT_ENV_FILE: &str = ".xdebbie_env";
+pub const DEFAULT_ENV_FILE: &str = "xdebbie_env";
 
 /// Default libvirt URIs and resources
 pub const DEFAULT_LIBVIRT_URI: &str = "qemu:///system";
@@ -162,11 +162,15 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     // Create state directory
     std::fs::create_dir_all(&opts.state_dir).context("creating state directory")?;
 
-    // Write environment file to home directory
-    if let Some(home) = std::env::var_os("HOME") {
-        let env_path = Path::new(&home).join(DEFAULT_ENV_FILE);
-        let url = format!("http://{}", opts.listen_addr);
-        token::write_env_file(&env_path, &url, &token)?;
+    // Write environment file to /etc/xdebbie/ (system-wide)
+    let cfg_dir = opts.config_path.parent().unwrap_or_else(|| Path::new(DEFAULT_CONFIG_DIR));
+    let env_path = cfg_dir.join("xdebbie_env");
+    let url = format!("http://{}", opts.listen_addr);
+    if let Err(e) = token::write_env_file(&env_path, &url, &token) {
+        warn!("Failed to write environment file: {}", e);
+        info!("You can manually create it later with:");
+        info!("  echo 'export XDEBBIE_URL={}' > /etc/xdebbie/xdebbie_env", url);
+        info!("  echo 'export XDEBBIE_TOKEN=<token>' >> /etc/xdebbie/xdebbie_env");
     }
 
     info!("=== Bootstrap Complete ===");
@@ -178,7 +182,7 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     info!("  sudo xdebbied serve");
     info!("");
     info!("To use xdctl:");
-    info!("  source ~/{}", DEFAULT_ENV_FILE);
+    info!("  source /etc/xdebbie/{}", DEFAULT_ENV_FILE);
     info!("  xdctl host ls");
 
     Ok(())

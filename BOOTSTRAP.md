@@ -14,7 +14,7 @@ The bootstrap functionality automatically:
    - Storage pool: `xdebbie` at `/var/lib/libvirt/xdebbie`
 5. **Generates configuration** at `/etc/xdebbie/xdebbied.toml`
 6. **Generates secure API token** at `/etc/xdebbie/token`
-7. **Creates environment file** at `~/.xdebbie_env` for `xdctl`
+7. **Creates environment file** at `/etc/xdebbie/xdebbie_env` for `xdctl`
 
 ## Usage
 
@@ -141,11 +141,11 @@ control_plane_eligible = true
 a1b2c3d4e5f6...
 ```
 
-### Environment: `~/.xdebbie_env`
+### Environment: `/etc/xdebbie/xdebbie_env`
 
 ```bash
 # xdebbie environment variables
-# Source this file: source ~/.xdebbie_env
+# Source this file: source /etc/xdebbie/xdebbie_env
 
 export XDEBBIE_URL=http://0.0.0.0:7443
 export XDEBBIE_TOKEN='a1b2c3d4e5f6...'
@@ -249,7 +249,7 @@ sudo apt-get install -y libvirt-daemon-system libvirt-clients qemu-kvm qemu-util
    ├─ If token exists and not --force → reuse
    ├─ Generate 32 random bytes → hex encode
    ├─ Write to /etc/xdebbie/token with mode 0600
-   └─ Write ~/.xdebbie_env with URL and token
+   └─ Write /etc/xdebbie/xdebbie_env with URL and token
 ```
 
 ## Resource Discovery
@@ -306,7 +306,7 @@ Once bootstrapped, xdebbied can serve as the infrastructure provider for CAPQ (C
 
 3. **Configure environment** for xdctl:
    ```bash
-   source ~/.xdebbie_env
+   source /etc/xdebbie/xdebbie_env
    ```
 
 4. **Verify connectivity**:
@@ -421,7 +421,7 @@ echo "$TOKEN" | sudo tee /etc/xdebbie/token
 sudo chmod 600 /etc/xdebbie/token
 
 # 7. Create env file
-cat > ~/.xdebbie_env <<EOF
+cat > /etc/xdebbie/xdebbie_env <<EOF
 export XDEBBIE_URL=http://0.0.0.0:7443
 export XDEBBIE_TOKEN='$TOKEN'
 EOF

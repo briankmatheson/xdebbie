@@ -194,7 +194,7 @@ sudo journalctl -u xdebbied | grep "becoming leader"
 
 ### 5. Use the Cluster
 ```bash
-source ~/.xdebbie_env
+source /etc/xdebbie/xdebbie_env
 xdctl host ls  # Should show all nodes
 xdctl vm create web1 --image debian-13 --cpus 2 --memory-mib 4096
 ```
