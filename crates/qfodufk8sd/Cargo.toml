@@ -5,6 +5,30 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 edition = "2024"
+description = "Self-bootstrapping VM orchestrator for libvirt with cluster support"
+
+[package.metadata.deb]
+maintainer = "qfodufk8s Team"
+copyright = "2026, qfodufk8s Team"
+license-file = ["../../LICENSE", "0"]
+extended-description = """\
+qfodufk8sd is a lightweight VM orchestrator that provides:
+- Automatic bootstrapping with dependency installation
+- Self-discovery via multicast
+- Leader election for high availability
+- Cluster API provider (CAPQ) integration
+- Simple HTTP API for VM management
+"""
+depends = "libvirt-daemon-system, libvirt-clients, qemu-kvm, qemu-utils, cloud-image-utils, systemd"
+section = "admin"
+priority = "optional"
+assets = [
+    ["target/release/qfodufk8sd", "usr/bin/", "755"],
+    ["../../README.md", "usr/share/doc/qfodufk8sd/", "644"],
+    ["../../BOOTSTRAP.md", "usr/share/doc/qfodufk8sd/", "644"],
+]
+maintainer-scripts = "debian/"
+systemd-units = { unit-name = "qfodufk8sd", enable = true }
 
 [dependencies]
 anyhow = "1.0.104"

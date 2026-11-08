@@ -1,0 +1,56 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        # Create directories
+        mkdir -p /etc/qfodufk8s
+        mkdir -p /var/lib/qfodufk8s
+        
+        # Set permissions (root owned for libvirt access)
+        chmod 755 /etc/qfodufk8s
+        chmod 755 /var/lib/qfodufk8s
+        
+        # Reload systemd
+        systemctl daemon-reload || true
+        
+        # Enable service (will start on boot)
+        systemctl enable qfodufk8sd.service || true
+        
+        # Run bootstrap on first install
+        if [ ! -f /etc/qfodufk8s/qfodufk8sd.toml ]; then
+            echo "Running initial bootstrap..."
+            /usr/bin/qfodufk8sd bootstrap || true
+        fi
+        
+        # Start service
+        echo "Starting qfodufk8sd service..."
+        systemctl start qfodufk8sd.service || true
+        
+        echo ""
+        echo "qfodufk8sd installed successfully!"
+        echo ""
+        echo "Check status:"
+        echo "  systemctl status qfodufk8sd"
+        echo ""
+        echo "View logs:"
+        echo "  journalctl -u qfodufk8sd -f"
+        echo ""
+        echo "Configure client (as your user):"
+        echo "  source ~/.qfodufk8s_env"
+        echo "  qfodufk8sctl host ls"
+        echo ""
+        ;;
+        
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+        
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0
