@@ -1,5 +1,5 @@
 #!/bin/bash
-# Automated rename from qfodufk8s to XDebbie
+# Automated rename from xdebbie to XDebbie
 
 set -e
 
@@ -26,13 +26,13 @@ error() {
 cd "$REPO_DIR"
 
 echo "======================================================"
-echo "  🎮 Renaming qfodufk8s → XDebbie"
+echo "  🎮 Renaming xdebbie → XDebbie"
 echo "======================================================"
 echo ""
 echo "This will rename:"
-echo "  • qfodufk8s → xdebbie"
-echo "  • qfodufk8sd → xdebbied"
-echo "  • qfodufk8sctl → xdctl"
+echo "  • xdebbie → xdebbie"
+echo "  • xdebbied → xdebbied"
+echo "  • xdctl → xdctl"
 echo "  • CAPQ → CAPX"
 echo ""
 echo "Current directory: $REPO_DIR"
@@ -51,28 +51,28 @@ git commit -m "checkpoint: before rename to XDebbie" || true
 git tag pre-rename-to-xdebbie || true
 
 info "Step 2: Renaming crate directories..."
-[ -d crates/qfodufk8sd ] && mv crates/qfodufk8sd crates/xdebbied
-[ -d crates/qfodufk8sctl ] && mv crates/qfodufk8sctl crates/xdctl
-[ -d crates/qfodufk8s-core ] && mv crates/qfodufk8s-core crates/xdebbie-core
+[ -d crates/xdebbied ] && mv crates/xdebbied crates/xdebbied
+[ -d crates/xdctl ] && mv crates/xdctl crates/xdctl
+[ -d crates/xdebbie-core ] && mv crates/xdebbie-core crates/xdebbie-core
 [ -d crates/capq ] && mv crates/capq crates/capx
 
 info "Step 3: Updating Cargo.toml files..."
 find . -name Cargo.toml -type f | while read f; do
-    sed -i 's/qfodufk8s-core/xdebbie-core/g' "$f"
-    sed -i 's/qfodufk8sd/xdebbied/g' "$f"
-    sed -i 's/qfodufk8sctl/xdctl/g' "$f"
-    sed -i 's/qfodufk8s/xdebbie/g' "$f"
+    sed -i 's/xdebbie-core/xdebbie-core/g' "$f"
+    sed -i 's/xdebbied/xdebbied/g' "$f"
+    sed -i 's/xdctl/xdctl/g' "$f"
+    sed -i 's/xdebbie/xdebbie/g' "$f"
     sed -i 's/capq/capx/g' "$f"
     sed -i 's/CAPQ/CAPX/g' "$f"
 done
 
 info "Step 4: Updating Rust source files..."
 find crates/ -name "*.rs" -type f | while read f; do
-    sed -i 's/qfodufk8s_core/xdebbie_core/g' "$f"
-    sed -i 's/qfodufk8sd/xdebbied/g' "$f"
-    sed -i 's/qfodufk8sctl/xdctl/g' "$f"
-    sed -i 's/qfodufk8s/xdebbie/g' "$f"
-    sed -i 's/QFODUFK8S/XDEBBIE/g' "$f"
+    sed -i 's/xdebbie_core/xdebbie_core/g' "$f"
+    sed -i 's/xdebbied/xdebbied/g' "$f"
+    sed -i 's/xdctl/xdctl/g' "$f"
+    sed -i 's/xdebbie/xdebbie/g' "$f"
+    sed -i 's/XDEBBIE/XDEBBIE/g' "$f"
     sed -i 's/Qfodufk/XDebbie/g' "$f"
     sed -i 's/capq/capx/g' "$f"
     sed -i 's/CAPQ/CAPX/g' "$f"
@@ -80,59 +80,59 @@ done
 
 info "Step 5: Updating documentation..."
 find docs/ -name "*.md" -type f 2>/dev/null | while read f; do
-    sed -i 's/qfodufk8sd/xdebbied/g' "$f"
-    sed -i 's/qfodufk8sctl/xdctl/g' "$f"
-    sed -i 's/qfodufk8s/xdebbie/g' "$f"
-    sed -i 's/QFODUFK8S/XDEBBIE/g' "$f"
+    sed -i 's/xdebbied/xdebbied/g' "$f"
+    sed -i 's/xdctl/xdctl/g' "$f"
+    sed -i 's/xdebbie/xdebbie/g' "$f"
+    sed -i 's/XDEBBIE/XDEBBIE/g' "$f"
     sed -i 's/Qfodufk/XDebbie/g' "$f"
     sed -i 's/CAPQ/CAPX/g' "$f"
 done || true
 
 # Update main README
-[ -f README.md ] && sed -i 's/qfodufk8sd/xdebbied/g' README.md
-[ -f README.md ] && sed -i 's/qfodufk8sctl/xdctl/g' README.md
-[ -f README.md ] && sed -i 's/qfodufk8s/xdebbie/g' README.md
-[ -f README.md ] && sed -i 's/QFODUFK8S/XDEBBIE/g' README.md
+[ -f README.md ] && sed -i 's/xdebbied/xdebbied/g' README.md
+[ -f README.md ] && sed -i 's/xdctl/xdctl/g' README.md
+[ -f README.md ] && sed -i 's/xdebbie/xdebbie/g' README.md
+[ -f README.md ] && sed -i 's/XDEBBIE/XDEBBIE/g' README.md
 [ -f README.md ] && sed -i 's/Qfodufk/XDebbie/g' README.md
 
 # Update BOOTSTRAP.md
-[ -f BOOTSTRAP.md ] && sed -i 's/qfodufk8sd/xdebbied/g' BOOTSTRAP.md
-[ -f BOOTSTRAP.md ] && sed -i 's/qfodufk8sctl/xdctl/g' BOOTSTRAP.md
-[ -f BOOTSTRAP.md ] && sed -i 's/qfodufk8s/xdebbie/g' BOOTSTRAP.md
-[ -f BOOTSTRAP.md ] && sed -i 's/QFODUFK8S/XDEBBIE/g' BOOTSTRAP.md
+[ -f BOOTSTRAP.md ] && sed -i 's/xdebbied/xdebbied/g' BOOTSTRAP.md
+[ -f BOOTSTRAP.md ] && sed -i 's/xdctl/xdctl/g' BOOTSTRAP.md
+[ -f BOOTSTRAP.md ] && sed -i 's/xdebbie/xdebbie/g' BOOTSTRAP.md
+[ -f BOOTSTRAP.md ] && sed -i 's/XDEBBIE/XDEBBIE/g' BOOTSTRAP.md
 
 info "Step 6: Updating scripts..."
 find scripts/ -name "*.sh" -type f 2>/dev/null | while read f; do
-    sed -i 's/qfodufk8sd/xdebbied/g' "$f"
-    sed -i 's/qfodufk8sctl/xdctl/g' "$f"
-    sed -i 's/qfodufk8s/xdebbie/g' "$f"
-    sed -i 's/QFODUFK8S/XDEBBIE/g' "$f"
+    sed -i 's/xdebbied/xdebbied/g' "$f"
+    sed -i 's/xdctl/xdctl/g' "$f"
+    sed -i 's/xdebbie/xdebbie/g' "$f"
+    sed -i 's/XDEBBIE/XDEBBIE/g' "$f"
 done || true
 
 info "Step 7: Renaming systemd service file..."
-if [ -f crates/xdebbied/debian/qfodufk8sd.service ]; then
-    mv crates/xdebbied/debian/qfodufk8sd.service crates/xdebbied/debian/xdebbied.service
+if [ -f crates/xdebbied/debian/xdebbied.service ]; then
+    mv crates/xdebbied/debian/xdebbied.service crates/xdebbied/debian/xdebbied.service
 fi
 
 info "Step 8: Updating systemd service content..."
 if [ -f crates/xdebbied/debian/xdebbied.service ]; then
-    sed -i 's/qfodufk8sd/xdebbied/g' crates/xdebbied/debian/xdebbied.service
-    sed -i 's/qfodufk8s/xdebbie/g' crates/xdebbied/debian/xdebbied.service
+    sed -i 's/xdebbied/xdebbied/g' crates/xdebbied/debian/xdebbied.service
+    sed -i 's/xdebbie/xdebbie/g' crates/xdebbied/debian/xdebbied.service
 fi
 
 info "Step 9: Updating debian maintainer scripts..."
 find crates/xdebbied/debian/ -type f 2>/dev/null | while read f; do
-    sed -i 's/qfodufk8sd/xdebbied/g' "$f"
-    sed -i 's/qfodufk8sctl/xdctl/g' "$f"
-    sed -i 's/qfodufk8s/xdebbie/g' "$f"
-    sed -i 's/QFODUFK8S/XDEBBIE/g' "$f"
+    sed -i 's/xdebbied/xdebbied/g' "$f"
+    sed -i 's/xdctl/xdctl/g' "$f"
+    sed -i 's/xdebbie/xdebbie/g' "$f"
+    sed -i 's/XDEBBIE/XDEBBIE/g' "$f"
 done || true
 
 info "Step 10: Updating examples and tests..."
 find examples/ -type f 2>/dev/null | while read f; do
-    sed -i 's/qfodufk8sd/xdebbied/g' "$f"
-    sed -i 's/qfodufk8sctl/xdctl/g' "$f"
-    sed -i 's/qfodufk8s/xdebbie/g' "$f"
+    sed -i 's/xdebbied/xdebbied/g' "$f"
+    sed -i 's/xdctl/xdctl/g' "$f"
+    sed -i 's/xdebbie/xdebbie/g' "$f"
     sed -i 's/Qfodufk/XDebbie/g' "$f"
 done || true
 
@@ -166,12 +166,12 @@ echo "     ./scripts/build-deb.sh"
 echo ""
 echo "  4. Commit:"
 echo "     git add -A"
-echo "     git commit -m 'Rename qfodufk8s to XDebbie'"
+echo "     git commit -m 'Rename xdebbie to XDebbie'"
 echo "     git tag v0.2.0"
 echo ""
 echo "  5. Rename repository directory:"
 echo "     cd ~/src/"
-echo "     mv qfodufk8s xdebbie"
+echo "     mv xdebbie xdebbie"
 echo ""
 echo "  6. Update git remote (if needed):"
 echo "     cd ~/src/xdebbie"

@@ -1,10 +1,10 @@
-# Migration Guide: Adding Bootstrap to Existing qfodufk8sd
+# Migration Guide: Adding Bootstrap to Existing xdebbied
 
-This guide helps you migrate from the pre-bootstrap version of qfodufk8sd to the new self-bootstrapping version.
+This guide helps you migrate from the pre-bootstrap version of xdebbied to the new self-bootstrapping version.
 
 ## For Existing Deployments
 
-If you already have qfodufk8sd running with manual configuration, you can:
+If you already have xdebbied running with manual configuration, you can:
 
 ### Option 1: Keep Your Existing Setup
 
@@ -12,17 +12,17 @@ The new version is **fully backward compatible**. Just upgrade the binary:
 
 ```bash
 # Build new version
-cd src/qfodufk8s
-cargo build --release --package qfodufk8sd
+cd src/xdebbie
+cargo build --release --package xdebbied
 
 # Stop old version
-sudo systemctl stop qfodufk8sd  # or kill existing process
+sudo systemctl stop xdebbied  # or kill existing process
 
 # Replace binary
-sudo cp target/release/qfodufk8sd /usr/local/bin/
+sudo cp target/release/xdebbied /usr/local/bin/
 
 # Start new version (uses existing config)
-sudo qfodufk8sd serve
+sudo xdebbied serve
 ```
 
 Your existing configuration, token, and state files will work unchanged.
@@ -33,23 +33,23 @@ If you want to use the new bootstrap functionality:
 
 ```bash
 # Backup existing config
-sudo cp /etc/qfodufk8s/qfodufk8sd.toml /etc/qfodufk8s/qfodufk8sd.toml.backup
-sudo cp /etc/qfodufk8s/token /etc/qfodufk8s/token.backup
+sudo cp /etc/xdebbie/xdebbied.toml /etc/xdebbie/xdebbied.toml.backup
+sudo cp /etc/xdebbie/token /etc/xdebbie/token.backup
 
 # Stop server
-sudo systemctl stop qfodufk8sd
+sudo systemctl stop xdebbied
 
 # Run bootstrap (with --force to overwrite)
-sudo qfodufk8sd bootstrap --force
+sudo xdebbied bootstrap --force
 
 # Review new config
-diff /etc/qfodufk8s/qfodufk8sd.toml.backup /etc/qfodufk8s/qfodufk8sd.toml
+diff /etc/xdebbie/xdebbied.toml.backup /etc/xdebbie/xdebbied.toml
 
 # Merge any custom settings from backup
 # (e.g., custom listen address, TLS certs, multi-host configs)
 
 # Start server
-sudo qfodufk8sd serve
+sudo xdebbied serve
 ```
 
 ### Option 3: Keep Config, Add Bootstrap Features
@@ -58,7 +58,7 @@ Use bootstrap to ensure resources exist, but keep your config:
 
 ```bash
 # Run bootstrap WITHOUT --force (won't overwrite config)
-sudo qfodufk8sd bootstrap
+sudo xdebbied bootstrap
 
 # This will:
 # - Check/install dependencies
@@ -87,7 +87,7 @@ Example migration:
 ```toml
 # OLD (incorrect)
 bind = "0.0.0.0:7443"
-state_path = "/var/lib/qfodufk8s/state.json"
+state_path = "/var/lib/xdebbie/state.json"
 
 [[hosts]]
 qemu_uri = "qemu:///system"
@@ -98,7 +98,7 @@ memory_overcommit = 1.0
 ```toml
 # NEW (correct)
 listen = "0.0.0.0:7443"
-state_file = "/var/lib/qfodufk8s/state.json"
+state_file = "/var/lib/xdebbie/state.json"
 
 [[hosts]]
 uri = "qemu:///system"
@@ -160,8 +160,8 @@ If you have TLS configured, bootstrap will:
 Your existing TLS config:
 
 ```toml
-tls_cert = "/etc/qfodufk8s/cert.pem"
-tls_key = "/etc/qfodufk8s/key.pem"
+tls_cert = "/etc/xdebbie/cert.pem"
+tls_key = "/etc/xdebbie/key.pem"
 ```
 
 Will be preserved and continue working.
@@ -174,33 +174,33 @@ If you already have a token file:
 
 ```bash
 # Bootstrap will reuse it
-sudo qfodufk8sd bootstrap
-# Output: "Token already exists at /etc/qfodufk8s/token, reusing"
+sudo xdebbied bootstrap
+# Output: "Token already exists at /etc/xdebbie/token, reusing"
 
 # To generate new token
-sudo qfodufk8sd bootstrap --force
+sudo xdebbied bootstrap --force
 ```
 
 ### Environment File
 
-Bootstrap creates `~/.qfodufk8s_env` for convenience. If you use a different method to set environment variables:
+Bootstrap creates `~/.xdebbie_env` for convenience. If you use a different method to set environment variables:
 
 **Option 1**: Source the env file
 ```bash
-source ~/.qfodufk8s_env
+source ~/.xdebbie_env
 ```
 
 **Option 2**: Continue using your method
 ```bash
-export QFODUFK8S_URL=http://myhost:7443
-export QFODUFK8S_TOKEN=$(sudo cat /etc/qfodufk8s/token)
+export XDEBBIE_URL=http://myhost:7443
+export XDEBBIE_TOKEN=$(sudo cat /etc/xdebbie/token)
 ```
 
 Both work equally well.
 
 ## State File Migration
 
-Bootstrap **never** modifies `/var/lib/qfodufk8s/state.json`. Your VM state, host capacity, and runtime data are preserved across upgrades.
+Bootstrap **never** modifies `/var/lib/xdebbie/state.json`. Your VM state, host capacity, and runtime data are preserved across upgrades.
 
 ## Systemd Service Updates
 
@@ -210,14 +210,14 @@ If you have a systemd service, you can optionally add bootstrap to the start seq
 
 ```ini
 [Service]
-ExecStart=/usr/local/bin/qfodufk8sd serve
+ExecStart=/usr/local/bin/xdebbied serve
 ```
 
 ### New Service (With Bootstrap)
 
 ```ini
 [Service]
-ExecStart=/usr/local/bin/qfodufk8sd serve --bootstrap
+ExecStart=/usr/local/bin/xdebbied serve --bootstrap
 ```
 
 The `--bootstrap` flag will:
@@ -236,16 +236,16 @@ If you need to rollback to the old version:
 
 ```bash
 # Stop new version
-sudo systemctl stop qfodufk8sd
+sudo systemctl stop xdebbied
 
 # Restore old binary
-sudo cp /usr/local/bin/qfodufk8sd.backup /usr/local/bin/qfodufk8sd
+sudo cp /usr/local/bin/xdebbied.backup /usr/local/bin/xdebbied
 
 # Restore config if changed
-sudo cp /etc/qfodufk8s/qfodufk8sd.toml.backup /etc/qfodufk8s/qfodufk8sd.toml
+sudo cp /etc/xdebbie/xdebbied.toml.backup /etc/xdebbie/xdebbied.toml
 
 # Start old version
-sudo systemctl start qfodufk8sd
+sudo systemctl start xdebbied
 ```
 
 State file is compatible in both directions.
@@ -255,7 +255,7 @@ State file is compatible in both directions.
 After upgrading:
 
 - [ ] Server starts without errors
-- [ ] Existing VMs are visible (`qfodufk8sctl vm ls`)
+- [ ] Existing VMs are visible (`xdctl vm ls`)
 - [ ] Can create new VMs
 - [ ] Host inventory updates correctly
 - [ ] Token authentication works
@@ -272,10 +272,10 @@ You're using old (incorrect) field names. Update your config:
 
 ```bash
 # See what's wrong
-sudo qfodufk8sd serve
+sudo xdebbied serve
 
 # Generate correct config
-sudo qfodufk8sd bootstrap --force
+sudo xdebbied bootstrap --force
 
 # Or manually fix field names (see table above)
 ```
@@ -286,24 +286,24 @@ Token file might have wrong permissions or path:
 
 ```bash
 # Check token file
-ls -la /etc/qfodufk8s/token
+ls -la /etc/xdebbie/token
 
 # Should be mode 0600, readable by server user
 
 # Regenerate if needed
-sudo qfodufk8sd bootstrap --force
+sudo xdebbied bootstrap --force
 ```
 
 ### Bootstrap creates unwanted resources
 
-If you don't want the default `qfodufk8s` network/pool:
+If you don't want the default `xdebbie` network/pool:
 
 ```bash
 # Use existing resources
-sudo qfodufk8sd bootstrap --network default --pool default
+sudo xdebbied bootstrap --network default --pool default
 
 # Or keep your manual config
-sudo qfodufk8sd serve  # without --bootstrap
+sudo xdebbied serve  # without --bootstrap
 ```
 
 ## Best Practices
@@ -318,9 +318,9 @@ sudo qfodufk8sd serve  # without --bootstrap
 
 If you encounter issues:
 
-1. Check logs: `journalctl -u qfodufk8sd -f`
-2. Validate config: `sudo qfodufk8sd check`
-3. Review documentation: [BOOTSTRAP.md](src/qfodufk8s/BOOTSTRAP.md)
+1. Check logs: `journalctl -u xdebbied -f`
+2. Validate config: `sudo xdebbied check`
+3. Review documentation: [BOOTSTRAP.md](src/xdebbie/BOOTSTRAP.md)
 4. File an issue with logs and config (redact tokens!)
 
 ## Summary
@@ -331,4 +331,4 @@ The bootstrap functionality is:
 - **Non-destructive** - preserves existing resources unless `--force`
 - **Additive** - adds convenience, doesn't remove functionality
 
-Upgrade with confidence! The new version works exactly like the old version when you use `qfodufk8sd serve` without `--bootstrap`.
+Upgrade with confidence! The new version works exactly like the old version when you use `xdebbied serve` without `--bootstrap`.

@@ -1,8 +1,8 @@
-# qfodufk8sd Autodiscovery and Leader Election Design
+# xdebbied Autodiscovery and Leader Election Design
 
 ## Overview
 
-Enable qfodufk8sd instances to automatically discover each other via multicast, share capacity information, and elect a leader for scheduling coordination.
+Enable xdebbied instances to automatically discover each other via multicast, share capacity information, and elect a leader for scheduling coordination.
 
 ## Goals
 
@@ -259,7 +259,7 @@ fn calculate_election_score(&self) -> u64 {
 
 **Files to Create:**
 ```
-src/qfodufk8s/crates/qfodufk8sd/src/discovery/
+src/xdebbie/crates/xdebbied/src/discovery/
 ├── mod.rs              - Main discovery module
 ├── multicast.rs        - Multicast send/receive
 ├── messages.rs         - Protocol message types
@@ -278,7 +278,7 @@ src/qfodufk8s/crates/qfodufk8sd/src/discovery/
 
 **Files to Create:**
 ```
-src/qfodufk8s/crates/qfodufk8sd/src/election/
+src/xdebbie/crates/xdebbied/src/election/
 ├── mod.rs              - Election coordinator
 ├── raft_lite.rs        - Simplified Raft algorithm
 ├── scoring.rs          - Election score calculation
@@ -297,7 +297,7 @@ src/qfodufk8s/crates/qfodufk8sd/src/election/
 
 **Files to Update:**
 ```
-src/qfodufk8s/crates/qfodufk8sd/src/
+src/xdebbie/crates/xdebbied/src/
 ├── reconcile.rs        - Only run on LEADER
 ├── api.rs              - Proxy scheduling to leader
 └── store.rs            - Shared state awareness
@@ -478,9 +478,9 @@ mod tests {
 ./test_cluster.sh 3
 
 # Start three instances
-qfodufk8sd serve --bootstrap &  # node1
-qfodufk8sd serve --bootstrap &  # node2
-qfodufk8sd serve --bootstrap &  # node3
+xdebbied serve --bootstrap &  # node1
+xdebbied serve --bootstrap &  # node2
+xdebbied serve --bootstrap &  # node3
 
 # Wait for election
 sleep 10
@@ -489,7 +489,7 @@ sleep 10
 curl http://localhost:7443/cluster/status
 
 # Kill leader
-pkill -f "qfodufk8sd.*node1"
+pkill -f "xdebbied.*node1"
 
 # Wait for re-election
 sleep 10
@@ -553,20 +553,20 @@ curl http://localhost:7443/cluster/status
 
 ```bash
 # 1. Upgrade binary on all nodes
-scp qfodufk8sd node{1,2,3}:/usr/local/bin/
+scp xdebbied node{1,2,3}:/usr/local/bin/
 
 # 2. Update config on all nodes
-cat >> /etc/qfodufk8s/qfodufk8sd.toml <<EOF
+cat >> /etc/xdebbie/xdebbied.toml <<EOF
 [discovery]
 enabled = true
 EOF
 
 # 3. Restart nodes one at a time
-systemctl restart qfodufk8sd  # node1
+systemctl restart xdebbied  # node1
 sleep 30
-systemctl restart qfodufk8sd  # node2
+systemctl restart xdebbied  # node2
 sleep 30
-systemctl restart qfodufk8sd  # node3
+systemctl restart xdebbied  # node3
 
 # 4. Verify cluster formed
 curl http://node1:7443/cluster/status
@@ -625,7 +625,7 @@ curl http://node1:7443/cluster/status
 
 ## Summary
 
-This design enables qfodufk8sd to form **self-organizing, fault-tolerant clusters** with:
+This design enables xdebbied to form **self-organizing, fault-tolerant clusters** with:
 
 1. **Zero configuration** - Nodes discover each other via multicast
 2. **Automatic leadership** - Best node elected as scheduler
@@ -633,4 +633,4 @@ This design enables qfodufk8sd to form **self-organizing, fault-tolerant cluster
 4. **Scalability** - Support 3-100 nodes efficiently
 5. **Simplicity** - Bully algorithm, lightweight protocol
 
-Next step: Implement Phase 1 (Multicast Discovery) in `src/qfodufk8s/crates/qfodufk8sd/src/discovery/`.
+Next step: Implement Phase 1 (Multicast Discovery) in `src/xdebbie/crates/xdebbied/src/discovery/`.

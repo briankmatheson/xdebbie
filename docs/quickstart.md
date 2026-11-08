@@ -1,4 +1,4 @@
-# qfodufk8sd Quick Start Guide
+# xdebbied Quick Start Guide
 
 ## Single-Command Setup
 
@@ -6,10 +6,10 @@
 
 ```bash
 # Copy binary to system
-scp qfodufk8sd debian13:/usr/local/bin/
+scp xdebbied debian13:/usr/local/bin/
 
 # Bootstrap and start (one command!)
-ssh debian13 "sudo qfodufk8sd serve --bootstrap"
+ssh debian13 "sudo xdebbied serve --bootstrap"
 ```
 
 That's it! The system will:
@@ -22,20 +22,20 @@ That's it! The system will:
 
 ```bash
 # Step 1: Bootstrap
-sudo qfodufk8sd bootstrap
+sudo xdebbied bootstrap
 
 # Step 2: Start server
-sudo qfodufk8sd serve
+sudo xdebbied serve
 ```
 
 ## Client Configuration
 
 ```bash
 # Load environment (token and URL)
-source ~/.qfodufk8s_env
+source ~/.xdebbie_env
 
 # Test connectivity
-qfodufk8sctl host ls
+xdctl host ls
 ```
 
 ## Common Commands
@@ -44,70 +44,70 @@ qfodufk8sctl host ls
 
 ```bash
 # Standard bootstrap
-sudo qfodufk8sd bootstrap
+sudo xdebbied bootstrap
 
 # Force re-bootstrap (overwrite config/token)
-sudo qfodufk8sd bootstrap --force
+sudo xdebbied bootstrap --force
 
 # Custom network
-sudo qfodufk8sd bootstrap --network internal --subnet 10.100.0.0/16
+sudo xdebbied bootstrap --network internal --subnet 10.100.0.0/16
 
 # Custom pool
-sudo qfodufk8sd bootstrap --pool mypool --pool-path /mnt/vms
+sudo xdebbied bootstrap --pool mypool --pool-path /mnt/vms
 ```
 
 ### Server Operations
 
 ```bash
 # Start server (uses existing config)
-sudo qfodufk8sd serve
+sudo xdebbied serve
 
 # Start with bootstrap
-sudo qfodufk8sd serve --bootstrap
+sudo xdebbied serve --bootstrap
 
 # Custom config file
-sudo qfodufk8sd serve --config /tmp/custom.toml
+sudo xdebbied serve --config /tmp/custom.toml
 
 # Check hosts connectivity
-sudo qfodufk8sd check
+sudo xdebbied check
 ```
 
 ### Client Operations
 
 ```bash
 # List hosts
-qfodufk8sctl host ls
+xdctl host ls
 
 # List VMs
-qfodufk8sctl vm ls
+xdctl vm ls
 
 # Create VM
-qfodufk8sctl vm create --name test --cpus 2 --memory 2048 --disk 20 --image debian-13-k8s-v1.36
+xdctl vm create --name test --cpus 2 --memory 2048 --disk 20 --image debian-13-k8s-v1.36
 
 # Delete VM
-qfodufk8sctl vm delete test
+xdctl vm delete test
 ```
 
 ## Files and Locations
 
 ```
-/etc/qfodufk8s/
-├── qfodufk8sd.toml    # Configuration
+/etc/xdebbie/
+├── xdebbied.toml    # Configuration
 └── token              # API bearer token (0600)
 
-/var/lib/qfodufk8s/
+/var/lib/xdebbie/
 └── state.json         # Runtime state
 
-/var/lib/libvirt/qfodufk8s/  # Default storage pool
+/var/lib/libvirt/xdebbie/  # Default storage pool
 
-~/.qfodufk8s_env       # Client environment (source this)
+~/.xdebbie_env       # Client environment (source this)
 ```
 
 ## Default Network
 
 ```
-Network:  qfodufk8s
-Bridge:   virbr-qfodufk8s
+Network:  xdebbie
+Bridge:   virbr-xdebbie
 Subnet:   192.168.100.0/24
 DHCP:     192.168.100.100 - 192.168.100.250
 ```
@@ -120,14 +120,14 @@ sudo virsh net-list
 sudo virsh pool-list
 
 # Check configuration
-cat /etc/qfodufk8s/qfodufk8sd.toml
+cat /etc/xdebbie/xdebbied.toml
 
 # Check token
-ls -la /etc/qfodufk8s/token
+ls -la /etc/xdebbie/token
 
 # Test API
-source ~/.qfodufk8s_env
-curl -H "Authorization: Bearer $QFODUFK8S_TOKEN" $QFODUFK8S_URL/hosts
+source ~/.xdebbie_env
+curl -H "Authorization: Bearer $XDEBBIE_TOKEN" $XDEBBIE_URL/hosts
 ```
 
 ## Troubleshooting
@@ -135,26 +135,26 @@ curl -H "Authorization: Bearer $QFODUFK8S_TOKEN" $QFODUFK8S_URL/hosts
 ### Bootstrap fails: "not running as root"
 ```bash
 # Run with sudo
-sudo qfodufk8sd bootstrap
+sudo xdebbied bootstrap
 ```
 
 ### Server fails: "error loading config"
 ```bash
 # Check config exists
-ls -la /etc/qfodufk8s/qfodufk8sd.toml
+ls -la /etc/xdebbie/xdebbied.toml
 
 # Re-bootstrap if needed
-sudo qfodufk8sd bootstrap --force
+sudo xdebbied bootstrap --force
 ```
 
 ### Client fails: "401 Unauthorized"
 ```bash
 # Load environment
-source ~/.qfodufk8s_env
+source ~/.xdebbie_env
 
 # Verify variables set
-echo $QFODUFK8S_URL
-echo $QFODUFK8S_TOKEN
+echo $XDEBBIE_URL
+echo $XDEBBIE_TOKEN
 ```
 
 ### libvirtd not running
@@ -164,28 +164,28 @@ sudo systemctl start libvirtd
 sudo systemctl enable libvirtd
 
 # Or re-bootstrap
-sudo qfodufk8sd bootstrap
+sudo xdebbied bootstrap
 ```
 
-## CAPQ Integration
+## CAPX Integration
 
 ### Setup for Cluster API
 
 ```bash
-# 1. Bootstrap qfodufk8sd
-sudo qfodufk8sd bootstrap
-sudo qfodufk8sd serve &
+# 1. Bootstrap xdebbied
+sudo xdebbied bootstrap
+sudo xdebbied serve &
 
 # 2. Configure client
-source ~/.qfodufk8s_env
+source ~/.xdebbie_env
 
 # 3. Verify
-qfodufk8sctl host ls
+xdctl host ls
 
-# 4. In CAPI management cluster, create QfodufkCluster:
+# 4. In CAPI management cluster, create XDebbieCluster:
 kubectl apply -f - <<EOF
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
-kind: QfodufkCluster
+kind: XDebbieCluster
 metadata:
   name: workload1
   namespace: default
@@ -209,27 +209,27 @@ When bootstrapping on stock Debian 13:
 ## Environment Variables
 
 ```bash
-# Set by ~/.qfodufk8s_env
-QFODUFK8S_URL=http://0.0.0.0:7443
-QFODUFK8S_TOKEN='<64-char-hex-token>'
+# Set by ~/.xdebbie_env
+XDEBBIE_URL=http://0.0.0.0:7443
+XDEBBIE_TOKEN='<64-char-hex-token>'
 
 # Optional overrides
-QFODUFK8SD_CONFIG=/path/to/config.toml  # Default: /etc/qfodufk8s/qfodufk8sd.toml
+XDEBBIED_CONFIG=/path/to/config.toml  # Default: /etc/xdebbie/xdebbied.toml
 ```
 
 ## Systemd Service (Manual)
 
-Create `/etc/systemd/system/qfodufk8sd.service`:
+Create `/etc/systemd/system/xdebbied.service`:
 
 ```ini
 [Unit]
-Description=Qfodufk8s VM Orchestrator
+Description=XDebbie8s VM Orchestrator
 After=libvirtd.service
 Requires=libvirtd.service
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/qfodufk8sd serve
+ExecStart=/usr/local/bin/xdebbied serve
 Restart=on-failure
 RestartSec=5s
 
@@ -240,20 +240,20 @@ WantedBy=multi-user.target
 Enable and start:
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable qfodufk8sd
-sudo systemctl start qfodufk8sd
+sudo systemctl enable xdebbied
+sudo systemctl start xdebbied
 ```
 
 ## Next Steps
 
-1. **Build the binary**: `cd src/qfodufk8s && cargo build --release`
-2. **Test bootstrap**: `sudo target/release/qfodufk8sd bootstrap`
-3. **Start server**: `sudo target/release/qfodufk8sd serve`
-4. **Test client**: `source ~/.qfodufk8s_env && qfodufk8sctl host ls`
-5. **Deploy CAPQ**: See CAPQ documentation for Cluster API integration
+1. **Build the binary**: `cd src/xdebbie && cargo build --release`
+2. **Test bootstrap**: `sudo target/release/xdebbied bootstrap`
+3. **Start server**: `sudo target/release/xdebbied serve`
+4. **Test client**: `source ~/.xdebbie_env && xdctl host ls`
+5. **Deploy CAPX**: See CAPX documentation for Cluster API integration
 
 ## More Information
 
-- Full documentation: [BOOTSTRAP.md](src/qfodufk8s/BOOTSTRAP.md)
+- Full documentation: [BOOTSTRAP.md](src/xdebbie/BOOTSTRAP.md)
 - Implementation details: [BOOTSTRAP_IMPLEMENTATION_SUMMARY.md](BOOTSTRAP_IMPLEMENTATION_SUMMARY.md)
-- Original design: [QFODUFK8SD_BOOTSTRAP_DESIGN.md](QFODUFK8SD_BOOTSTRAP_DESIGN.md)
+- Original design: [XDEBBIED_BOOTSTRAP_DESIGN.md](XDEBBIED_BOOTSTRAP_DESIGN.md)

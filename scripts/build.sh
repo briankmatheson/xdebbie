@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Build qfodufk8sd with bootstrap functionality
+# Build xdebbied with bootstrap functionality
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SRC_DIR="$SCRIPT_DIR/src/qfodufk8s"
+SRC_DIR="$SCRIPT_DIR/src/xdebbie"
 TARGET_DIR="$SRC_DIR/target/release"
 
 # Colors for output
@@ -40,35 +40,35 @@ cd "$SRC_DIR"
 
 # Check if we're in the right place
 if [[ ! -f "Cargo.toml" ]]; then
-    error "Not in qfodufk8s source directory!"
+    error "Not in xdebbie source directory!"
     exit 1
 fi
 
-info "Building qfodufk8sd in release mode..."
-cargo build --release --package qfodufk8sd
+info "Building xdebbied in release mode..."
+cargo build --release --package xdebbied
 
-if [[ ! -f "$TARGET_DIR/qfodufk8sd" ]]; then
-    error "Build failed! Binary not found at $TARGET_DIR/qfodufk8sd"
+if [[ ! -f "$TARGET_DIR/xdebbied" ]]; then
+    error "Build failed! Binary not found at $TARGET_DIR/xdebbied"
     exit 1
 fi
 
 # Get binary info
-BINARY_SIZE=$(du -h "$TARGET_DIR/qfodufk8sd" | cut -f1)
+BINARY_SIZE=$(du -h "$TARGET_DIR/xdebbied" | cut -f1)
 info "Build successful!"
-info "Binary location: $TARGET_DIR/qfodufk8sd"
+info "Binary location: $TARGET_DIR/xdebbied"
 info "Binary size: $BINARY_SIZE"
 
 # Optionally strip the binary
 if command -v strip &> /dev/null; then
     info "Stripping debug symbols..."
-    strip "$TARGET_DIR/qfodufk8sd"
-    STRIPPED_SIZE=$(du -h "$TARGET_DIR/qfodufk8sd" | cut -f1)
+    strip "$TARGET_DIR/xdebbied"
+    STRIPPED_SIZE=$(du -h "$TARGET_DIR/xdebbied" | cut -f1)
     info "Stripped size: $STRIPPED_SIZE"
 fi
 
 # Test binary
 info "Testing binary..."
-"$TARGET_DIR/qfodufk8sd" --version || {
+"$TARGET_DIR/xdebbied" --version || {
     error "Binary test failed!"
     exit 1
 }
@@ -77,25 +77,25 @@ echo ""
 info "Build complete! Next steps:"
 echo ""
 echo "  # Install locally:"
-echo "  sudo cp $TARGET_DIR/qfodufk8sd /usr/local/bin/"
+echo "  sudo cp $TARGET_DIR/xdebbied /usr/local/bin/"
 echo ""
 echo "  # Bootstrap the system:"
-echo "  sudo qfodufk8sd bootstrap"
+echo "  sudo xdebbied bootstrap"
 echo ""
 echo "  # Start the server:"
-echo "  sudo qfodufk8sd serve"
+echo "  sudo xdebbied serve"
 echo ""
 echo "  # Configure client:"
-echo "  source ~/.qfodufk8s_env"
-echo "  qfodufk8sctl host ls"
+echo "  source ~/.xdebbie_env"
+echo "  xdctl host ls"
 echo ""
 
 # Offer to install
 read -p "Install to /usr/local/bin now? [y/N] " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
-    info "Installing to /usr/local/bin/qfodufk8sd..."
-    sudo cp "$TARGET_DIR/qfodufk8sd" /usr/local/bin/
-    sudo chmod 755 /usr/local/bin/qfodufk8sd
-    info "Installed! Run: sudo qfodufk8sd bootstrap"
+    info "Installing to /usr/local/bin/xdebbied..."
+    sudo cp "$TARGET_DIR/xdebbied" /usr/local/bin/
+    sudo chmod 755 /usr/local/bin/xdebbied
+    info "Installed! Run: sudo xdebbied bootstrap"
 fi

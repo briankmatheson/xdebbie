@@ -1,21 +1,21 @@
-# Qfodufk8s
+# XDebbie8s
 
 A lightweight VM scheduler, orchestrator, and lifecycle manager for small
 clouds of Linux boxes — and a Cluster API infrastructure provider on top of it.
 
-Qfodufk8s turns three to thirty ordinary servers running QEMU/KVM + libvirt into a
+XDebbie8s turns three to thirty ordinary servers running QEMU/KVM + libvirt into a
 pool that places, boots, migrates, and deletes VMs on demand. It talks to every
-host with plain `virsh -c qemu+ssh://…`, so a host needs nothing Qfodufk8s-specific:
+host with plain `virsh -c qemu+ssh://…`, so a host needs nothing XDebbie8s-specific:
 no agent, no shared storage, no special network.
 
 ```
                 ┌─────────────────── management cluster ───────────────────┐
                 │  CAPI core + kubeadm providers                           │
-  kubectl ───▶  │  capq  (Qfodufk8sCluster / Qfodufk8sMachine controllers) │
+  kubectl ───▶  │  capq  (XDebbie8sCluster / XDebbie8sMachine controllers) │
                 └─────────────────────────────┬────────────────────────────┘
                                               │ HTTPS + bearer token
                                    ┌──────────▼──────────┐
-  qfodufk8sctl ──────────────────▶ │     qfodufk8sd      │  state.json
+  xdctl ──────────────────▶ │     xdebbied      │  state.json
                                    │ API · scheduler ·   │
                                    │ reconciler          │
                                    └──┬──────┬──────┬────┘
@@ -31,9 +31,9 @@ no agent, no shared storage, no special network.
 
 | Crate | Binary | What it does |
 |---|---|---|
-| `qfodufk8s-core` | — | Data model and the placement engine (pure, exhaustively tested) |
-| `qfodufk8sd` | `qfodufk8sd` | REST API, durable state, reconciler, libvirt-over-SSH driver |
-| `qfodufk8sctl` | `qfodufk8sctl` | CLI for hosts, VMs, failure domains, drain, migrate |
+| `xdebbie-core` | — | Data model and the placement engine (pure, exhaustively tested) |
+| `xdebbied` | `xdebbied` | REST API, durable state, reconciler, libvirt-over-SSH driver |
+| `xdctl` | `xdctl` | CLI for hosts, VMs, failure domains, drain, migrate |
 | `capq` | `capq` | Cluster API infrastructure provider (contract **v1beta2**) |
 
 ## What it does
@@ -57,12 +57,12 @@ no agent, no shared storage, no special network.
 ```sh
 cargo build --release
 # on each server
-sudo examples/four-node/prep-host.sh --nic eno1 --pubkey "$(cat qfodufk8sd.pub)"
-# on the qfodufk8sd box
-qfodufk8sd --config /etc/qfodufk8s/qfodufk8sd.toml check     # can we reach every host?
-qfodufk8sd --config /etc/qfodufk8s/qfodufk8sd.toml serve
-qfodufk8sctl host ls
-qfodufk8sctl vm create web1 --image debian-13-k8s-v1.36 --cpus 2 --memory-mib 4096 --dry-run
+sudo examples/four-node/prep-host.sh --nic eno1 --pubkey "$(cat xdebbied.pub)"
+# on the xdebbied box
+xdebbied --config /etc/xdebbie/xdebbied.toml check     # can we reach every host?
+xdebbied --config /etc/xdebbie/xdebbied.toml serve
+xdctl host ls
+xdctl vm create web1 --image debian-13-k8s-v1.36 --cpus 2 --memory-mib 4096 --dry-run
 ```
 
 The full walkthrough — four physical servers, a 3+4 node Kubernetes cluster
@@ -84,9 +84,9 @@ before you trust them with anything you care about. Known gaps are listed in
 
 ## License
 
-Copyright © 2026 Brian Matheson and Qfodufk8s contributors.
+Copyright © 2026 Brian Matheson and XDebbie8s contributors.
 
-Qfodufk8s is free software: you can redistribute it and/or modify it under the
+XDebbie8s is free software: you can redistribute it and/or modify it under the
 terms of the GNU General Public License as published by the Free Software
 Foundation, either version 3 of the License, or (at your option) any later
 version. See [LICENSE](LICENSE). Every source file carries an

@@ -1,6 +1,6 @@
-# qfodufk8sd REST API (v1)
+# xdebbied REST API (v1)
 
-Base URL `https://<qfodufk8sd>:7443`. With `token_file` configured, every `/v1`
+Base URL `https://<xdebbied>:7443`. With `token_file` configured, every `/v1`
 call needs `Authorization: Bearer <token>`. Bodies are JSON with camelCase
 keys. Errors are `{"error": "..."}`.
 
@@ -20,7 +20,7 @@ keys. Errors are `{"error": "..."}`.
 Host body:
 
 ```json
-{"name": "srv1", "uri": "qemu+ssh://qfodufk8s@srv1/system", "failureDomain": "fd-1",
+{"name": "srv1", "uri": "qemu+ssh://xdebbie@srv1/system", "failureDomain": "fd-1",
  "controlPlaneEligible": true, "labels": {"disk": "nvme"}, "storagePool": "default",
  "bridge": "br0", "cpuOvercommit": 4.0, "memOvercommit": 1.0,
  "reservedMemoryMib": 4096, "reservedCpus": 2}
@@ -48,7 +48,7 @@ VmSpec:
  "placement": {"failureDomain": "fd-2", "antiAffinityGroup": "default.demo.workers",
                "strictAntiAffinity": false, "requiredLabels": {}, "controlPlane": false, "host": null},
  "userData": "#cloud-config\n...", "metaData": {"cluster": "demo"},
- "labels": {"qfodufk8s.dev/cluster": "default.demo"}}
+ "labels": {"xdebbie.dev/cluster": "default.demo"}}
 ```
 
 VMs are immutable. To resize, create a new VM and delete the old one, which

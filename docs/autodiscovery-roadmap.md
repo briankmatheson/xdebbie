@@ -2,7 +2,7 @@
 
 ## Quick Summary
 
-Transform qfodufk8sd from single-node to **self-organizing cluster** with:
+Transform xdebbied from single-node to **self-organizing cluster** with:
 - Multicast discovery (239.0.0.42:7442)
 - Leader election (Bully algorithm)
 - Hot standby backups
@@ -16,7 +16,7 @@ Transform qfodufk8sd from single-node to **self-organizing cluster** with:
 
 **Files to Create**:
 ```
-src/qfodufk8s/crates/qfodufk8sd/src/discovery/
+src/xdebbie/crates/xdebbied/src/discovery/
 ├── mod.rs              - Public interface, coordinator
 ├── multicast.rs        - UDP multicast socket handling
 ├── messages.rs         - Protocol message serde types
@@ -30,7 +30,7 @@ socket2 = "0.5"          # For multicast socket options
 ```
 
 **Key Tasks**:
-- [x] Design protocol (DONE - see QFODUFK8SD_AUTODISCOVERY_DESIGN.md)
+- [x] Design protocol (DONE - see XDEBBIED_AUTODISCOVERY_DESIGN.md)
 - [ ] Implement multicast socket (IPv4, join group 239.0.0.42)
 - [ ] Create message types (ANNOUNCE, HEARTBEAT, etc.)
 - [ ] Send announcements every 5s with capacity
@@ -41,10 +41,10 @@ socket2 = "0.5"          # For multicast socket options
 **Testing**:
 ```bash
 # Terminal 1: Start node1
-qfodufk8sd serve --bootstrap
+xdebbied serve --bootstrap
 
 # Terminal 2: Start node2
-qfodufk8sd serve --bootstrap
+xdebbied serve --bootstrap
 
 # Terminal 3: Check they found each other
 curl http://localhost:7443/cluster/peers
@@ -65,7 +65,7 @@ curl http://localhost:7443/cluster/peers
 
 **Files to Create**:
 ```
-src/qfodufk8s/crates/qfodufk8sd/src/election/
+src/xdebbie/crates/xdebbied/src/election/
 ├── mod.rs              - Election coordinator
 ├── state.rs            - State machine (OBSERVING → ELECTING → LEADER/BACKUP)
 ├── scoring.rs          - Election score calculation
@@ -86,7 +86,7 @@ src/qfodufk8s/crates/qfodufk8sd/src/election/
 ```bash
 # Start 3 nodes
 for i in 1 2 3; do
-  qfodufk8sd serve --bootstrap --config /tmp/node$i.toml &
+  xdebbied serve --bootstrap --config /tmp/node$i.toml &
 done
 
 # Wait for election
@@ -121,7 +121,7 @@ curl http://localhost:7443/cluster/status
 
 **Files to Update**:
 ```
-src/qfodufk8s/crates/qfodufk8sd/src/
+src/xdebbie/crates/xdebbied/src/
 ├── reconcile.rs        - Check role before reconciling
 ├── api.rs              - Proxy scheduling requests to leader
 └── main.rs             - Start discovery/election tasks
@@ -187,7 +187,7 @@ done
 
 ```bash
 # Create directory structure
-mkdir -p src/qfodufk8s/crates/qfodufk8sd/src/discovery
+mkdir -p src/xdebbie/crates/xdebbied/src/discovery
 
 # Start with message types
 # Then multicast socket
@@ -200,8 +200,8 @@ mkdir -p src/qfodufk8s/crates/qfodufk8sd/src/discovery
 
 ```bash
 # Build and test
-cargo build --package qfodufk8sd
-cargo test --package qfodufk8sd discovery
+cargo build --package xdebbied
+cargo test --package xdebbied discovery
 
 # Manual test with 2 nodes
 ./test-discovery.sh
@@ -210,7 +210,7 @@ cargo test --package qfodufk8sd discovery
 ### Step 3: Add Election (Day 3-5)
 
 ```bash
-mkdir -p src/qfodufk8s/crates/qfodufk8sd/src/election
+mkdir -p src/xdebbie/crates/xdebbied/src/election
 
 # Implement state machine
 # Implement bully algorithm
@@ -242,7 +242,7 @@ mkdir -p src/qfodufk8s/crates/qfodufk8sd/src/election
 ### Before (Single Node)
 ```toml
 listen = "0.0.0.0:7443"
-state_file = "/var/lib/qfodufk8s/state.json"
+state_file = "/var/lib/xdebbie/state.json"
 
 [[hosts]]
 name = "localhost"
@@ -252,7 +252,7 @@ uri = "qemu:///system"
 ### After (Cluster Mode)
 ```toml
 listen = "0.0.0.0:7443"
-state_file = "/var/lib/qfodufk8s/state.json"
+state_file = "/var/lib/xdebbie/state.json"
 
 # Auto-discovery via multicast
 [discovery]
@@ -334,14 +334,14 @@ Users opt-in:
 enabled = true
 
 # Restart
-systemctl restart qfodufk8sd
+systemctl restart xdebbied
 ```
 
 ### Option 2: Auto-Enable (Better UX)
 
 Bootstrap enables by default:
 ```bash
-qfodufk8sd bootstrap
+xdebbied bootstrap
 # Automatically creates config with discovery enabled
 ```
 
@@ -420,7 +420,7 @@ qfodufk8sd bootstrap
 
 1. **Create discovery module structure**
    ```bash
-   mkdir -p src/qfodufk8s/crates/qfodufk8sd/src/discovery
+   mkdir -p src/xdebbie/crates/xdebbied/src/discovery
    ```
 
 2. **Add dependencies to Cargo.toml**

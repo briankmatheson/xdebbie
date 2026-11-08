@@ -1,4 +1,4 @@
-# qfodufk8s Documentation
+# xdebbie Documentation
 
 ## Quick Start
 
@@ -24,7 +24,7 @@
 ## Scripts
 
 See [scripts/](../scripts/) directory for:
-- `build.sh` - Build qfodufk8sd
+- `build.sh` - Build xdebbied
 - `run-bootstrap.sh` - Run bootstrap helper
 - `test-bootstrap.sh` - Test bootstrap functionality
 - `start.sh` - Start server helper

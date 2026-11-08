@@ -1,12 +1,12 @@
 #!/bin/bash
-# Test qfodufk8sd bootstrap
+# Test xdebbied bootstrap
 # Run this manually in your terminal: ./test-bootstrap.sh
 
 set -e
 
-BINARY="$HOME/src/qfodufk8s/target/release/qfodufk8sd"
+BINARY="$HOME/src/xdebbie/target/release/xdebbied"
 
-echo "=== Testing qfodufk8sd Bootstrap ==="
+echo "=== Testing xdebbied Bootstrap ==="
 echo ""
 echo "Binary: $BINARY"
 echo "Version: $($BINARY --version)"
@@ -42,10 +42,10 @@ echo ""
 echo "This will:"
 echo "  1. Install missing packages (if any)"
 echo "  2. Start libvirtd (if not running)"
-echo "  3. Create qfodufk8s network and pool"
-echo "  4. Generate /etc/qfodufk8s/qfodufk8sd.toml"
-echo "  5. Generate /etc/qfodufk8s/token"
-echo "  6. Create ~/.qfodufk8s_env"
+echo "  3. Create xdebbie network and pool"
+echo "  4. Generate /etc/xdebbie/xdebbied.toml"
+echo "  5. Generate /etc/xdebbie/token"
+echo "  6. Create ~/.xdebbie_env"
 echo ""
 echo "Press Enter to run bootstrap now, or Ctrl+C to abort..."
 read
@@ -62,15 +62,15 @@ echo ""
 
 # Verify what was created
 echo "Configuration file:"
-sudo cat /etc/qfodufk8s/qfodufk8sd.toml | head -20
+sudo cat /etc/xdebbie/xdebbied.toml | head -20
 echo ""
 
 echo "Token file:"
-ls -la /etc/qfodufk8s/token
+ls -la /etc/xdebbie/token
 echo ""
 
 echo "Environment file:"
-cat ~/.qfodufk8s_env
+cat ~/.xdebbie_env
 echo ""
 
 echo "Networks:"
@@ -90,6 +90,6 @@ echo "1. Start the server in one terminal:"
 echo "   sudo $BINARY serve"
 echo ""
 echo "2. Test client in another terminal:"
-echo "   source ~/.qfodufk8s_env"
-echo "   qfodufk8sctl host ls"
+echo "   source ~/.xdebbie_env"
+echo "   xdctl host ls"
 echo ""

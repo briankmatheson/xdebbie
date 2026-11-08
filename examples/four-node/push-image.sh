@@ -7,7 +7,7 @@ IMG=${1:?image}; shift
 NAME=$(basename "$IMG" .qcow2)
 BYTES=$(stat -c %s "$IMG")
 for h in "$@"; do
-  URI="qemu+ssh://qfodufk8s@$h/system"
+  URI="qemu+ssh://xdebbie@$h/system"
   if virsh -q -c "$URI" vol-info --pool default "$NAME" >/dev/null 2>&1; then
     echo "$h: $NAME already present"; continue
   fi

@@ -1,10 +1,10 @@
-# qfodufk8sd Bootstrap Flow Visualization
+# xdebbied Bootstrap Flow Visualization
 
 ## Complete Bootstrap Process
 
 ```
 ╔════════════════════════════════════════════════════════════════════╗
-║                   qfodufk8sd bootstrap                             ║
+║                   xdebbied bootstrap                             ║
 ╚════════════════════════════════════════════════════════════════════╝
                               │
                               ▼
@@ -111,7 +111,7 @@
         │                                             │
         │  ┌─────────────────────────────────┐        │
         │  │ Network Creation                │        │
-        │  │  Name: qfodufk8s exists?        │        │
+        │  │  Name: xdebbie exists?        │        │
         │  │    │           │                │        │
         │  │   Yes         No                │        │
         │  │    │           │                │        │
@@ -128,7 +128,7 @@
         │                 ▼                           │
         │  ┌─────────────────────────────────┐        │
         │  │ Storage Pool Creation           │        │
-        │  │  Name: qfodufk8s exists?        │        │
+        │  │  Name: xdebbie exists?        │        │
         │  │    │           │                │        │
         │  │   Yes         No                │        │
         │  │    │           │                │        │
@@ -163,7 +163,7 @@
         │                  - storage_pool = discovered│
         │                  - overcommit settings      │
         │                                             │
-        │  Write to /etc/qfodufk8s/qfodufk8sd.toml    │
+        │  Write to /etc/xdebbie/xdebbied.toml    │
         └─────────────────────────────────────────────┘
                               │
                               ▼
@@ -182,11 +182,11 @@
         │                • hex encode                 │
         │                • 64 characters              │
         │                                             │
-        │  Write to /etc/qfodufk8s/token (0600)       │
+        │  Write to /etc/xdebbie/token (0600)       │
         │                                             │
-        │  Generate ~/.qfodufk8s_env:                 │
-        │  • export QFODUFK8S_URL=http://...          │
-        │  • export QFODUFK8S_TOKEN='...'             │
+        │  Generate ~/.xdebbie_env:                 │
+        │  • export XDEBBIE_URL=http://...          │
+        │  • export XDEBBIE_TOKEN='...'             │
         └─────────────────────────────────────────────┘
                               │
                               ▼
@@ -194,13 +194,13 @@
         ║          Bootstrap Complete!               ║
         ║                                            ║
         ║  Created:                                  ║
-        ║   ✓ /etc/qfodufk8s/qfodufk8sd.toml         ║
-        ║   ✓ /etc/qfodufk8s/token                   ║
-        ║   ✓ ~/.qfodufk8s_env                       ║
-        ║   ✓ Network: qfodufk8s                     ║
-        ║   ✓ Pool: qfodufk8s                        ║
+        ║   ✓ /etc/xdebbie/xdebbied.toml         ║
+        ║   ✓ /etc/xdebbie/token                   ║
+        ║   ✓ ~/.xdebbie_env                       ║
+        ║   ✓ Network: xdebbie                     ║
+        ║   ✓ Pool: xdebbie                        ║
         ║                                            ║
-        ║  Next: sudo qfodufk8sd serve               ║
+        ║  Next: sudo xdebbied serve               ║
         ╚════════════════════════════════════════════╝
 ```
 
@@ -208,7 +208,7 @@
 
 ```
 ╔════════════════════════════════════════════════════════════════════╗
-║               qfodufk8sd serve --bootstrap                         ║
+║               xdebbied serve --bootstrap                         ║
 ╚════════════════════════════════════════════════════════════════════╝
                               │
                               ▼
@@ -228,7 +228,7 @@
                                        ▼
                     ┌────────────────────────────────┐
                     │  Load Configuration            │
-                    │  /etc/qfodufk8s/qfodufk8sd.toml│
+                    │  /etc/xdebbie/xdebbied.toml│
                     └────────────────────────────────┘
                                        │
                                        ▼
@@ -240,13 +240,13 @@
                                        ▼
                     ┌────────────────────────────────┐
                     │  Open State Store              │
-                    │  /var/lib/qfodufk8s/state.json │
+                    │  /var/lib/xdebbie/state.json │
                     └────────────────────────────────┘
                                        │
                                        ▼
                     ┌────────────────────────────────┐
                     │  Load Token                    │
-                    │  /etc/qfodufk8s/token          │
+                    │  /etc/xdebbie/token          │
                     └────────────────────────────────┘
                                        │
                                        ▼
@@ -289,25 +289,25 @@
 
 ```
 ╔════════════════════════════════════════════════════════════════════╗
-║                    qfodufk8sctl usage                              ║
+║                    xdctl usage                              ║
 ╚════════════════════════════════════════════════════════════════════╝
                               │
                               ▼
                     ┌────────────────────┐
                     │ source             │
-                    │ ~/.qfodufk8s_env   │
+                    │ ~/.xdebbie_env   │
                     └────────────────────┘
                               │
                               ▼
                     ┌────────────────────────────────┐
                     │ Environment Variables Set:     │
-                    │  QFODUFK8S_URL=http://...:7443 │
-                    │  QFODUFK8S_TOKEN='...'         │
+                    │  XDEBBIE_URL=http://...:7443 │
+                    │  XDEBBIE_TOKEN='...'         │
                     └────────────────────────────────┘
                               │
                               ▼
                     ┌────────────────────┐
-                    │ qfodufk8sctl       │
+                    │ xdctl       │
                     │ host ls            │
                     └────────────────────┘
                               │
@@ -320,7 +320,7 @@
                               │
                               ▼
                     ┌────────────────────┐
-                    │ qfodufk8sd         │
+                    │ xdebbied         │
                     │ validates token    │
                     └────────────────────┘
                               │
@@ -331,18 +331,18 @@
                     └────────────────────┘
 ```
 
-## CAPQ Integration Flow
+## CAPX Integration Flow
 
 ```
 ╔════════════════════════════════════════════════════════════════════╗
-║            Cluster API Provider Qfodufk8s (CAPQ)                   ║
+║            Cluster API Provider XDebbie8s (CAPX)                   ║
 ╚════════════════════════════════════════════════════════════════════╝
                               │
                               ▼
         ┌─────────────────────────────────────────────┐
         │ Management Cluster                          │
         │  • Cluster API v1.14.3                      │
-        │  • CAPQ controller                          │
+        │  • CAPX controller                          │
         │  • cert-manager                             │
         │  • step-ca                                  │
         │  • Cilium CNI                               │
@@ -350,10 +350,10 @@
                               │
                               ▼
         ┌─────────────────────────────────────────────┐
-        │ User creates QfodufkCluster:                │
+        │ User creates XDebbieCluster:                │
         │                                             │
         │  apiVersion: infrastructure...v1alpha1      │
-        │  kind: QfodufkCluster                       │
+        │  kind: XDebbieCluster                       │
         │  metadata:                                  │
         │    name: workload1                          │
         │  spec:                                      │
@@ -364,18 +364,18 @@
                               │
                               ▼
         ┌─────────────────────────────────────────────┐
-        │ CAPQ Controller Watches                     │
-        │  • QfodufkCluster                           │
-        │  • QfodufkMachine                           │
+        │ CAPX Controller Watches                     │
+        │  • XDebbieCluster                           │
+        │  • XDebbieMachine                           │
         │  • Machine                                  │
         └─────────────────────────────────────────────┘
                               │
                               ▼
         ┌─────────────────────────────────────────────┐
-        │ For each QfodufkMachine:                    │
+        │ For each XDebbieMachine:                    │
         │                                             │
         │  1. Generate cloud-init user-data           │
-        │  2. Create VM via qfodufk8sd API:           │
+        │  2. Create VM via xdebbied API:           │
         │                                             │
         │     POST /vms                               │
         │     {                                       │
@@ -391,7 +391,7 @@
                               │
                               ▼
         ┌─────────────────────────────────────────────┐
-        │ qfodufk8sd Receives Request                 │
+        │ xdebbied Receives Request                 │
         │                                             │
         │  1. Validate token                          │
         │  2. Select host (spread/binpack)            │
@@ -420,7 +420,7 @@
         │                                             │
         │  Control plane: 3 VMs                       │
         │  Workers: N VMs                             │
-        │  All managed by qfodufk8sd                  │
+        │  All managed by xdebbied                  │
         └─────────────────────────────────────────────┘
 ```
 
@@ -435,7 +435,7 @@
                     │                          │
                     ▼                          ▼
         ┌────────────────────┐    ┌────────────────────┐
-        │  qfodufk8sctl      │    │  kubectl           │
+        │  xdctl      │    │  kubectl           │
         │  (CLI client)      │    │  (CAPI resources)  │
         └─────────┬──────────┘    └─────────┬──────────┘
                   │                         │
@@ -444,7 +444,7 @@
                   │                         │
                   ▼                         ▼
         ┌────────────────────┐    ┌────────────────────┐
-        │  qfodufk8sd        │◄───│  CAPQ Controller   │
+        │  xdebbied        │◄───│  CAPX Controller   │
         │  API Server        │    │  (in mgmt cluster) │
         │  :7443             │    └────────────────────┘
         └─────────┬──────────┘
@@ -468,9 +468,9 @@
         │  │ cluster  │ │ VMs      │          │
         │  └──────────┘ └──────────┘          │
         │                                     │
-        │  Network: virbr-qfodufk8s           │
-        │  Pool: /var/lib/libvirt/qfodufk8s   │
+        │  Network: virbr-xdebbie           │
+        │  Pool: /var/lib/libvirt/xdebbie   │
         └─────────────────────────────────────┘
 ```
 
-This visualization shows the complete flow from bootstrap through CAPQ integration, demonstrating how the self-bootstrapping qfodufk8sd enables seamless Kubernetes cluster provisioning on bare metal.
+This visualization shows the complete flow from bootstrap through CAPX integration, demonstrating how the self-bootstrapping xdebbied enables seamless Kubernetes cluster provisioning on bare metal.

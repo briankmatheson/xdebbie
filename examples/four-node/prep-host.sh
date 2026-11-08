@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Prepare a Debian 13 (trixie) server as a Qfodufk8s hypervisor host.
+# Prepare a Debian 13 (trixie) server as a XDebbie8s hypervisor host.
 #
-#   sudo ./prep-host.sh --nic eno1 --pubkey "ssh-ed25519 AAAA... qfodufk8sd@srv1"
+#   sudo ./prep-host.sh --nic eno1 --pubkey "ssh-ed25519 AAAA... xdebbied@srv1"
 #
-# Idempotent. Installs KVM/libvirt, creates the `qfodufk8s` user that qfodufk8sd
+# Idempotent. Installs KVM/libvirt, creates the `xdebbie` user that xdebbied
 # connects as, defines the `default` dir pool, and (optionally) converts
 # --nic into a Linux bridge `br0` with DHCP.
 set -euo pipefail
@@ -28,13 +28,13 @@ apt-get install -yq --no-install-recommends \
   qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients \
   bridge-utils ifupdown chrony
 
-# The account qfodufk8sd uses. libvirt's ssh transport runs virt-ssh-helper as it.
-id qfodufk8s >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib/qfodufk8s-host --shell /bin/bash qfodufk8s
-usermod -aG libvirt,kvm qfodufk8s
-install -d -m 700 -o qfodufk8s -g qfodufk8s /var/lib/qfodufk8s-host/.ssh
+# The account xdebbied uses. libvirt's ssh transport runs virt-ssh-helper as it.
+id xdebbie >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib/xdebbie-host --shell /bin/bash xdebbie
+usermod -aG libvirt,kvm xdebbie
+install -d -m 700 -o xdebbie -g xdebbie /var/lib/xdebbie-host/.ssh
 if [[ -n $PUBKEY ]]; then
-  grep -qxF "$PUBKEY" /var/lib/qfodufk8s-host/.ssh/authorized_keys 2>/dev/null || echo "$PUBKEY" >> /var/lib/qfodufk8s-host/.ssh/authorized_keys
-  chown qfodufk8s:qfodufk8s /var/lib/qfodufk8s-host/.ssh/authorized_keys; chmod 600 /var/lib/qfodufk8s-host/.ssh/authorized_keys
+  grep -qxF "$PUBKEY" /var/lib/xdebbie-host/.ssh/authorized_keys 2>/dev/null || echo "$PUBKEY" >> /var/lib/xdebbie-host/.ssh/authorized_keys
+  chown xdebbie:xdebbie /var/lib/xdebbie-host/.ssh/authorized_keys; chmod 600 /var/lib/xdebbie-host/.ssh/authorized_keys
 fi
 
 # Storage pool for base images and VM overlays.
@@ -47,7 +47,7 @@ virsh pool-autostart default
 
 # Bridge. Only touched when --nic is given; keep a console handy.
 if [[ -n $NIC ]] && ! ip link show "$BRIDGE" >/dev/null 2>&1; then
-  cp /etc/network/interfaces /etc/network/interfaces.pre-qfodufk8s
+  cp /etc/network/interfaces /etc/network/interfaces.pre-xdebbie
   cat > /etc/network/interfaces <<EOT
 source /etc/network/interfaces.d/*
 auto lo

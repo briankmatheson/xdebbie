@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build qfodufk8sd Debian package
+# Build xdebbied Debian package
 
 set -euo pipefail
 
@@ -26,7 +26,7 @@ error() {
 
 cd "$REPO_DIR"
 
-info "Building qfodufk8sd Debian package..."
+info "Building xdebbied Debian package..."
 echo ""
 
 # Check for cargo-deb
@@ -42,20 +42,20 @@ fi
 
 # Build release binary first
 info "Building release binary..."
-cargo build --release --package qfodufk8sd
+cargo build --release --package xdebbied
 
 # Strip binary to reduce size
 if command -v strip &> /dev/null; then
     info "Stripping debug symbols..."
-    strip target/release/qfodufk8sd
+    strip target/release/xdebbied
 fi
 
 # Build .deb package
 info "Building Debian package..."
-cargo deb --package qfodufk8sd --no-build
+cargo deb --package xdebbied --no-build
 
 # Find the generated package
-DEB_FILE=$(ls -t target/debian/qfodufk8sd_*.deb | head -1)
+DEB_FILE=$(ls -t target/debian/xdebbied_*.deb | head -1)
 
 if [ ! -f "$DEB_FILE" ]; then
     error "Failed to find generated .deb file!"
@@ -88,14 +88,14 @@ echo "   sudo dpkg -i $DEB_FILE"
 echo "   sudo apt-get install -f  # Fix dependencies if needed"
 echo ""
 echo "2. Check service status:"
-echo "   systemctl status qfodufk8sd"
+echo "   systemctl status xdebbied"
 echo ""
 echo "3. View logs:"
-echo "   journalctl -u qfodufk8sd -f"
+echo "   journalctl -u xdebbied -f"
 echo ""
 echo "4. Configure client (as your user):"
-echo "   source ~/.qfodufk8s_env"
-echo "   qfodufk8sctl host ls"
+echo "   source ~/.xdebbie_env"
+echo "   xdctl host ls"
 echo ""
 echo "5. Copy to other systems:"
 echo "   scp $DEB_FILE user@host:/tmp/"
@@ -113,8 +113,8 @@ echo "Removal Instructions:"
 echo "========================================="
 echo ""
 echo "Remove (keep config):"
-echo "   sudo apt-get remove qfodufk8sd"
+echo "   sudo apt-get remove xdebbied"
 echo ""
 echo "Purge (remove config):"
-echo "   sudo apt-get purge qfodufk8sd"
+echo "   sudo apt-get purge xdebbied"
 echo ""

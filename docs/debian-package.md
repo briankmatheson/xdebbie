@@ -1,8 +1,8 @@
-# qfodufk8sd Debian Package
+# xdebbied Debian Package
 
 ## Overview
 
-The qfodufk8sd Debian package provides a complete, production-ready installation with:
+The xdebbied Debian package provides a complete, production-ready installation with:
 
 - ✅ Automatic dependency installation
 - ✅ Systemd service integration
@@ -27,7 +27,7 @@ cargo install cargo-deb
 ### Build
 
 ```bash
-cd ~/src/qfodufk8s
+cd ~/src/xdebbie
 ./scripts/build-deb.sh
 ```
 
@@ -37,7 +37,7 @@ This will:
 3. Create the .deb package
 4. Show installation instructions
 
-**Output**: `target/debian/qfodufk8sd_0.1.1_amd64.deb`
+**Output**: `target/debian/xdebbied_0.1.1_amd64.deb`
 
 ## Installation
 
@@ -45,7 +45,7 @@ This will:
 
 ```bash
 # Install package
-sudo dpkg -i qfodufk8sd_0.1.1_amd64.deb
+sudo dpkg -i xdebbied_0.1.1_amd64.deb
 
 # Fix dependencies (if needed)
 sudo apt-get install -f
@@ -55,30 +55,30 @@ sudo apt-get install -f
 
 1. ✅ Dependencies installed (libvirt, qemu, cloud-image-utils)
 2. ✅ Directories created:
-   - `/etc/qfodufk8s/` - Configuration
-   - `/var/lib/qfodufk8s/` - State
+   - `/etc/xdebbie/` - Configuration
+   - `/var/lib/xdebbie/` - State
 3. ✅ Bootstrap runs automatically (creates config, network, pool, token)
 4. ✅ Service enabled and started
-5. ✅ Environment file created at `~/.qfodufk8s_env`
+5. ✅ Environment file created at `~/.xdebbie_env`
 
 ### Verify Installation
 
 ```bash
 # Check service status
-systemctl status qfodufk8sd
+systemctl status xdebbied
 
 # View logs
-journalctl -u qfodufk8sd -f
+journalctl -u xdebbied -f
 
 # Check API
-source ~/.qfodufk8s_env
-qfodufk8sctl host ls
+source ~/.xdebbie_env
+xdctl host ls
 ```
 
 Expected output:
 ```
-● qfodufk8sd.service - qfodufk8s VM Orchestrator
-     Loaded: loaded (/lib/systemd/system/qfodufk8sd.service; enabled)
+● xdebbied.service - xdebbie VM Orchestrator
+     Loaded: loaded (/lib/systemd/system/xdebbied.service; enabled)
      Active: active (running) since ...
 ```
 
@@ -87,12 +87,12 @@ Expected output:
 ### Files Installed
 
 ```
-/usr/bin/qfodufk8sd                          # Main binary
-/lib/systemd/system/qfodufk8sd.service       # Systemd service
-/usr/share/doc/qfodufk8sd/README.md          # Documentation
-/usr/share/doc/qfodufk8sd/BOOTSTRAP.md       # Bootstrap docs
-/etc/qfodufk8s/                              # Config directory
-/var/lib/qfodufk8s/                          # State directory
+/usr/bin/xdebbied                          # Main binary
+/lib/systemd/system/xdebbied.service       # Systemd service
+/usr/share/doc/xdebbied/README.md          # Documentation
+/usr/share/doc/xdebbied/BOOTSTRAP.md       # Bootstrap docs
+/etc/xdebbie/                              # Config directory
+/var/lib/xdebbie/                          # State directory
 ```
 
 ### Dependencies
@@ -107,7 +107,7 @@ Expected output:
 
 ### Systemd Service
 
-**Service file**: `/lib/systemd/system/qfodufk8sd.service`
+**Service file**: `/lib/systemd/system/xdebbied.service`
 
 **Key features:**
 - Starts after network-online.target and libvirtd.service
@@ -120,43 +120,43 @@ Expected output:
 
 ```bash
 # Start
-sudo systemctl start qfodufk8sd
+sudo systemctl start xdebbied
 
 # Stop
-sudo systemctl stop qfodufk8sd
+sudo systemctl stop xdebbied
 
 # Restart
-sudo systemctl restart qfodufk8sd
+sudo systemctl restart xdebbied
 
 # Enable (start on boot)
-sudo systemctl enable qfodufk8sd
+sudo systemctl enable xdebbied
 
 # Disable (don't start on boot)
-sudo systemctl disable qfodufk8sd
+sudo systemctl disable xdebbied
 
 # View status
-systemctl status qfodufk8sd
+systemctl status xdebbied
 
 # View logs
-journalctl -u qfodufk8sd -f
+journalctl -u xdebbied -f
 ```
 
 ## Configuration
 
 ### Default Config
 
-Generated automatically at: `/etc/qfodufk8s/qfodufk8sd.toml`
+Generated automatically at: `/etc/xdebbie/xdebbied.toml`
 
 ```toml
 listen = "0.0.0.0:7443"
-state_file = "/var/lib/qfodufk8s/state.json"
-token_file = "/etc/qfodufk8s/token"
+state_file = "/var/lib/xdebbie/state.json"
+token_file = "/etc/xdebbie/token"
 
 [[hosts]]
 name = "hostname"
 uri = "qemu:///system"
-bridge = "virbr-qfodufk8s"
-storage_pool = "qfodufk8s"
+bridge = "virbr-xdebbie"
+storage_pool = "xdebbie"
 cpu_overcommit = 2.0
 mem_overcommit = 1.0
 reserved_cpus = 2
@@ -167,10 +167,10 @@ reserved_memory_mib = 4096
 
 ```bash
 # Edit config
-sudo editor /etc/qfodufk8s/qfodufk8sd.toml
+sudo editor /etc/xdebbie/xdebbied.toml
 
 # Restart service to apply
-sudo systemctl restart qfodufk8sd
+sudo systemctl restart xdebbied
 ```
 
 ### Client Configuration
@@ -178,11 +178,11 @@ sudo systemctl restart qfodufk8sd
 After installation, configure the client:
 
 ```bash
-# Load environment (creates ~/.qfodufk8s_env on first bootstrap)
-source ~/.qfodufk8s_env
+# Load environment (creates ~/.xdebbie_env on first bootstrap)
+source ~/.xdebbie_env
 
 # Verify connection
-qfodufk8sctl host ls
+xdctl host ls
 ```
 
 ## Upgrading
@@ -191,10 +191,10 @@ qfodufk8sctl host ls
 
 ```bash
 # Download new version
-wget https://example.com/qfodufk8sd_0.1.2_amd64.deb
+wget https://example.com/xdebbied_0.1.2_amd64.deb
 
 # Install (replaces old version)
-sudo dpkg -i qfodufk8sd_0.1.2_amd64.deb
+sudo dpkg -i xdebbied_0.1.2_amd64.deb
 ```
 
 **What happens on upgrade:**
@@ -209,7 +209,7 @@ sudo dpkg -i qfodufk8sd_0.1.2_amd64.deb
 
 ```bash
 # Reinstall old version
-sudo dpkg -i qfodufk8sd_0.1.1_amd64.deb
+sudo dpkg -i xdebbied_0.1.1_amd64.deb
 ```
 
 ## Removal
@@ -217,26 +217,26 @@ sudo dpkg -i qfodufk8sd_0.1.1_amd64.deb
 ### Remove (Keep Config)
 
 ```bash
-sudo apt-get remove qfodufk8sd
+sudo apt-get remove xdebbied
 ```
 
 **What happens:**
 - ✅ Service stopped and disabled
 - ✅ Binary removed
-- ⚠️  Config kept at `/etc/qfodufk8s/`
-- ⚠️  State kept at `/var/lib/qfodufk8s/`
+- ⚠️  Config kept at `/etc/xdebbie/`
+- ⚠️  State kept at `/var/lib/xdebbie/`
 
 ### Purge (Remove Everything)
 
 ```bash
-sudo apt-get purge qfodufk8sd
+sudo apt-get purge xdebbied
 ```
 
 **What happens:**
 - ✅ Service stopped and disabled
 - ✅ Binary removed
-- ✅ Config removed (`/etc/qfodufk8s/`)
-- ✅ State removed (`/var/lib/qfodufk8s/`)
+- ✅ Config removed (`/etc/xdebbie/`)
+- ✅ State removed (`/var/lib/xdebbie/`)
 - ✅ Systemd unit removed
 
 ## Troubleshooting
@@ -245,10 +245,10 @@ sudo apt-get purge qfodufk8sd
 
 ```bash
 # Check status
-systemctl status qfodufk8sd
+systemctl status xdebbied
 
 # View full logs
-journalctl -u qfodufk8sd -n 100
+journalctl -u xdebbied -n 100
 
 # Check dependencies
 systemctl status libvirtd
@@ -258,7 +258,7 @@ systemctl status network-online.target
 Common issues:
 - libvirtd not running → `sudo systemctl start libvirtd`
 - Network not ready → wait for network-online.target
-- Config invalid → check `/etc/qfodufk8s/qfodufk8sd.toml`
+- Config invalid → check `/etc/xdebbie/xdebbied.toml`
 
 ### Bootstrap Failed
 
@@ -266,44 +266,44 @@ If bootstrap fails on install:
 
 ```bash
 # Run manually
-sudo qfodufk8sd bootstrap
+sudo xdebbied bootstrap
 
 # Check for errors
-sudo qfodufk8sd bootstrap --force
+sudo xdebbied bootstrap --force
 
 # View config
-sudo cat /etc/qfodufk8s/qfodufk8sd.toml
+sudo cat /etc/xdebbie/xdebbied.toml
 ```
 
 ### Client Can't Connect
 
 ```bash
 # Check service is running
-systemctl status qfodufk8sd
+systemctl status xdebbied
 
 # Check environment
-source ~/.qfodufk8s_env
-echo $QFODUFK8S_URL      # Should be http://0.0.0.0:7443
-echo $QFODUFK8S_TOKEN    # Should be set
+source ~/.xdebbie_env
+echo $XDEBBIE_URL      # Should be http://0.0.0.0:7443
+echo $XDEBBIE_TOKEN    # Should be set
 
 # Test API directly
-curl -H "Authorization: Bearer $QFODUFK8S_TOKEN" $QFODUFK8S_URL/hosts
+curl -H "Authorization: Bearer $XDEBBIE_TOKEN" $XDEBBIE_URL/hosts
 ```
 
 ### Logs Show Errors
 
 ```bash
 # View recent logs
-journalctl -u qfodufk8sd -n 100
+journalctl -u xdebbied -n 100
 
 # Follow logs in real-time
-journalctl -u qfodufk8sd -f
+journalctl -u xdebbied -f
 
 # Filter by priority
-journalctl -u qfodufk8sd -p err
+journalctl -u xdebbied -p err
 
 # Export logs
-journalctl -u qfodufk8sd > qfodufk8sd.log
+journalctl -u xdebbied > xdebbied.log
 ```
 
 ## Multi-System Deployment
@@ -316,15 +316,15 @@ journalctl -u qfodufk8sd > qfodufk8sd.log
 
 # Copy to hosts
 for host in node1 node2 node3; do
-  scp target/debian/qfodufk8sd_0.1.1_amd64.deb $host:/tmp/
-  ssh $host "sudo dpkg -i /tmp/qfodufk8sd_0.1.1_amd64.deb"
+  scp target/debian/xdebbied_0.1.1_amd64.deb $host:/tmp/
+  ssh $host "sudo dpkg -i /tmp/xdebbied_0.1.1_amd64.deb"
 done
 
 # Wait for bootstrap and cluster formation
 sleep 30
 
 # Check cluster on any node
-ssh node1 "source ~/.qfodufk8s_env && qfodufk8sctl host ls"
+ssh node1 "source ~/.xdebbie_env && xdctl host ls"
 ```
 
 Expected: All three nodes should appear in the list!
@@ -336,15 +336,15 @@ For easier deployment, consider hosting packages in an APT repository:
 ```bash
 # Add repository
 echo "deb https://repo.example.com/debian stable main" | \
-  sudo tee /etc/apt/sources.list.d/qfodufk8s.list
+  sudo tee /etc/apt/sources.list.d/xdebbie.list
 
 # Install
 sudo apt-get update
-sudo apt-get install qfodufk8sd
+sudo apt-get install xdebbied
 
 # Upgrade
 sudo apt-get update
-sudo apt-get upgrade qfodufk8sd
+sudo apt-get upgrade xdebbied
 ```
 
 ## Security Considerations
@@ -365,7 +365,7 @@ Security measures in place:
 
 ### Token Security
 
-API token stored at `/etc/qfodufk8s/token` with mode 0600 (root only).
+API token stored at `/etc/xdebbie/token` with mode 0600 (root only).
 
 ### Network Exposure
 
@@ -378,16 +378,16 @@ For production:
 
 ## Integration with Cluster API
 
-Once installed and running, qfodufk8sd can be used with CAPQ:
+Once installed and running, xdebbied can be used with CAPX:
 
 ```bash
-# On management cluster, install CAPQ
+# On management cluster, install CAPX
 kubectl apply -f capq-deployment.yaml
 
 # Create workload cluster
 kubectl apply -f qfodufk-cluster.yaml
 
-# VMs automatically created via qfodufk8sd!
+# VMs automatically created via xdebbied!
 ```
 
 ## Performance
@@ -403,13 +403,13 @@ Typical resource usage:
 
 ```bash
 # Check resource usage
-systemctl status qfodufk8sd
+systemctl status xdebbied
 
 # Memory usage
-ps aux | grep qfodufk8sd
+ps aux | grep xdebbied
 
 # Detailed stats
-systemd-cgtop -1 | grep qfodufk8sd
+systemd-cgtop -1 | grep xdebbied
 ```
 
 ## Unattended Installation
@@ -418,11 +418,11 @@ For automated deployments:
 
 ```bash
 # Install non-interactively
-DEBIAN_FRONTEND=noninteractive sudo dpkg -i qfodufk8sd_0.1.1_amd64.deb
+DEBIAN_FRONTEND=noninteractive sudo dpkg -i xdebbied_0.1.1_amd64.deb
 sudo apt-get install -f -y
 
 # Verify
-systemctl is-active qfodufk8sd
+systemctl is-active xdebbied
 ```
 
 ## Summary

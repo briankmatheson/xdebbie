@@ -1,8 +1,8 @@
-# qfodufk8sd Self-Bootstrapping Design
+# xdebbied Self-Bootstrapping Design
 
 ## Goal
 
-Make qfodufk8sd a self-contained binary that can be dropped onto a stock Debian 13 system and automatically:
+Make xdebbied a self-contained binary that can be dropped onto a stock Debian 13 system and automatically:
 
 1. Check and install missing dependencies
 2. Auto-discover and configure libvirt resources (networks, storage pools)
@@ -25,7 +25,7 @@ Currently requires manual setup:
 ### On First Run
 
 ```
-qfodufk8sd serve
+xdebbied serve
   ↓
 Check if config exists
   ├─ NO → Bootstrap mode
@@ -110,8 +110,8 @@ fn ensure_network(name: &str, subnet: &str, dhcp_range: (&str, &str)) -> Result<
 Default network:
 ```xml
 <network>
-  <name>qfodufk8s</name>
-  <bridge name='virbr-qfodufk8s'/>
+  <name>xdebbie</name>
+  <bridge name='virbr-xdebbie'/>
   <forward mode='nat'/>
   <ip address='192.168.100.1' netmask='255.255.255.0'>
     <dhcp>
@@ -138,8 +138,8 @@ fn ensure_storage_pool(name: &str, path: &str) -> Result<()> {
 ```
 
 Default pool:
-- Name: `qfodufk8s`
-- Path: `/var/lib/libvirt/qfodufk8s`
+- Name: `xdebbie`
+- Path: `/var/lib/libvirt/xdebbie`
 - Type: `dir` (directory-based)
 
 ### 5. Config Generation
@@ -152,8 +152,8 @@ fn generate_default_config() -> Config {
     
     Config {
         listen: "0.0.0.0:7443".parse().unwrap(),
-        state_file: "/var/lib/qfodufk8s/state.json".into(),
-        token_file: Some("/var/lib/qfodufk8s/token".into()),
+        state_file: "/var/lib/xdebbie/state.json".into(),
+        token_file: Some("/var/lib/xdebbie/token".into()),
         tls_cert: None,  // Start with HTTP
         tls_key: None,
         policy: PlacementPolicy::Spread,
@@ -168,10 +168,10 @@ fn generate_default_config() -> Config {
                 failure_domain: "default".into(),
                 bridge: discovered.networks.first()
                     .map(|n| n.bridge.clone())
-                    .unwrap_or("virbr-qfodufk8s".into()),
+                    .unwrap_or("virbr-xdebbie".into()),
                 storage_pool: discovered.pools.first()
                     .map(|p| p.name.clone())
-                    .unwrap_or("qfodufk8s".into()),
+                    .unwrap_or("xdebbie".into()),
                 cpu_overcommit: 2.0,
                 mem_overcommit: 1.0,
                 reserved_cpus: 2,
@@ -212,7 +212,7 @@ fn ensure_token(path: &Path) -> Result<()> {
         }
         eprintln!("Generated new token at {}", path.display());
         eprintln!("Save this for API clients:");
-        eprintln!("  export QFODUFK8S_TOKEN=$(cat {})", path.display());
+        eprintln!("  export XDEBBIE_TOKEN=$(cat {})", path.display());
     }
     Ok(())
 }
@@ -223,7 +223,7 @@ fn ensure_token(path: &Path) -> Result<()> {
 ### New Bootstrap Command
 
 ```bash
-qfodufk8sd bootstrap [OPTIONS]
+xdebbied bootstrap [OPTIONS]
 ```
 
 Options:
@@ -231,12 +231,12 @@ Options:
 - `--no-install` - Don't auto-install packages
 - `--network <name>` - Network name to use/create
 - `--pool <name>` - Storage pool name to use/create
-- `--config <path>` - Where to write config (default: /etc/qfodufk8s/qfodufk8sd.toml)
+- `--config <path>` - Where to write config (default: /etc/xdebbie/xdebbied.toml)
 
 ### Modified Serve Command
 
 ```bash
-qfodufk8sd serve [OPTIONS]
+xdebbied serve [OPTIONS]
 ```
 
 New options:
@@ -247,31 +247,31 @@ New options:
 
 ```bash
 # Copy binary to new system
-scp qfodufk8sd newhost:/usr/local/bin/
+scp xdebbied newhost:/usr/local/bin/
 
 # On new system, run as root or with sudo
-sudo qfodufk8sd bootstrap
+sudo xdebbied bootstrap
 # Checks dependencies, creates resources, generates config
 
 # Start serving (can also be run as systemd service)
-sudo qfodufk8sd serve
+sudo xdebbied serve
 # Automatically validates and serves
 
 # Or combine
-sudo qfodufk8sd serve --bootstrap
+sudo xdebbied serve --bootstrap
 ```
 
 ## File Structure After Bootstrap
 
 ```
-/etc/qfodufk8s/
-  qfodufk8sd.toml          # Generated config
+/etc/xdebbie/
+  xdebbied.toml          # Generated config
   
-/var/lib/qfodufk8s/
+/var/lib/xdebbie/
   state.json               # Runtime state
   token                    # Generated API token
   
-/var/lib/libvirt/qfodufk8s/  # Storage pool
+/var/lib/libvirt/xdebbie/  # Storage pool
   (VM disk images)
 ```
 
@@ -314,7 +314,7 @@ sudo qfodufk8sd serve --bootstrap
 New files to add:
 
 ```
-crates/qfodufk8sd/src/
+crates/xdebbied/src/
   bootstrap/
     mod.rs           # Main bootstrap logic
     deps.rs          # Dependency checking
@@ -330,9 +330,9 @@ Modify:
 ## Example Bootstrap Output
 
 ```
-$ sudo qfodufk8sd bootstrap
+$ sudo xdebbied bootstrap
 
-qfodufk8sd Bootstrap
+xdebbied Bootstrap
 ====================
 
 [1/5] Checking dependencies...
@@ -345,31 +345,31 @@ qfodufk8sd Bootstrap
   ! No storage pool found in /var/lib/libvirt/images
 
 [3/5] Creating missing resources...
-  → Creating storage pool 'qfodufk8s' at /var/lib/libvirt/qfodufk8s
+  → Creating storage pool 'xdebbie' at /var/lib/libvirt/xdebbie
   ✓ Pool created and started
   ✓ Pool set to autostart
 
 [4/5] Generating configuration...
-  ✓ Config written to /etc/qfodufk8s/qfodufk8sd.toml
+  ✓ Config written to /etc/xdebbie/xdebbied.toml
   
 [5/5] Generating API token...
-  ✓ Token written to /var/lib/qfodufk8s/token
+  ✓ Token written to /var/lib/xdebbie/token
   
 Bootstrap complete!
 
 To start serving:
-  qfodufk8sd serve
+  xdebbied serve
 
 To use the API:
-  export QFODUFK8S_URL=http://localhost:7443
-  export QFODUFK8S_TOKEN=$(cat /var/lib/qfodufk8s/token)
-  qfodufk8sctl host ls
+  export XDEBBIE_URL=http://localhost:7443
+  export XDEBBIE_TOKEN=$(cat /var/lib/xdebbie/token)
+  xdctl host ls
 ```
 
 ## Security Considerations
 
 1. **Root required** - Network/pool creation needs root
-2. **Token permissions** - Set 0640, readable only by qfodufk8s user/group
+2. **Token permissions** - Set 0640, readable only by xdebbie user/group
 3. **Config permissions** - Set 0644, readable by all
 4. **Default to HTTP** - TLS requires user-provided certs
 5. **Log token path** - But never log token value
@@ -426,4 +426,4 @@ mod tests {
 5. **Better testing** - Easy to spin up test instances
 6. **Cloud-init friendly** - Can be automated in VM provisioning
 
-This makes qfodufk8sd truly "drop in and run" - perfect for both development/testing and production use.
+This makes xdebbied truly "drop in and run" - perfect for both development/testing and production use.

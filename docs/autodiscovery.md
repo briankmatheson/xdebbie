@@ -2,7 +2,7 @@
 
 ## What We're Building
 
-Transform qfodufk8sd from **single-node** to **self-organizing cluster**:
+Transform xdebbied from **single-node** to **self-organizing cluster**:
 
 ```
 Before (Manual):                    After (Automatic):
@@ -148,13 +148,13 @@ POST /cluster/election/trigger
 
 ```bash
 # Terminal 1: Start node1 (becomes leader)
-qfodufk8sd serve --bootstrap
+xdebbied serve --bootstrap
 
 # Terminal 2: Start node2 (becomes backup)
-qfodufk8sd serve --bootstrap
+xdebbied serve --bootstrap
 
 # Terminal 3: Start node3 (becomes backup)
-qfodufk8sd serve --bootstrap
+xdebbied serve --bootstrap
 
 # Terminal 4: Check cluster
 curl http://localhost:7443/cluster/status

@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["crates/qfodufk8s-core", "crates/qfodufk8sd", "crates/qfodufk8sctl", "crates/capq"]
+members = ["crates/xdebbie-core", "crates/xdebbied", "crates/xdctl", "crates/capx"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
-repository = "https://github.com/bmatheson/qfodufk8s"
+repository = "https://github.com/bmatheson/xdebbie"
 authors = ["Brian Matheson <bmath@brianmatheson.com>"]
