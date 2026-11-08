@@ -14,8 +14,8 @@ license-file = ["../../LICENSE", "0"]
 extended-description = """\
 XDebbie is a self-bootstrapping VM orchestrator that provides:
 - Automatic bootstrapping with dependency installation
-- Self-discovery via multicast (coming in v0.3.0)
-- Leader election for high availability (coming in v0.3.0)
+- Self-discovery via multicast on 239.0.0.42:7442
+- Leader election for high availability using Bully algorithm
 - Cluster API provider (CAPX) integration
 - Simple HTTP API for VM management
 - CLI tool (xdctl) for easy management
@@ -54,4 +54,5 @@ tokio = { version = "1.54.1", features = ["full"] }
 toml = "1.1.8"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-uuid = { version = "1.29.0", features = ["v4"] }
+uuid = { version = "1.29.0", features = ["v4", "serde"] }
+num_cpus = "1.16.0"

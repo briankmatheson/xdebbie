@@ -4,6 +4,8 @@
 mod api;
 mod bootstrap;
 mod config;
+mod discovery;
+mod election;
 mod libvirt;
 mod reconcile;
 mod store;
@@ -163,6 +165,35 @@ async fn main() -> anyhow::Result<()> {
             None
         }
     };
+
+    // Start discovery engine if enabled
+    let discovery_cfg = discovery::DiscoveryConfig {
+        enable_discovery: cfg.enable_discovery,
+        multicast_addr: cfg.multicast_addr.clone(),
+        api_url: format!(
+            "{}://{}",
+            if cfg.tls_cert.is_some() { "https" } else { "http" },
+            cfg.listen
+        ),
+        hostname: hostname::get()
+            .ok()
+            .and_then(|h| h.into_string().ok())
+            .unwrap_or_else(|| "unknown".to_string()),
+        ..Default::default()
+    };
+
+    if let Ok(discovery_engine) = discovery::DiscoveryEngine::new(discovery_cfg) {
+        let discovery_arc = Arc::new(discovery_engine);
+        info!("Starting discovery engine (node_id: {})", discovery_arc.node_id());
+        let discovery_clone = discovery_arc.clone();
+        tokio::spawn(async move {
+            if let Err(e) = discovery_clone.run().await {
+                tracing::error!("Discovery engine failed: {}", e);
+            }
+        });
+    } else {
+        tracing::warn!("Failed to start discovery engine, running in standalone mode");
+    }
 
     let rec = reconcile::Reconciler {
         store: store.clone(),

@@ -56,6 +56,10 @@ virsh = "virsh"
 # NoCloud seed ISO generation command
 seed_command = ["cloud-localds", "--network-config={{net}}", "{{out}}", "{{user}}", "{{meta}}"]
 
+# Multicast discovery settings
+enable_discovery = true
+multicast_addr = "239.0.0.42:7442"
+
 # Configured hosts
 [[hosts]]
 name = "{hostname}"

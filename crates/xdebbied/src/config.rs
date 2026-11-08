@@ -35,6 +35,19 @@ pub struct Config {
     /// Hosts to register at startup (merged with persisted state).
     #[serde(default)]
     pub hosts: Vec<Host>,
+    /// Enable multicast discovery (default: true)
+    #[serde(default = "d_discovery")]
+    pub enable_discovery: bool,
+    /// Multicast address for discovery
+    #[serde(default = "d_multicast")]
+    pub multicast_addr: String,
+}
+
+fn d_discovery() -> bool {
+    true
+}
+fn d_multicast() -> String {
+    "239.0.0.42:7442".to_string()
 }
 
 fn d_listen() -> SocketAddr {

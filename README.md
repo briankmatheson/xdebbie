@@ -1,12 +1,18 @@
-# XDebbie8s
+# XDebbie
 
-A lightweight VM scheduler, orchestrator, and lifecycle manager for small
-clouds of Linux boxes — and a Cluster API infrastructure provider on top of it.
+**Self-forming cloud orchestration** — A lightweight VM scheduler and orchestrator that
+automatically discovers peers, elects leaders, and manages VMs across small clusters
+of Linux servers.
 
-XDebbie8s turns three to thirty ordinary servers running QEMU/KVM + libvirt into a
-pool that places, boots, migrates, and deletes VMs on demand. It talks to every
-host with plain `virsh -c qemu+ssh://…`, so a host needs nothing XDebbie8s-specific:
-no agent, no shared storage, no special network.
+XDebbie turns 3-30 ordinary servers running QEMU/KVM + libvirt into a self-organizing
+cloud. Copy a single `.deb` file, install it, and it automatically:
+- Installs dependencies (libvirt, qemu, cloud-image-utils)
+- Creates networks and storage pools
+- Discovers other XDebbie nodes via multicast
+- Elects a leader using the Bully algorithm
+- Schedules VMs across the cluster with HA failover
+
+No configuration, no coordination service, no shared storage. Just `dpkg -i` and go.
 
 ```
                 ┌─────────────────── management cluster ───────────────────┐
@@ -27,16 +33,49 @@ no agent, no shared storage, no special network.
                 └──────────────────────┘ └────────┘ └─────────────────┘
 ```
 
+## Features
+
+✅ **Self-Bootstrapping** — Install on stock Debian 13, auto-configure everything  
+✅ **Auto-Discovery** — Multicast peer discovery on 239.0.0.42:7442  
+✅ **Leader Election** — Bully algorithm with score-based ranking  
+✅ **High Availability** — Automatic failover in <15s  
+✅ **Zero Config** — No coordination service, no manual peer lists  
+✅ **Placement Engine** — Spread/pack policies with anti-affinity  
+✅ **Live Migration** — Move VMs between hosts without shared storage  
+✅ **Cluster API** — Full v1beta2 infrastructure provider  
+✅ **Single Binary** — 9 MB daemon + 6 MB CLI tool  
+✅ **Debian Package** — Systemd service with proper dependencies  
+
 ## Components
 
 | Crate | Binary | What it does |
 |---|---|---|
 | `xdebbie-core` | — | Data model and the placement engine (pure, exhaustively tested) |
-| `xdebbied` | `xdebbied` | REST API, durable state, reconciler, libvirt-over-SSH driver |
+| `xdebbied` | `xdebbied` | REST API, discovery, election, scheduler, reconciler, libvirt driver |
 | `xdctl` | `xdctl` | CLI for hosts, VMs, failure domains, drain, migrate |
-| `capq` | `capq` | Cluster API infrastructure provider (contract **v1beta2**) |
+| `capx` | `capx` | Cluster API infrastructure provider (contract **v1beta2**) |
 
-## What it does
+## How It Works
+
+### Discovery & Election
+
+XDebbie nodes use **multicast UDP (239.0.0.42:7442)** to automatically discover each other:
+
+1. **ANNOUNCE** (every 5s): Node broadcasts hostname, API URL, capacity
+2. **HEARTBEAT** (every 1s): Node sends score and leader status
+3. **ELECTION**: Bully algorithm elects highest-scored node as leader
+4. **FAILOVER**: New leader elected within 15s if current leader fails
+
+**Score Calculation** (0-3501 points):
+- Uptime (0-1000): Longer-running nodes preferred
+- Capacity (0-1000): Larger nodes preferred  
+- Load (0-1000): Less-loaded nodes preferred
+- Incumbent bonus (+500): Reduces leadership churn
+- UUID tiebreaker (0-1): Deterministic when scores equal
+
+See [DISCOVERY.md](DISCOVERY.md) for complete details.
+
+### Scheduling & Operations
 
 - **Placement**: filter (health, cordon, failure domain, control-plane
   eligibility, labels, CPU/memory/disk with per-host reservations and
@@ -52,28 +91,70 @@ no agent, no shared storage, no special network.
   pause, `clusterctl move`, MachineHealthCheck remediation, KCP rollouts.
   See [docs/capi-contract.md](docs/capi-contract.md) for the line-by-line mapping.
 
-## Quick start
+## Quick Start
 
-```sh
-cargo build --release
-# on each server
-sudo examples/four-node/prep-host.sh --nic eno1 --pubkey "$(cat xdebbied.pub)"
-# on the xdebbied box
-xdebbied --config /etc/xdebbie/xdebbied.toml check     # can we reach every host?
-xdebbied --config /etc/xdebbie/xdebbied.toml serve
-xdctl host ls
-xdctl vm create web1 --image debian-13-k8s-v1.36 --cpus 2 --memory-mib 4096 --dry-run
+### Install (Stock Debian 13)
+
+```bash
+# Build the package
+./scripts/build-deb.sh
+
+# Copy to each node
+scp target/debian/xdebbied_0.3.0-1_amd64.deb node1:/tmp/
+scp target/debian/xdebbied_0.3.0-1_amd64.deb node2:/tmp/
+scp target/debian/xdebbied_0.3.0-1_amd64.deb node3:/tmp/
+
+# Install on each node
+ssh node1 sudo dpkg -i /tmp/xdebbied_0.3.0-1_amd64.deb
+ssh node2 sudo dpkg -i /tmp/xdebbied_0.3.0-1_amd64.deb
+ssh node3 sudo dpkg -i /tmp/xdebbied_0.3.0-1_amd64.deb
 ```
 
-The full walkthrough — four physical servers, a 3+4 node Kubernetes cluster
-through Cluster API — is in [examples/four-node](examples/four-node/README.md).
+**That's it!** Each node will:
+1. Auto-install dependencies (libvirt, qemu, etc.)
+2. Create network (192.168.100.0/24) and storage pool
+3. Generate config and secure token
+4. Start the service
+5. Discover other nodes via multicast
+6. Elect a leader
+
+### Use the CLI
+
+```bash
+# Source the environment (on any node)
+source ~/.xdebbie_env
+
+# List nodes (should show all 3)
+xdctl host ls
+
+# Create a VM
+xdctl vm create web1 --image debian-13 --cpus 2 --memory-mib 4096
+
+# List VMs
+xdctl vm ls
+```
+
+### Check Discovery
+
+```bash
+# View discovery logs
+sudo journalctl -u xdebbied -f | grep -i discovery
+
+# Check who's the leader
+sudo journalctl -u xdebbied | grep "becoming leader"
+```
+
+See [BOOTSTRAP.md](BOOTSTRAP.md) for detailed bootstrap documentation and
+[DISCOVERY.md](DISCOVERY.md) for discovery/election internals.
 
 ## Documentation
 
-- [Architecture](docs/architecture.md) — state, reconcile loop, scheduler
-- [Cluster API contract](docs/capi-contract.md) — what CAPI asks, how capq answers
-- [REST API](docs/api.md)
-- [Operations](docs/operations.md) — drain, upgrades, backup, security, limits
+- **[BOOTSTRAP.md](BOOTSTRAP.md)** — Self-bootstrapping on stock Debian 13
+- **[DISCOVERY.md](DISCOVERY.md)** — Auto-discovery and leader election
+- [Architecture](docs/architecture.md) — State, reconcile loop, scheduler
+- [Cluster API contract](docs/capi-contract.md) — What CAPI asks, how CAPX answers
+- [REST API](docs/api.md) — HTTP API reference
+- [Operations](docs/operations.md) — Drain, upgrades, backup, security, limits
 
 ## Status
 

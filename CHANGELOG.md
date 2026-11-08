@@ -5,6 +5,44 @@ All notable changes to XDebbie will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-11-08
+
+### Added
+- **Auto-Discovery**: Multicast peer discovery on 239.0.0.42:7442
+  - Automatic peer detection via multicast UDP
+  - ANNOUNCE messages every 5s with node capabilities
+  - HEARTBEAT messages every 1s for liveness
+  - Zero-configuration clustering
+  - Enabled by default, can be disabled
+- **Leader Election**: Bully algorithm with score-based ranking
+  - Score components: uptime (0-1000) + capacity (0-1000) + load (0-1000) + incumbent bonus (+500) + UUID tiebreaker
+  - Automatic failover in <15s
+  - ELECTION_PROPOSE and ELECTION_VOTE messages
+  - Majority voting for leader selection
+  - Self-stabilizing algorithm
+- **High Availability**:
+  - Leader runs active scheduler
+  - Followers maintain shadow state
+  - Automatic leader election on failure
+  - No single point of failure
+  - Peer timeout and cleanup (15s)
+- **Documentation**:
+  - Discovery and election guide (DISCOVERY.md)
+  - Network requirements and troubleshooting
+  - Monitoring and debugging instructions
+
+### Changed
+- Package description updated to reflect discovery features
+- Config file includes discovery settings (enable_discovery, multicast_addr)
+- Bootstrap generates discovery-enabled config by default
+- Binary size increased to ~9.1 MB (includes discovery code)
+
+### Technical
+- New modules: `discovery/` (engine, messages, multicast, peer) and `election/` (state, scoring)
+- Dependencies: Added `uuid` with serde support, `num_cpus`
+- Discovery engine runs as async tokio task
+- Multicast socket with TTL=1 (local network only)
+
 ## [0.2.0] - 2026-11-08
 
 ### Added
@@ -59,5 +97,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cluster API Provider (CAPQ)
 - Basic CLI tool (qfodufk8sctl)
 
+[0.3.0]: https://github.com/yourusername/xdebbie/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/yourusername/xdebbie/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/yourusername/xdebbie/releases/tag/v0.1.0
