@@ -2,6 +2,7 @@
 //! qfodufk8sd — a small VM scheduler and lifecycle manager for libvirt hosts.
 
 mod api;
+mod bootstrap;
 mod config;
 mod libvirt;
 mod reconcile;
@@ -30,9 +31,34 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     /// Run the API server and reconciler (default).
-    Serve,
+    Serve {
+        /// Run bootstrap before starting server
+        #[arg(long)]
+        bootstrap: bool,
+    },
     /// Check that every configured host is reachable over libvirt+ssh.
     Check,
+    /// Bootstrap qfodufk8sd: install deps, create resources, generate config & token.
+    Bootstrap {
+        /// Overwrite existing config and token files
+        #[arg(long)]
+        force: bool,
+        /// Libvirt URI to use
+        #[arg(long, default_value = "qemu:///system")]
+        uri: String,
+        /// Network name to create
+        #[arg(long, default_value = "qfodufk8s")]
+        network: String,
+        /// Network subnet (CIDR)
+        #[arg(long, default_value = "192.168.100.0/24")]
+        subnet: String,
+        /// Storage pool name to create
+        #[arg(long, default_value = "qfodufk8s")]
+        pool: String,
+        /// Storage pool path
+        #[arg(long, default_value = "/var/lib/libvirt/qfodufk8s")]
+        pool_path: String,
+    },
 }
 
 #[tokio::main]
@@ -43,6 +69,43 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
     let cli = Cli::parse();
+
+    // Handle bootstrap command
+    match &cli.cmd {
+        Some(Cmd::Bootstrap {
+            force,
+            uri,
+            network,
+            subnet,
+            pool,
+            pool_path,
+        }) => {
+            let opts = bootstrap::BootstrapOptions {
+                config_path: cli.config.clone(),
+                force: *force,
+                libvirt_uri: uri.clone(),
+                network_name: network.clone(),
+                network_subnet: subnet.clone(),
+                pool_name: pool.clone(),
+                pool_path: pool_path.clone(),
+                ..Default::default()
+            };
+            bootstrap::bootstrap(&opts)?;
+            return Ok(());
+        }
+        Some(Cmd::Serve { bootstrap: true }) => {
+            // Run bootstrap first
+            let opts = bootstrap::BootstrapOptions {
+                config_path: cli.config.clone(),
+                ..Default::default()
+            };
+            if let Err(e) = bootstrap::bootstrap(&opts) {
+                tracing::warn!("Bootstrap failed, continuing anyway: {:#}", e);
+            }
+        }
+        _ => {}
+    }
+
     let cfg = Arc::new(
         config::Config::load(&cli.config)
             .with_context(|| format!("loading {}", cli.config.display()))?,
@@ -52,7 +115,8 @@ async fn main() -> anyhow::Result<()> {
         seed_command: cfg.seed_command.clone(),
     });
 
-    if let Some(Cmd::Check) = cli.cmd {
+    match cli.cmd {
+        Some(Cmd::Check) => {
         use libvirt::Hypervisor;
         let mut bad = 0;
         for h in &cfg.hosts {
@@ -68,6 +132,8 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         std::process::exit(if bad == 0 { 0 } else { 1 });
+        }
+        _ => {}
     }
 
     let store = store::Store::open(cfg.state_file.clone())?;
