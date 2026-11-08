@@ -26,6 +26,16 @@ error() {
 
 cd "$REPO_DIR"
 
+# Get version from git tag
+GIT_VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
+if [ -n "$GIT_VERSION" ]; then
+    info "Using version from git tag: $GIT_VERSION"
+    # Update workspace Cargo.toml with git version
+    sed -i "s/^version = \".*\"/version = \"$GIT_VERSION\"/" Cargo.toml
+else
+    warn "No git tags found, using version from Cargo.toml"
+fi
+
 info "Building xdebbied Debian package..."
 echo ""
 
