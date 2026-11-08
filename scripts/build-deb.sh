@@ -26,8 +26,8 @@ error() {
 
 cd "$REPO_DIR"
 
-# Get version from git tag
-GIT_VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
+# Get version from git tag (latest by version number, not just most recent)
+GIT_VERSION=$(git tag -l 'v*' | sort -V | tail -1 | sed 's/^v//')
 if [ -n "$GIT_VERSION" ]; then
     info "Using version from git tag: $GIT_VERSION"
     # Update workspace Cargo.toml with git version
