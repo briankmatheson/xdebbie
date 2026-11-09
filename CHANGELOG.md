@@ -7,7 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - 2026-11-08
 
+### Added
+- **Guest fstrim on every boot via NoCloud vendor-data.** Seeds now carry a
+  vendor-data script (run once by cloud-init `scripts-vendor`, so it never
+  merges with the caller's user-data) that installs `xdebbie-fstrim.service`
+  -- a oneshot `fstrim -av` after `local-fs.target` -- and enables the distro
+  `fstrim.timer`. Freed blocks go back to the thin pool instead of pinning
+  allocation at the high-water mark. `seed_command` gains a `{vendor}`
+  placeholder; configs without it get `--vendor-data` injected automatically
+  when the builder is `cloud-localds`.
+
+### Changed
+- **LVM root disks honour `diskGib`** with a 25 GiB floor. Previously a thin
+  snapshot silently inherited the base image's size (e.g. 10 GiB) regardless
+  of what was requested. Now `create_root_disk` runs `lvextend` after the
+  snapshot, and grows existing undersized root LVs on reconcile. The guest's
+  cloud-init growpart/resizefs picks up the space on next boot.
+
 ### Fixed
+- **VMs not coming back after host reboot**: LVM thin pool (and every VM disk
+  in it) stayed inactive after reboot because `thin-provisioning-tools`
+  (`thin_check`) was not installed, so libvirt autostart failed for all VMs.
+  - `lvm2` and `thin-provisioning-tools` are now hard dependencies (deb
+    `Depends:` and bootstrap `REQUIRED_PACKAGES`)
+  - `LvmManager::ensure_activated()` runs `vgchange -ay -K` at startup and
+    reports a clear, actionable error if the thin pool is still inactive
+  - After storage activation, xdebbied starts any libvirt domains that are
+    marked autostart but shut off (`virsh list --autostart --inactive`)
+  - `xdebbied.service` now orders after `lvm2-monitor`, `libvirtd`, `virtqemud`
 - **Bootstrap libvirtd check**: Changed from fatal error to warning when libvirtd.service fails
   - Allows bootstrap to continue when libvirt uses socket activation
   - Bootstrap now works on systems where libvirtd.service is broken but socket activation works
