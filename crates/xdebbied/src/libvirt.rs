@@ -112,7 +112,7 @@ impl Virsh {
     async fn ensure_disk(&self, host: &Host, vm: &Vm) -> Result<()> {
         // Use LVM if configured
         if let Some(ref lvm) = self.lvm {
-            let _device = lvm.create_root_disk(&vm.domain_name(), &vm.spec.image)
+            let _device = lvm.create_root_disk(&vm.domain_name(), &vm.spec.image, vm.spec.disk_gib)
                 .map_err(|e| anyhow::anyhow!("creating LVM root disk: {:#}", e))?;
             return Ok(());
         }

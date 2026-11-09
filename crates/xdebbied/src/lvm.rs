@@ -9,6 +9,15 @@ use anyhow::{Context, Result};
 use std::process::Command;
 use tracing::{info, warn};
 
+/// Smallest root disk we will provision, in GiB.
+///
+/// A thin snapshot inherits the size of its origin, so without an explicit
+/// extend a VM created from a 10 GiB base image gets a 10 GiB root -- which
+/// fills up fast once Kubernetes images land on it. Requests below this are
+/// rounded up; the guest's cloud-init growpart/resizefs picks up the extra
+/// space on first boot.
+pub const MIN_ROOT_DISK_GIB: u64 = 25;
+
 /// LVM manager for creating and managing VM disks
 #[derive(Clone)]
 pub struct LvmManager {
@@ -100,11 +109,14 @@ impl LvmManager {
     /// # Arguments
     /// * `vm_name` - VM domain name (e.g., "w1-cp-2ptmn")
     /// * `base_image` - Base image name (e.g., "debian-12")
+    /// * `size_gib` - Requested root disk size; rounded up to
+    ///   [`MIN_ROOT_DISK_GIB`] and never smaller than the base image.
     ///
     /// # Returns
     /// Path to the block device (e.g., "/dev/xdebbie-vg/w1-cp-2ptmn-root")
-    pub fn create_root_disk(&self, vm_name: &str, base_image: &str) -> Result<String> {
+    pub fn create_root_disk(&self, vm_name: &str, base_image: &str, size_gib: u64) -> Result<String> {
         let lv_name = format!("{}-root", vm_name);
+        let size_gib = size_gib.max(MIN_ROOT_DISK_GIB);
         // Handle both "debian-12" and "base-debian-12" image names
         let base_lv = if base_image.starts_with("base-") {
             base_image.to_string()
@@ -112,12 +124,16 @@ impl LvmManager {
             format!("base-{}", base_image)
         };
         
-        info!("create_root_disk called: vm_name={}, base_image={}, lv_name={}, base_lv={}", 
-              vm_name, base_image, lv_name, base_lv);
+        info!("create_root_disk called: vm_name={}, base_image={}, lv_name={}, base_lv={}, size_gib={}", 
+              vm_name, base_image, lv_name, base_lv, size_gib);
         
         // Check if already exists
         if self.lv_exists(&lv_name)? {
             info!("Root disk {}/{} already exists", self.vg_name, lv_name);
+            // Grow in place if the spec asks for more than it currently has.
+            // Thin volumes can be extended while in use; the guest picks the
+            // extra space up via growpart/resizefs on its next boot.
+            self.extend_to(&lv_name, size_gib)?;
             return Ok(self.lv_path(&lv_name));
         }
 
@@ -189,9 +205,73 @@ impl LvmManager {
             anyhow::bail!("Failed to activate logical volume: {}", stderr);
         }
 
+        // Snapshot inherits the origin's size; grow it to what was asked for.
+        self.extend_to(&lv_name, size_gib)?;
+
         info!("Created and activated root disk: {}/{}", self.vg_name, lv_name);
 
         Ok(self.lv_path(&lv_name))
+    }
+
+    /// Current size of a logical volume in GiB (rounded down).
+    fn lv_size_gib(&self, lv_name: &str) -> Result<u64> {
+        let output = Command::new("/usr/sbin/lvs")
+            .args([
+                "--noheadings",
+                "--nosuffix",
+                "--units",
+                "b",
+                "-o",
+                "lv_size",
+                &format!("{}/{}", self.vg_name, lv_name),
+            ])
+            .output()
+            .context("reading logical volume size")?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "lvs failed for {}/{}: {}",
+                self.vg_name,
+                lv_name,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        let bytes: u64 = String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse()
+            .context("parsing lv_size")?;
+        Ok(bytes / (1024 * 1024 * 1024))
+    }
+
+    /// Extend `lv_name` to `size_gib` if it is currently smaller. No-op
+    /// (with an info log) if it is already at least that big -- LVM will
+    /// not shrink a thin volume for us and we never want to.
+    fn extend_to(&self, lv_name: &str, size_gib: u64) -> Result<()> {
+        let current = self.lv_size_gib(lv_name)?;
+        if current >= size_gib {
+            if current > size_gib {
+                info!(
+                    "{}/{} is {} GiB, larger than requested {} GiB; leaving as-is",
+                    self.vg_name, lv_name, current, size_gib
+                );
+            }
+            return Ok(());
+        }
+
+        info!("Extending {}/{} from {} GiB to {} GiB", self.vg_name, lv_name, current, size_gib);
+        let output = Command::new("/usr/sbin/lvextend")
+            .args(["-L", &format!("{}G", size_gib), &format!("{}/{}", self.vg_name, lv_name)])
+            .output()
+            .context("executing lvextend")?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "Failed to extend {}/{} to {} GiB: {}",
+                self.vg_name,
+                lv_name,
+                size_gib,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        Ok(())
     }
 
     /// Create a data disk as a thin logical volume
