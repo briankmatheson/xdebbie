@@ -114,6 +114,8 @@ enum VmCmd {
         #[arg(long, default_value_t = 40)]
         disk_gib: u64,
         #[arg(long)]
+        data_disk_gib: Option<u64>,
+        #[arg(long)]
         image: String,
         #[arg(long)]
         user_data: Option<std::path::PathBuf>,
@@ -361,6 +363,7 @@ fn main() -> Result<()> {
                 cpus,
                 memory_mib,
                 disk_gib,
+                data_disk_gib,
                 image,
                 user_data,
                 failure_domain,
@@ -377,6 +380,7 @@ fn main() -> Result<()> {
                     memory_mib,
                     disk_gib,
                     image,
+                    data_disk_gib,
                     placement: Placement {
                         failure_domain,
                         anti_affinity_group: group,

@@ -9,6 +9,8 @@ use anyhow::{Context, Result, bail};
 use xdebbie_core::{Address, Capacity, Host, Vm};
 use tokio::process::Command;
 
+use crate::lvm::LvmManager;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DomState {
     Running,
@@ -40,6 +42,7 @@ pub trait Hypervisor: Send + Sync + 'static {
 pub struct Virsh {
     pub bin: String,
     pub seed_command: Vec<String>,
+    pub lvm: Option<LvmManager>,
 }
 
 impl Virsh {
@@ -76,14 +79,26 @@ impl Virsh {
     fn seed_vol(vm: &Vm) -> String {
         format!("{}-seed.iso", vm.domain_name())
     }
+    fn data_vol(vm: &Vm) -> String {
+        format!("{}-data.raw", vm.domain_name())
+    }
 
-    /// Thin qcow2 overlay on the host-local base image.
+    /// Thin qcow2 overlay on the host-local base image, or LVM snapshot if configured.
     async fn ensure_disk(&self, host: &Host, vm: &Vm) -> Result<()> {
+        // Use LVM if configured
+        if let Some(ref lvm) = self.lvm {
+            let _device = lvm.create_root_disk(&vm.domain_name(), &vm.spec.image)
+                .map_err(|e| anyhow::anyhow!("creating LVM root disk: {:#}", e))?;
+            return Ok(());
+        }
+        
+        // Fallback to qcow2
         let vol = Self::disk_vol(vm);
         if self.vol_exists(host, &vol).await {
             return Ok(());
         }
         let size = format!("{}G", vm.spec.disk_gib);
+        let backing_vol = format!("{}.qcow2", vm.spec.image);
         self.run(
             &host.uri,
             &[
@@ -94,7 +109,7 @@ impl Virsh {
                 "--format",
                 "qcow2",
                 "--backing-vol",
-                &vm.spec.image,
+                &backing_vol,
                 "--backing-vol-format",
                 "qcow2",
             ],
@@ -162,6 +177,43 @@ impl Virsh {
         .await?;
         Ok(())
     }
+
+    /// Create a raw data disk if vm.spec.data_disk_gib is set.
+    /// This is used for ABE and other storage workloads.
+    /// Uses LVM thin provisioning if configured, otherwise creates a volume in the storage pool.
+    async fn ensure_data_disk(&self, host: &Host, vm: &Vm) -> Result<()> {
+        let Some(size_gib) = vm.spec.data_disk_gib else {
+            return Ok(()); // No data disk requested
+        };
+        
+        // Use LVM if configured
+        if let Some(ref lvm) = self.lvm {
+            let _device = lvm.create_data_disk(&vm.domain_name(), size_gib)
+                .context("creating LVM data disk")?;
+            return Ok(());
+        }
+        
+        // Fallback to storage pool volume
+        let vol = Self::data_vol(vm);
+        if self.vol_exists(host, &vol).await {
+            return Ok(());
+        }
+        let size = format!("{}G", size_gib);
+        self.run(
+            &host.uri,
+            &[
+                "vol-create-as",
+                &host.storage_pool,
+                &vol,
+                &size,
+                "--format",
+                "raw",
+            ],
+        )
+        .await
+        .context("creating data disk")?;
+        Ok(())
+    }
 }
 
 fn p(x: &Path) -> &str {
@@ -188,13 +240,68 @@ pub fn network_config(vm: &Vm) -> String {
     )
 }
 
-pub fn domain_xml(host: &Host, vm: &Vm) -> String {
+pub fn domain_xml(host: &Host, vm: &Vm, volume_group: Option<&str>) -> String {
     let esc = |s: &str| {
         s.replace('&', "&amp;")
             .replace('<', "&lt;")
             .replace('>', "&gt;")
             .replace('\'', "&apos;")
     };
+    
+    // Root disk: LVM block device or qcow2 volume
+    let root_disk_xml = if let Some(vg) = volume_group {
+        format!(
+            r#"    <disk type='block' device='disk'>
+      <driver name='qemu' type='raw' cache='none' io='native' discard='unmap'/>
+      <source dev='/dev/{vg}/{vm}-root'/>
+      <target dev='vda' bus='virtio'/>
+    </disk>
+"#,
+            vg = esc(vg),
+            vm = esc(&vm.domain_name())
+        )
+    } else {
+        format!(
+            r#"    <disk type='volume' device='disk'>
+      <driver name='qemu' type='qcow2' discard='unmap'/>
+      <source pool='{pool}' volume='{disk}'/>
+      <target dev='vda' bus='virtio'/>
+    </disk>
+"#,
+            pool = esc(&host.storage_pool),
+            disk = esc(&Virsh::disk_vol(vm))
+        )
+    };
+    
+    // Optional data disk (for ABE storage)
+    let data_disk_xml = if vm.spec.data_disk_gib.is_some() {
+        if let Some(vg) = volume_group {
+            format!(
+                r#"    <disk type='block' device='disk'>
+      <driver name='qemu' type='raw' cache='none' io='native' discard='unmap'/>
+      <source dev='/dev/{vg}/{vm}-data'/>
+      <target dev='vdb' bus='virtio'/>
+    </disk>
+"#,
+                vg = esc(vg),
+                vm = esc(&vm.domain_name())
+            )
+        } else {
+            format!(
+                r#"    <disk type='volume' device='disk'>
+      <driver name='qemu' type='raw' discard='unmap'/>
+      <source pool='{pool}' volume='{data}'/>
+      <target dev='vdb' bus='virtio'/>
+    </disk>
+"#,
+                pool = esc(&host.storage_pool),
+                data = esc(&Virsh::data_vol(vm))
+            )
+        }
+    } else {
+        String::new()
+    };
+    
     format!(
         r#"<domain type='kvm'>
   <name>{name}</name>
@@ -210,12 +317,7 @@ pub fn domain_xml(host: &Host, vm: &Vm) -> String {
   <clock offset='utc'/>
   <on_poweroff>destroy</on_poweroff><on_reboot>restart</on_reboot><on_crash>restart</on_crash>
   <devices>
-    <disk type='volume' device='disk'>
-      <driver name='qemu' type='qcow2' discard='unmap'/>
-      <source pool='{pool}' volume='{disk}'/>
-      <target dev='vda' bus='virtio'/>
-    </disk>
-    <disk type='volume' device='cdrom'>
+{root_disk}{data_disk}<disk type='volume' device='cdrom'>
       <driver name='qemu' type='raw'/>
       <source pool='{pool}' volume='{seed}'/>
       <target dev='sda' bus='sata'/><readonly/>
@@ -239,7 +341,8 @@ pub fn domain_xml(host: &Host, vm: &Vm) -> String {
         mem = vm.spec.memory_mib,
         cpu = vm.spec.vcpus,
         pool = esc(&host.storage_pool),
-        disk = esc(&Virsh::disk_vol(vm)),
+        root_disk = root_disk_xml,
+        data_disk = data_disk_xml,
         seed = esc(&Virsh::seed_vol(vm)),
         mac = vm.mac(),
         bridge = esc(&host.bridge)
@@ -324,11 +427,14 @@ impl Hypervisor for Virsh {
     }
 
     async fn provision(&self, host: &Host, vm: &Vm) -> Result<()> {
+        tracing::info!("provision called for VM: {} on host: {}", vm.spec.name, host.name);
         self.ensure_disk(host, vm).await?;
         self.ensure_seed(host, vm).await?;
+        self.ensure_data_disk(host, vm).await?;
         if self.state(host, vm).await?.is_none() {
             let f = tempfile::Builder::new().suffix(".xml").tempfile()?;
-            tokio::fs::write(f.path(), domain_xml(host, vm)).await?;
+            let vg = self.lvm.as_ref().map(|l| l.vg_name());
+            tokio::fs::write(f.path(), domain_xml(host, vm, vg)).await?;
             self.run(&host.uri, &["define", p(f.path())]).await?;
             self.run(&host.uri, &["autostart", &vm.domain_name()])
                 .await?;
@@ -368,6 +474,11 @@ impl Hypervisor for Virsh {
                 ],
             )
             .await?;
+        }
+        
+        // Clean up LVM volumes if using LVM
+        if let Some(ref lvm) = self.lvm {
+            let _ = lvm.remove_disks(&vm.domain_name());
         }
         for vol in [Self::disk_vol(vm), Self::seed_vol(vm)] {
             if self.vol_exists(host, &vol).await {
@@ -411,6 +522,7 @@ impl Hypervisor for Virsh {
         }
         self.ensure_disk(dst, vm).await?;
         self.ensure_seed(dst, vm).await?;
+        self.ensure_data_disk(dst, vm).await?;
         self.run(
             &src.uri,
             &[

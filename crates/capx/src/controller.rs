@@ -359,6 +359,7 @@ async fn apply_machine(
             memory_mib: fm.spec.memory_mib,
             disk_gib: fm.spec.disk_gib,
             image: fm.spec.image.clone(),
+            data_disk_gib: None, // TODO: expose in XDebbie8sMachine CRD
             placement: Placement {
                 failure_domain: machine
                     .data

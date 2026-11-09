@@ -7,6 +7,7 @@ mod config;
 mod discovery;
 mod election;
 mod libvirt;
+mod lvm;
 mod reconcile;
 mod store;
 
@@ -112,9 +113,28 @@ async fn main() -> anyhow::Result<()> {
         config::Config::load(&cli.config)
             .with_context(|| format!("loading {}", cli.config.display()))?,
     );
+    // Initialize LVM if configured
+    let lvm_manager = if let Some(ref vg_name) = cfg.volume_group {
+        let lvm = lvm::LvmManager::new(vg_name.clone(), cfg.thin_pool.clone());
+        if !lvm.vg_exists()? {
+            anyhow::bail!(
+                "Volume group '{}' not found. Create it with:\n  \
+                 sudo pvcreate /dev/sdX\n  \
+                 sudo vgcreate {} /dev/sdX",
+                vg_name, vg_name
+            );
+        }
+        tracing::info!("Using LVM volume group: {}", vg_name);
+        Some(lvm)
+    } else {
+        tracing::info!("LVM not configured, using qcow2 storage");
+        None
+    };
+
     let hv = Arc::new(libvirt::Virsh {
         bin: cfg.virsh.clone(),
         seed_command: cfg.seed_command.clone(),
+        lvm: lvm_manager,
     });
 
     match cli.cmd {

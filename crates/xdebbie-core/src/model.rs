@@ -116,6 +116,10 @@ pub struct VmSpec {
     pub disk_gib: u64,
     /// Name of a base volume (qcow2 cloud image) present in each host's pool.
     pub image: String,
+    /// Optional: Size of additional data disk (in GiB) for ABE or other storage workloads.
+    /// Creates a raw volume attached as /dev/vdb.
+    #[serde(default)]
+    pub data_disk_gib: Option<u64>,
     #[serde(default)]
     pub placement: Placement,
     /// cloud-init user-data (for CAPI: the bootstrap secret's `value`).
@@ -207,11 +211,7 @@ pub struct Vm {
 impl Vm {
     /// libvirt domain name: stable, unique, human-readable.
     pub fn domain_name(&self) -> String {
-        format!(
-            "xdebbie-{}-{}",
-            self.spec.name,
-            &self.id.simple().to_string()[..8]
-        )
+        self.spec.name.clone()
     }
     /// Cluster API providerID.
     pub fn provider_id(&self) -> String {

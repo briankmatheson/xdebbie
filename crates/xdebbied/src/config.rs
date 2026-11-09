@@ -41,6 +41,12 @@ pub struct Config {
     /// Multicast address for discovery
     #[serde(default = "d_multicast")]
     pub multicast_addr: String,
+    /// LVM volume group for VM disks (optional, uses qcow2 if not set)
+    #[serde(default)]
+    pub volume_group: Option<String>,
+    /// Thin pool name for thin provisioning (optional)
+    #[serde(default)]
+    pub thin_pool: Option<String>,
 }
 
 fn d_discovery() -> bool {

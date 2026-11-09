@@ -141,6 +141,14 @@ pub fn discover_libvirt(uri: &str) -> Result<LibvirtResources> {
 }
 
 /// Create a libvirt network if it doesn't exist
+///
+/// DNS is disabled by default to avoid port 53 conflicts with:
+/// - CoreDNS (used in Aviary-in-a-Box setups)
+/// - systemd-resolved
+/// - Other custom DNS servers
+///
+/// DHCP can be disabled by passing empty strings for dhcp_start/dhcp_end.
+/// This is useful when using external DHCP servers like ISC DHCP.
 pub fn ensure_network(
     uri: &str,
     name: &str,
@@ -190,18 +198,36 @@ pub fn ensure_network(
 
     let bridge_name = format!("virbr-{}", name);
 
+    // Disable DNS by default to avoid conflicts with CoreDNS or other DNS servers
+    let enable_dns = false;
+    
+    // Only include DHCP if both start and end are provided
+    let enable_dhcp = !dhcp_start.is_empty() && !dhcp_end.is_empty();
+
     // Create network XML
+    let dns_tag = if enable_dns {
+        String::new()
+    } else {
+        "  <dns enable='no'/>\n".to_string()
+    };
+    
+    let dhcp_section = if enable_dhcp {
+        format!(
+            "    <dhcp>\n      <range start='{}' end='{}'/>\n    </dhcp>\n",
+            dhcp_start, dhcp_end
+        )
+    } else {
+        String::new()
+    };
+
     let xml = format!(
         r#"<network>
   <name>{}</name>
   <bridge name='{}' stp='on' delay='0'/>
-  <ip address='{}' netmask='{}'>
-    <dhcp>
-      <range start='{}' end='{}'/>
-    </dhcp>
-  </ip>
+{}  <ip address='{}' netmask='{}'>
+{}  </ip>
 </network>"#,
-        name, bridge_name, network_addr, netmask, dhcp_start, dhcp_end
+        name, bridge_name, dns_tag, network_addr, netmask, dhcp_section
     );
 
     // Write XML to temp file

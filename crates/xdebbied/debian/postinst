@@ -17,6 +17,23 @@ case "$1" in
         # Enable service (will start on boot)
         systemctl enable xdebbied.service || true
         
+        # Configure AppArmor for libvirt backing images
+        if command -v apparmor_parser >/dev/null 2>&1; then
+            echo "Configuring AppArmor for libvirt..."
+            mkdir -p /etc/apparmor.d/local
+            if [ ! -f /etc/apparmor.d/local/usr.lib.libvirt.virt-aa-helper ]; then
+                touch /etc/apparmor.d/local/usr.lib.libvirt.virt-aa-helper
+            fi
+            # Add rule if not already present
+            if ! grep -q "Allow xdebbie backing images" /etc/apparmor.d/local/usr.lib.libvirt.virt-aa-helper 2>/dev/null; then
+                cat >> /etc/apparmor.d/local/usr.lib.libvirt.virt-aa-helper << 'EOF'
+# Allow xdebbie backing images
+/var/lib/libvirt/images/*.qcow2 r,
+EOF
+                apparmor_parser -r /etc/apparmor.d/usr.lib.libvirt.virt-aa-helper 2>/dev/null || true
+            fi
+        fi
+        
         # Run bootstrap on first install
         if [ ! -f /etc/xdebbie/xdebbied.toml ]; then
             echo "Running initial bootstrap..."
