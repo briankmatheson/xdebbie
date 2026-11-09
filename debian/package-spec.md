@@ -19,8 +19,14 @@ Depends: libvirt-daemon-system,
          qemu-kvm,
          qemu-utils,
          cloud-image-utils,
+         lvm2,
+         thin-provisioning-tools,
          systemd
 ```
+
+> **Note:** `thin-provisioning-tools` is required for LVM thin pool
+> activation (`thin_check`). Without it the pool and every thin LV in it stay
+> inactive after a reboot, and VMs marked autostart fail to come up.
 
 ### Recommended
 ```

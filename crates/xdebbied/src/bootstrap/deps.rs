@@ -12,6 +12,11 @@ const REQUIRED_PACKAGES: &[&str] = &[
     "qemu-kvm",
     "qemu-utils",
     "cloud-image-utils",
+    // LVM thin provisioning. thin-provisioning-tools provides thin_check,
+    // without which LVM refuses to activate thin pools at boot -- every VM
+    // disk in the pool silently stays inactive and libvirt autostart fails.
+    "lvm2",
+    "thin-provisioning-tools",
 ];
 
 /// Check if a command exists in PATH
