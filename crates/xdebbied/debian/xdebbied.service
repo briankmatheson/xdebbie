@@ -1,9 +1,8 @@
 [Unit]
 Description=xdebbie VM Orchestrator
 Documentation=https://github.com/yourusername/xdebbie
-After=network-online.target libvirtd.service local-fs.target
+After=network-online.target local-fs.target
 Wants=network-online.target
-Requires=libvirtd.service
 
 [Service]
 Type=simple

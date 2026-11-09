@@ -77,9 +77,12 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
         info!("All dependencies satisfied");
     }
 
-    // Step 2: Ensure libvirtd is running
-    info!("Step 2/6: Ensuring libvirtd is running");
-    deps::ensure_libvirtd_running()?;
+    // Step 2: Check libvirtd (optional - socket activation may be used)
+    info!("Step 2/6: Checking libvirtd availability");
+    if let Err(e) = deps::ensure_libvirtd_running() {
+        warn!("libvirtd service not available (this is OK if using socket activation): {}", e);
+        info!("Continuing - libvirt may work via socket activation");
+    }
 
     // Step 3: Discover existing resources
     info!("Step 3/6: Discovering libvirt resources");

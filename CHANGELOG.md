@@ -5,6 +5,28 @@ All notable changes to XDebbie will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - 2026-11-08
+
+### Fixed
+- **Bootstrap libvirtd check**: Changed from fatal error to warning when libvirtd.service fails
+  - Allows bootstrap to continue when libvirt uses socket activation
+  - Bootstrap now works on systems where libvirtd.service is broken but socket activation works
+  - Emits warning: "libvirtd service not available (this is OK if using socket activation)"
+
+## [0.3.2] - 2026-11-08
+
+### Fixed
+- **Systemd dependency issue**: Changed `Requires=libvirtd.service` to `Wants=libvirtd.service virtqemud.service`
+  - Resolves "Dependency failed" error on systems with modular libvirt daemons
+  - Now works with both monolithic libvirtd and modular virtqemud
+  - Compatible with Debian 12+, Ubuntu 22.04+ (default modular setup)
+  - Better error messages if libvirt is missing entirely
+
+### Changed
+- Systemd service: Hard dependency → Soft preference
+- Added support for virtqemud (modular QEMU daemon)
+- Service now starts even if libvirt daemons not present (fails with clear error later)
+
 ## [0.3.1] - 2026-11-08
 
 ### Fixed
@@ -112,6 +134,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cluster API Provider (CAPQ)
 - Basic CLI tool (qfodufk8sctl)
 
+[0.3.2]: https://github.com/yourusername/xdebbie/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/yourusername/xdebbie/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/yourusername/xdebbie/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/yourusername/xdebbie/compare/v0.1.0...v0.2.0
