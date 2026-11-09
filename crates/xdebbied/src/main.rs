@@ -163,6 +163,17 @@ async fn main() -> anyhow::Result<()> {
         _ => {}
     }
 
+    // Second chance for libvirt autostart: domains whose disks weren't ready
+    // when libvirtd came up (LVM thin pool inactive after reboot) are started
+    // now that storage has been activated.
+    for h in &cfg.hosts {
+        match hv.start_autostart_domains(h).await {
+            Ok(0) => {}
+            Ok(n) => tracing::info!("started {} autostart domain(s) on {}", n, h.name),
+            Err(e) => tracing::warn!("checking autostart domains on {}: {:#}", h.name, e),
+        }
+    }
+
     let store = store::Store::open(cfg.state_file.clone())?;
     let seeds = cfg.hosts.clone();
     store

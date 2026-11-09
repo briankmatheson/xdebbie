@@ -67,6 +67,31 @@ impl Virsh {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
+    /// Start any domains that are marked autostart but are shut off.
+    ///
+    /// libvirt's own autostart runs when the daemon starts, which can be
+    /// before LVM thin volumes are active (e.g. after a host reboot). Those
+    /// domains fail to start and stay off. We get a second chance here, after
+    /// `LvmManager::ensure_activated` has run.
+    pub async fn start_autostart_domains(&self, host: &Host) -> Result<usize> {
+        let out = self
+            .run(&host.uri, &["list", "--name", "--autostart", "--inactive"])
+            .await?;
+        let mut started = 0;
+        for name in out.lines().map(str::trim).filter(|l| !l.is_empty()) {
+            match self.run(&host.uri, &["start", name]).await {
+                Ok(_) => {
+                    tracing::info!("started autostart domain {} on {}", name, host.name);
+                    started += 1;
+                }
+                Err(e) => {
+                    tracing::warn!("could not start autostart domain {} on {}: {:#}", name, host.name, e)
+                }
+            }
+        }
+        Ok(started)
+    }
+
     async fn vol_exists(&self, host: &Host, name: &str) -> bool {
         self.run(&host.uri, &["vol-info", "--pool", &host.storage_pool, name])
             .await
