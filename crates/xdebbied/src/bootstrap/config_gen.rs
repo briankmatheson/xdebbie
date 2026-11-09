@@ -54,7 +54,7 @@ host_stale_secs = 60
 virsh = "virsh"
 
 # NoCloud seed ISO generation command
-seed_command = ["cloud-localds", "--network-config={{net}}", "{{out}}", "{{user}}", "{{meta}}"]
+seed_command = ["cloud-localds", "--network-config={{net}}", "--vendor-data={{vendor}}", "{{out}}", "{{user}}", "{{meta}}"]
 
 # Multicast discovery settings
 enable_discovery = true

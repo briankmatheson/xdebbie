@@ -116,7 +116,7 @@ policy = "spread"                # or "binpack"
 reconcile_interval_secs = 5
 host_stale_secs = 60
 virsh = "virsh"
-seed_command = ["cloud-localds", "--network-config={net}", "{out}", "{user}", "{meta}"]
+seed_command = ["cloud-localds", "--network-config={net}", "--vendor-data={vendor}", "{out}", "{user}", "{meta}"]
 ```
 
 You can customize these in your config or let bootstrap set defaults.

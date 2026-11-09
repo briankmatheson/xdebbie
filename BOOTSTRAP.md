@@ -118,7 +118,7 @@ reconcile_interval_secs = 5
 host_stale_secs = 60
 
 virsh = "virsh"
-seed_command = ["cloud-localds", "--network-config={net}", "{out}", "{user}", "{meta}"]
+seed_command = ["cloud-localds", "--network-config={net}", "--vendor-data={vendor}", "{out}", "{user}", "{meta}"]
 
 [[hosts]]
 name = "hostname"

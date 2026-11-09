@@ -29,7 +29,7 @@ pub struct Config {
     #[serde(default = "d_virsh")]
     pub virsh: String,
     /// Command used to build the NoCloud seed ISO. `{out}`, `{user}`,
-    /// `{meta}`, `{net}` are substituted.
+    /// `{meta}`, `{net}`, `{vendor}` are substituted.
     #[serde(default = "d_seed")]
     pub seed_command: Vec<String>,
     /// Hosts to register at startup (merged with persisted state).
@@ -75,6 +75,7 @@ fn d_seed() -> Vec<String> {
     [
         "cloud-localds",
         "--network-config={net}",
+        "--vendor-data={vendor}",
         "{out}",
         "{user}",
         "{meta}",

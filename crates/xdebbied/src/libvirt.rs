@@ -151,10 +151,11 @@ impl Virsh {
             return Ok(());
         }
         let dir = tempfile::tempdir()?;
-        let (user, meta, net, out) = (
+        let (user, meta, net, vendor, out) = (
             dir.path().join("user-data"),
             dir.path().join("meta-data"),
             dir.path().join("network-config"),
+            dir.path().join("vendor-data"),
             dir.path().join("seed.iso"),
         );
         tokio::fs::write(
@@ -167,13 +168,25 @@ impl Virsh {
         .await?;
         tokio::fs::write(&meta, meta_data(vm)).await?;
         tokio::fs::write(&net, network_config(vm)).await?;
+        tokio::fs::write(&vendor, vendor_data()).await?;
         let sub = |s: &str| {
             s.replace("{out}", p(&out))
                 .replace("{user}", p(&user))
                 .replace("{meta}", p(&meta))
                 .replace("{net}", p(&net))
+                .replace("{vendor}", p(&vendor))
         };
-        let argv: Vec<String> = self.seed_command.iter().map(|a| sub(a)).collect();
+        let mut argv: Vec<String> = self.seed_command.iter().map(|a| sub(a)).collect();
+        // Older configs predate `{vendor}`. If the builder is cloud-localds,
+        // inject the flag so those installs still get vendor-data.
+        let has_vendor = self.seed_command.iter().any(|a| a.contains("{vendor}"));
+        let is_localds = argv
+            .first()
+            .map(|b| b.ends_with("cloud-localds"))
+            .unwrap_or(false);
+        if !has_vendor && is_localds {
+            argv.insert(1, format!("--vendor-data={}", p(&vendor)));
+        }
         let st = Command::new(&argv[0])
             .args(&argv[1..])
             .status()
@@ -255,6 +268,46 @@ pub fn meta_data(vm: &Vm) -> String {
     m.iter()
         .map(|(k, v)| format!("{k}: {}\n", serde_json::to_string(v).unwrap()))
         .collect()
+}
+
+/// NoCloud vendor-data: platform-side guest setup that must not collide
+/// with the caller's user-data.
+///
+/// Shipped as a shell script rather than cloud-config so cloud-init runs it
+/// via `scripts-vendor` without any YAML merging against user-data (list
+/// keys such as `runcmd`/`write_files` would otherwise replace each other).
+/// Runs once per instance; everything it installs persists.
+///
+/// Currently installs `xdebbie-fstrim.service`, a oneshot that runs
+/// `fstrim -av` on every boot so freed blocks are returned to the LVM thin
+/// pool (the virtio disks are attached with `discard='unmap'`), and enables
+/// the distro's weekly `fstrim.timer` as a backstop.
+pub fn vendor_data() -> &'static str {
+    r#"#!/bin/sh
+# xdebbie vendor-data -- runs once on first boot via cloud-init scripts-vendor.
+set -eu
+
+cat >/etc/systemd/system/xdebbie-fstrim.service <<'EOF'
+[Unit]
+Description=xdebbie: return freed blocks to the thin pool (fstrim -av)
+Documentation=man:fstrim(8)
+After=local-fs.target
+ConditionVirtualization=vm
+
+[Service]
+Type=oneshot
+ExecStart=/sbin/fstrim -av
+Nice=19
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now xdebbie-fstrim.service || true
+systemctl enable --now fstrim.timer 2>/dev/null || true
+"#
 }
 
 /// DHCP on whichever NIC carries our MAC.
