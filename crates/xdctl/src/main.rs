@@ -6,6 +6,28 @@ use clap::{Parser, Subcommand};
 use xdebbie_core::*;
 use reqwest::{Method, blocking::Client};
 use serde_json::Value;
+use chrono::{DateTime, Utc};
+
+/// Format a timestamp as a Kubernetes-style age (e.g., "5m", "2h", "3d")
+fn format_age(created: DateTime<Utc>) -> String {
+    let now = Utc::now();
+    let duration = now.signed_duration_since(created);
+    
+    let seconds = duration.num_seconds();
+    if seconds < 0 {
+        return "0s".to_string();
+    }
+    
+    if seconds < 60 {
+        format!("{}s", seconds)
+    } else if seconds < 3600 {
+        format!("{}m", seconds / 60)
+    } else if seconds < 86400 {
+        format!("{}h", seconds / 3600)
+    } else {
+        format!("{}d", seconds / 86400)
+    }
+}
 
 #[derive(Parser)]
 #[command(version, about = "XDebbie CLI - Self-Forming Cloud Orchestration")]
@@ -308,8 +330,8 @@ fn main() -> Result<()> {
                 }
                 let vms: Vec<Vm> = serde_json::from_value(v)?;
                 println!(
-                    "{:<36} {:<24} {:<13} {:<10} {:<15} MESSAGE",
-                    "ID", "NAME", "PHASE", "HOST", "IP"
+                    "{:<36} {:<24} {:<13} {:<10} {:<15} {:<10} MESSAGE",
+                    "ID", "NAME", "PHASE", "HOST", "IP", "AGE"
                 );
                 for v in vms {
                     let ip = v
@@ -318,13 +340,15 @@ fn main() -> Result<()> {
                         .find(|a| a.kind == "InternalIP")
                         .map(|a| a.address.as_str())
                         .unwrap_or("-");
+                    let age = format_age(v.created);
                     println!(
-                        "{:<36} {:<24} {:<13} {:<10} {:<15} {}",
+                        "{:<36} {:<24} {:<13} {:<10} {:<15} {:<10} {}",
                         v.id,
                         v.spec.name,
                         format!("{:?}", v.phase),
                         v.host.as_deref().unwrap_or("-"),
                         ip,
+                        age,
                         v.message.as_deref().unwrap_or("")
                     );
                 }
