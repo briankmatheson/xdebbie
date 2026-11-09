@@ -124,6 +124,11 @@ async fn main() -> anyhow::Result<()> {
                 vg_name, vg_name
             );
         }
+        // Self-heal after a host reboot: make sure the thin pool and VM
+        // disks are active before libvirt tries to (re)start anything.
+        if let Err(e) = lvm.ensure_activated() {
+            tracing::error!("{:#}", e);
+        }
         tracing::info!("Using LVM volume group: {}", vg_name);
         Some(lvm)
     } else {

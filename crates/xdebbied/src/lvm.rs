@@ -40,6 +40,61 @@ impl LvmManager {
         Ok(output.status.success())
     }
 
+    /// Make sure the volume group's logical volumes are active.
+    ///
+    /// After a host reboot the thin pool (and every thin LV inside it) can be
+    /// left inactive -- most commonly because `thin-provisioning-tools` is
+    /// missing and LVM refuses to activate the pool without `thin_check`.
+    /// When that happens, libvirt autostart fails for every VM whose disks
+    /// live in the pool. We run `vgchange -ay` (with `-K` so snapshots that
+    /// still carry the activation-skip flag come up too) and surface a clear
+    /// error if the thin pool is still inactive afterwards.
+    pub fn ensure_activated(&self) -> Result<()> {
+        info!("Activating logical volumes in {}", self.vg_name);
+        let output = Command::new("/usr/sbin/vgchange")
+            .args(["-ay", "-K", &self.vg_name])
+            .output()
+            .context("executing vgchange -ay")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            warn!("vgchange -ay {} reported errors: {}", self.vg_name, stderr.trim());
+        }
+
+        if let Some(ref pool) = self.thin_pool {
+            let attr = Command::new("/usr/sbin/lvs")
+                .args([
+                    "--noheadings",
+                    "-o",
+                    "lv_attr",
+                    &format!("{}/{}", self.vg_name, pool),
+                ])
+                .output()
+                .context("checking thin pool state")?;
+
+            let attr = String::from_utf8_lossy(&attr.stdout).trim().to_string();
+            // lv_attr field 5 is the state: 'a' = active
+            let active = attr.chars().nth(4) == Some('a');
+            if !active {
+                let has_thin_check = std::path::Path::new("/usr/sbin/thin_check").exists();
+                let hint = if has_thin_check {
+                    "Check `journalctl -b | grep -i thin` for the reason."
+                } else {
+                    "thin_check is missing -- install it with:\n  \
+                     sudo apt-get install thin-provisioning-tools\n  \
+                     sudo vgchange -ay"
+                };
+                anyhow::bail!(
+                    "Thin pool {}/{} is not active (attr '{}'); VM disks are unavailable. {}",
+                    self.vg_name, pool, attr, hint
+                );
+            }
+            info!("Thin pool {}/{} is active", self.vg_name, pool);
+        }
+
+        Ok(())
+    }
+
     /// Create a root disk as a snapshot of a base image
     ///
     /// # Arguments
