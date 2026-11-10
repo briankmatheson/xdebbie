@@ -423,6 +423,7 @@ mod tests {
                 vcpus: 2,
                 memory_mib: 4096,
                 disk_gib: 20,
+                data_disk_gib: None,
                 image: "img".into(),
                 placement: Placement {
                     anti_affinity_group: Some("cp".into()),

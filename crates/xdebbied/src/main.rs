@@ -8,6 +8,7 @@ mod discovery;
 mod election;
 mod libvirt;
 mod lvm;
+mod mesh;
 mod reconcile;
 mod store;
 

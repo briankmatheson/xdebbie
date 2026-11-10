@@ -1,0 +1,6 @@
+table inet xdebbie_mesh {
+  chain input {
+    type filter hook input priority -10; policy accept;
+    udp dport 6081 iifname != "wg-flock" counter drop
+  }
+}
