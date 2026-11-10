@@ -58,3 +58,7 @@ uuid = { version = "1.29.0", features = ["v4", "serde"] }
 num_cpus = "1.16.0"
 surge-ping = "0.8"
 socket2 = "0.6.5"
+
+[dev-dependencies]
+http-body-util = "0.1"
+tower = "0.5"

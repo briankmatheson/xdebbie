@@ -47,6 +47,9 @@ pub struct Config {
     /// Thin pool name for thin provisioning (optional)
     #[serde(default)]
     pub thin_pool: Option<String>,
+    /// Geneve mesh between hypervisors (`[mesh]`). Off unless `enabled = true`.
+    #[serde(default)]
+    pub mesh: Option<crate::mesh::MeshConfig>,
 }
 
 fn d_discovery() -> bool {
@@ -87,5 +90,13 @@ fn d_seed() -> Vec<String> {
 impl Config {
     pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
         Ok(toml::from_str(&std::fs::read_to_string(path)?)?)
+    }
+    /// Directory holding `state.json`, `mesh.json`, ...
+    pub fn state_dir(&self) -> PathBuf {
+        self.state_file
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."))
     }
 }

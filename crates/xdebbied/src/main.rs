@@ -39,6 +39,10 @@ enum Cmd {
         /// Run bootstrap before starting server
         #[arg(long)]
         bootstrap: bool,
+        /// Start only the API and the Geneve mesh module: no libvirt, no
+        /// LVM, no discovery. Used by the mesh test harness.
+        #[arg(long)]
+        mesh_only: bool,
     },
     /// Check that every configured host is reachable over libvirt+ssh.
     Check,
@@ -97,7 +101,7 @@ async fn main() -> anyhow::Result<()> {
             bootstrap::bootstrap(&opts)?;
             return Ok(());
         }
-        Some(Cmd::Serve { bootstrap: true }) => {
+        Some(Cmd::Serve { bootstrap: true, .. }) => {
             // Run bootstrap first
             let opts = bootstrap::BootstrapOptions {
                 config_path: cli.config.clone(),
@@ -114,6 +118,28 @@ async fn main() -> anyhow::Result<()> {
         config::Config::load(&cli.config)
             .with_context(|| format!("loading {}", cli.config.display()))?,
     );
+
+    // Geneve mesh. The TOML section is validated here; a bad one stops the
+    // daemon with an error naming the field.
+    let mesh = mesh::MeshManager::new(
+        Arc::new(mesh::IpCliNetOps::default()),
+        cfg.state_dir(),
+        cfg.mesh.as_ref(),
+    )
+    .context("mesh configuration")?;
+
+    if matches!(cli.cmd, Some(Cmd::Serve { mesh_only: true, .. })) {
+        let token = load_token(&cfg)?;
+        tokio::spawn(mesh.clone().run());
+        let v1 = api::mesh::router(api::mesh::MeshApi { mesh })
+            .layer(axum::middleware::from_fn_with_state(token, api::bearer_auth));
+        let app = axum::Router::new()
+            .route("/healthz", axum::routing::get(|| async { "ok" }))
+            .nest("/v1", v1);
+        info!("xdebbied --mesh-only: API + mesh module only");
+        return serve(&cfg, app).await;
+    }
+
     // Initialize LVM if configured
     let lvm_manager = if let Some(ref vg_name) = cfg.volume_group {
         let lvm = lvm::LvmManager::new(vg_name.clone(), cfg.thin_pool.clone());
@@ -141,6 +167,7 @@ async fn main() -> anyhow::Result<()> {
         bin: cfg.virsh.clone(),
         seed_command: cfg.seed_command.clone(),
         lvm: lvm_manager,
+        overlay: mesh.overlay.clone(),
     });
 
     match cli.cmd {
@@ -190,18 +217,7 @@ async fn main() -> anyhow::Result<()> {
         })
         .await?;
 
-    let token = match &cfg.token_file {
-        Some(p) => Some(Arc::new(
-            std::fs::read_to_string(p)
-                .with_context(|| format!("reading {}", p.display()))?
-                .trim()
-                .to_owned(),
-        )),
-        None => {
-            tracing::warn!("no token_file configured: API is unauthenticated");
-            None
-        }
-    };
+    let token = load_token(&cfg)?;
 
     // Start discovery engine if enabled
     let discovery_cfg = discovery::DiscoveryConfig {
@@ -236,14 +252,37 @@ async fn main() -> anyhow::Result<()> {
         store: store.clone(),
         hv,
         cfg: cfg.clone(),
+        mesh: Some(mesh.clone()),
     };
     tokio::spawn(rec.run());
+    tokio::spawn(mesh.clone().run());
 
     let app = api::router(api::App {
         store,
         cfg: cfg.clone(),
         token,
+        mesh,
     });
+    serve(&cfg, app).await
+}
+
+fn load_token(cfg: &config::Config) -> anyhow::Result<Option<Arc<String>>> {
+    Ok(match &cfg.token_file {
+        Some(p) => Some(Arc::new(
+            std::fs::read_to_string(p)
+                .with_context(|| format!("reading {}", p.display()))?
+                .trim()
+                .to_owned(),
+        )),
+        None => {
+            tracing::warn!("no token_file configured: API is unauthenticated");
+            None
+        }
+    })
+}
+
+/// Serve `app` on `cfg.listen`, HTTPS if a cert/key pair is configured.
+async fn serve(cfg: &config::Config, app: axum::Router) -> anyhow::Result<()> {
     match (&cfg.tls_cert, &cfg.tls_key) {
         (Some(c), Some(k)) => {
             let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();

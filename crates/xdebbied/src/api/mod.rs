@@ -17,13 +17,16 @@ use xdebbie_core::*;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::{config::Config, store::Store};
+use crate::{config::Config, mesh::MeshManager, store::Store};
+
+pub mod mesh;
 
 #[derive(Clone)]
 pub struct App {
     pub store: Store,
     pub cfg: Arc<Config>,
     pub token: Option<Arc<String>>,
+    pub mesh: Arc<MeshManager>,
 }
 
 pub struct ApiErr(StatusCode, String);
@@ -66,15 +69,17 @@ pub fn router(app: App) -> Router {
         .route("/vms/{id}/stop", post(stop))
         .route("/vms/{id}/reboot", post(reboot))
         .route("/vms/{id}/migrate", post(migrate))
-        .layer(middleware::from_fn_with_state(app.clone(), auth));
+        .with_state(app.clone())
+        .merge(mesh::router(mesh::MeshApi { mesh: app.mesh.clone() }))
+        .layer(middleware::from_fn_with_state(app.token.clone(), bearer_auth));
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .nest("/v1", v1)
-        .with_state(app)
 }
 
-async fn auth(State(app): State<App>, req: Request, next: Next) -> Response {
-    if let Some(tok) = &app.token {
+/// Bearer-token middleware usable by any router (`None` = unauthenticated).
+pub async fn bearer_auth(State(token): State<Option<Arc<String>>>, req: Request, next: Next) -> Response {
+    if let Some(tok) = &token {
         let ok = req
             .headers()
             .get(header::AUTHORIZATION)

@@ -25,6 +25,8 @@ pub struct Reconciler<H> {
     pub store: Store,
     pub hv: Arc<H>,
     pub cfg: Arc<Config>,
+    /// Lets the mesh name VMs (not `vnetN`) in `vms_mtu_mismatch`.
+    pub mesh: Option<Arc<crate::mesh::MeshManager>>,
 }
 
 #[derive(Debug, Default)]
@@ -91,6 +93,7 @@ impl<H: Hypervisor> Reconciler<H> {
     pub async fn tick(&self) -> anyhow::Result<()> {
         self.inventory().await?;
         self.schedule().await?;
+        self.mesh_tap_owners().await;
         let st = self.store.read().await;
         let work = st
             .vms
@@ -112,6 +115,31 @@ impl<H: Hypervisor> Reconciler<H> {
                 }
             })
             .await
+    }
+
+    /// If the mesh sees bridge ports with a stale MTU, tell it which VM
+    /// each tap belongs to so `vms_mtu_mismatch` names VMs. Only queries
+    /// libvirt while there is something to resolve.
+    async fn mesh_tap_owners(&self) {
+        let Some(mesh) = &self.mesh else { return };
+        let ports = mesh.mismatched_ports().await;
+        if ports.is_empty() {
+            return;
+        }
+        // Already resolved entries look like "vm (vnetN)".
+        if ports.iter().all(|p| p.contains('(')) {
+            return;
+        }
+        let hosts: Vec<Host> = self.store.read().await.hosts.into_values().collect();
+        let mut map = std::collections::HashMap::new();
+        for h in &hosts {
+            match self.hv.tap_owners(h).await {
+                Ok(m) => map.extend(m),
+                Err(e) => warn!(host = %h.name, "tap owners: {e:#}"),
+            }
+        }
+        mesh.set_tap_owners(map);
+        mesh.trigger();
     }
 
     async fn inventory(&self) -> anyhow::Result<()> {
@@ -373,6 +401,9 @@ mod tests {
                 .remove(&(h.name.clone(), v.domain_name()));
             Ok(())
         }
+        async fn tap_owners(&self, _: &Host) -> anyhow::Result<std::collections::HashMap<String, String>> {
+            Ok(Default::default())
+        }
         async fn addresses(&self, _: &Host, _: &Vm) -> anyhow::Result<Vec<Address>> {
             Ok(vec![Address {
                 kind: "InternalIP".into(),
@@ -413,6 +444,7 @@ mod tests {
             store: store.clone(),
             hv: Arc::new(Fake::default()),
             cfg: Arc::new(cfg()),
+            mesh: None,
         };
         let mut ids = vec![];
         for i in 0..2 {

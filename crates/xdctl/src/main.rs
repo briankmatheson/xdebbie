@@ -53,6 +53,46 @@ enum Cmd {
     Vm(VmCmd),
     /// List failure domains.
     Fd,
+    /// Geneve mesh between hypervisors.
+    #[command(subcommand)]
+    Mesh(MeshCmd),
+}
+
+#[derive(Subcommand)]
+enum MeshCmd {
+    /// Peers table and conditions.
+    Ls,
+    /// Raw GET /v1/mesh (same as `ls --json`).
+    Get,
+    /// PUT /v1/mesh from a JSON file (`-` for stdin).
+    Apply {
+        #[arg(short, long)]
+        file: String,
+    },
+    /// Add or remove a peer (read-modify-PUT with If-Match).
+    #[command(subcommand)]
+    Peer(MeshPeerCmd),
+    /// DELETE /v1/mesh: tear down and forget the API document.
+    Delete {
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Ask the daemon to reconcile now.
+    Reconcile,
+}
+
+#[derive(Subcommand)]
+enum MeshPeerCmd {
+    Add {
+        r#box: u8,
+        remote: String,
+        #[arg(long)]
+        probe: Option<String>,
+    },
+    Rm {
+        r#box: u8,
+    },
 }
 
 #[derive(Subcommand)]
@@ -165,11 +205,22 @@ struct Api {
 }
 impl Api {
     fn call(&self, m: Method, path: &str, body: Option<Value>) -> Result<Value> {
+        let (code, v) = self.call_raw(m, path, body, None)?;
+        if !code.is_success() {
+            bail!("{code}: {}", api_error_text(&v));
+        }
+        Ok(v)
+    }
+    /// Like `call` but returns the status so callers can handle 409 etc.
+    fn call_raw(&self, m: Method, path: &str, body: Option<Value>, if_match: Option<u64>) -> Result<(reqwest::StatusCode, Value)> {
         let mut r = self
             .c
             .request(m, format!("{}/v1{path}", self.url.trim_end_matches('/')));
         if let Some(t) = &self.token {
             r = r.bearer_auth(t);
+        }
+        if let Some(g) = if_match {
+            r = r.header("If-Match", g.to_string());
         }
         if let Some(b) = body {
             r = r.json(&b);
@@ -182,15 +233,7 @@ impl Api {
         } else {
             serde_json::from_str(&text).unwrap_or(Value::String(text))
         };
-        if !code.is_success() {
-            bail!(
-                "{code}: {}",
-                v.get("error")
-                    .and_then(Value::as_str)
-                    .unwrap_or(&v.to_string())
-            );
-        }
-        Ok(v)
+        Ok((code, v))
     }
     /// Accept a full UUID or a unique VM name.
     fn resolve(&self, id: &str) -> Result<String> {
@@ -207,6 +250,110 @@ impl Api {
     }
 }
 
+/// Error text from an API body: `{"error": ..}` or `{"errors": [{field, message}]}`.
+fn api_error_text(v: &Value) -> String {
+    if let Some(e) = v.get("error").and_then(Value::as_str) {
+        return e.to_string();
+    }
+    if let Some(list) = v.get("errors").and_then(Value::as_array) {
+        return list
+            .iter()
+            .map(|e| {
+                format!(
+                    "{}: {}",
+                    e.get("field").and_then(Value::as_str).unwrap_or("?"),
+                    e.get("message").and_then(Value::as_str).unwrap_or("?")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+    }
+    v.to_string()
+}
+
+/// Read-modify-PUT with If-Match; one retry on 409.
+fn mesh_modify(api: &Api, f: impl Fn(&mut Value) -> Result<()>) -> Result<Value> {
+    for attempt in 0..2 {
+        let doc = api.call(Method::GET, "/mesh", None)?;
+        let generation = doc["status"]["generation"].as_u64().unwrap_or(0);
+        let mut spec = doc["spec"].clone();
+        f(&mut spec)?;
+        let (code, v) = api.call_raw(Method::PUT, "/mesh", Some(spec), Some(generation))?;
+        if code == reqwest::StatusCode::CONFLICT && attempt == 0 {
+            continue;
+        }
+        if !code.is_success() {
+            bail!("{code}: {}", api_error_text(&v));
+        }
+        return Ok(v);
+    }
+    bail!("mesh: generation changed twice while updating; try again")
+}
+
+fn print_mesh(doc: &Value) {
+    let st = &doc["status"];
+    let spec = &doc["spec"];
+    println!(
+        "enabled={} box={} bridge={} vni={} underlay={} fdb={} mtu={} source={} generation={}/{}",
+        spec["enabled"],
+        spec["box"],
+        spec["networks"][0]["bridge"].as_str().unwrap_or("-"),
+        spec["networks"][0]["vni"],
+        spec["underlay"].as_str().unwrap_or("-"),
+        spec["fdb"].as_str().unwrap_or("-"),
+        st["mtu"],
+        st["source"].as_str().unwrap_or("-"),
+        st["observed_generation"],
+        st["generation"],
+    );
+    println!();
+    println!(
+        "{:<5} {:<9} {:<16} {:<16} {:<8} {:>8} {:>4}  {}",
+        "BOX", "DEVICE", "REMOTE", "PROBE", "STATE", "RTT", "FDB", "LAST CHANGE"
+    );
+    for p in st["peers"].as_array().into_iter().flatten() {
+        let rtt = p["rtt_ms"].as_f64().map(|r| format!("{r:.2}ms")).unwrap_or_else(|| "-".into());
+        let state = match p["reason"].as_str() {
+            Some(r) => format!("{} ({r})", p["state"].as_str().unwrap_or("?")),
+            None => p["state"].as_str().unwrap_or("?").to_string(),
+        };
+        let age = p["last_change"]
+            .as_str()
+            .and_then(|t| t.parse::<DateTime<Utc>>().ok())
+            .map(format_age)
+            .unwrap_or_else(|| "-".into());
+        println!(
+            "{:<5} {:<9} {:<16} {:<16} {:<8} {:>8} {:>4}  {}",
+            p["box"],
+            p["device"].as_str().unwrap_or("-"),
+            p["remote"].as_str().unwrap_or("-"),
+            p["probe"].as_str().unwrap_or("-"),
+            state,
+            rtt,
+            p["fdb_entries"],
+            age
+        );
+    }
+    println!();
+    println!("CONDITIONS");
+    for c in st["conditions"].as_array().into_iter().flatten() {
+        let msg = c["message"].as_str().map(|m| format!("  {m}")).unwrap_or_default();
+        println!(
+            "  {:<20} {:<5} {}{}",
+            c["type"].as_str().unwrap_or("?"),
+            c["status"],
+            c["reason"].as_str().unwrap_or(""),
+            msg
+        );
+    }
+    if let Some(m) = st["vms_mtu_mismatch"].as_array()
+        && !m.is_empty()
+    {
+        println!();
+        println!("VM NICs with stale MTU (fixed on recreate): {}", m.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", "));
+    }
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let api = Api {
@@ -219,6 +366,87 @@ fn main() -> Result<()> {
         Ok(())
     };
     match cli.cmd {
+        Cmd::Mesh(m) => match m {
+            MeshCmd::Ls => {
+                let v = api.call(Method::GET, "/mesh", None)?;
+                if cli.json {
+                    return out(v);
+                }
+                print_mesh(&v);
+            }
+            MeshCmd::Get => return out(api.call(Method::GET, "/mesh", None)?),
+            MeshCmd::Apply { file } => {
+                let text = if file == "-" {
+                    let mut s = String::new();
+                    std::io::Read::read_to_string(&mut std::io::stdin(), &mut s)?;
+                    s
+                } else {
+                    std::fs::read_to_string(&file).with_context(|| format!("reading {file}"))?
+                };
+                let body: Value = serde_json::from_str(&text).context("mesh document is not valid JSON")?;
+                // Accept either a bare spec or a {spec, status} document.
+                let spec = body.get("spec").cloned().unwrap_or(body);
+                let v = api.call(Method::PUT, "/mesh", Some(spec))?;
+                if cli.json {
+                    return out(v);
+                }
+                print_mesh(&v);
+            }
+            MeshCmd::Peer(MeshPeerCmd::Add { r#box, remote, probe }) => {
+                let v = mesh_modify(&api, |spec| {
+                    let peers = spec["peers"].as_array_mut().ok_or_else(|| anyhow::anyhow!("spec has no peers array"))?;
+                    peers.retain(|p| p["box"].as_u64() != Some(r#box as u64));
+                    let mut p = serde_json::json!({ "box": r#box, "remote": remote });
+                    if let Some(pr) = &probe {
+                        p["probe"] = Value::String(pr.clone());
+                    }
+                    peers.push(p);
+                    Ok(())
+                })?;
+                if cli.json {
+                    return out(v);
+                }
+                print_mesh(&v);
+            }
+            MeshCmd::Peer(MeshPeerCmd::Rm { r#box }) => {
+                let v = mesh_modify(&api, |spec| {
+                    let peers = spec["peers"].as_array_mut().ok_or_else(|| anyhow::anyhow!("spec has no peers array"))?;
+                    let before = peers.len();
+                    peers.retain(|p| p["box"].as_u64() != Some(r#box as u64));
+                    if peers.len() == before {
+                        bail!("no peer with box {}", r#box);
+                    }
+                    Ok(())
+                })?;
+                if cli.json {
+                    return out(v);
+                }
+                print_mesh(&v);
+            }
+            MeshCmd::Delete { yes } => {
+                if !yes {
+                    eprint!("Tear down the Geneve mesh on this host and remove its API document? [y/N] ");
+                    let mut ans = String::new();
+                    std::io::stdin().read_line(&mut ans)?;
+                    if !matches!(ans.trim(), "y" | "Y" | "yes") {
+                        bail!("aborted");
+                    }
+                }
+                let v = api.call(Method::DELETE, "/mesh", None)?;
+                if cli.json {
+                    return out(v);
+                }
+                if v["reenabled_from_config"].as_bool() == Some(true) {
+                    println!("mesh torn down; [mesh] in xdebbied.toml has enabled = true, so it was rebuilt from config");
+                } else {
+                    println!("mesh torn down");
+                }
+            }
+            MeshCmd::Reconcile => {
+                api.call(Method::POST, "/mesh/reconcile", None)?;
+                println!("reconcile requested");
+            }
+        },
         Cmd::Fd => {
             let v = api.call(Method::GET, "/failure-domains", None)?;
             if cli.json {

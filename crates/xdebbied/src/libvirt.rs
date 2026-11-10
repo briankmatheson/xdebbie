@@ -3,7 +3,7 @@
 //! only thing a host needs is libvirtd, QEMU/KVM, an SSH key for the xdebbie
 //! user, a storage pool holding base images, and a bridge.
 
-use std::{collections::BTreeMap, future::Future, path::Path};
+use std::{collections::{BTreeMap, HashMap}, future::Future, path::Path, sync::Arc};
 
 use anyhow::{Context, Result, bail};
 use xdebbie_core::{Address, Capacity, Host, Vm};
@@ -35,6 +35,9 @@ pub trait Hypervisor: Send + Sync + 'static {
     fn reboot(&self, host: &Host, vm: &Vm) -> impl Future<Output = Result<()>> + Send;
     fn destroy(&self, host: &Host, vm: &Vm) -> impl Future<Output = Result<()>> + Send;
     fn addresses(&self, host: &Host, vm: &Vm) -> impl Future<Output = Result<Vec<Address>>> + Send;
+    /// Host-side tap device name → domain name for every running domain.
+    /// Used by the mesh to name VMs whose NIC MTU is stale.
+    fn tap_owners(&self, host: &Host) -> impl Future<Output = Result<HashMap<String, String>>> + Send;
     fn migrate(&self, src: &Host, dst: &Host, vm: &Vm) -> impl Future<Output = Result<()>> + Send;
 }
 
@@ -43,6 +46,8 @@ pub struct Virsh {
     pub bin: String,
     pub seed_command: Vec<String>,
     pub lvm: Option<LvmManager>,
+    /// Geneve mesh view: MTU for NICs on the overlay bridge, if managed.
+    pub overlay: Arc<crate::mesh::Overlay>,
 }
 
 impl Virsh {
@@ -167,7 +172,7 @@ impl Virsh {
         )
         .await?;
         tokio::fs::write(&meta, meta_data(vm)).await?;
-        tokio::fs::write(&net, network_config(vm)).await?;
+        tokio::fs::write(&net, network_config(vm, self.overlay.mtu_for(&host.bridge))).await?;
         tokio::fs::write(&vendor, vendor_data()).await?;
         let sub = |s: &str| {
             s.replace("{out}", p(&out))
@@ -310,15 +315,19 @@ systemctl enable --now fstrim.timer 2>/dev/null || true
 "#
 }
 
-/// DHCP on whichever NIC carries our MAC.
-pub fn network_config(vm: &Vm) -> String {
+/// DHCP on whichever NIC carries our MAC. `mtu` is set when the NIC sits
+/// on a mesh-managed overlay bridge (section 2.5 of the mesh spec).
+pub fn network_config(vm: &Vm, mtu: Option<u16>) -> String {
+    let mtu_line = mtu.map(|m| format!("    mtu: {m}\n")).unwrap_or_default();
     format!(
-        "version: 2\nethernets:\n  primary:\n    match:\n      macaddress: \"{}\"\n    dhcp4: true\n    dhcp6: false\n",
+        "version: 2\nethernets:\n  primary:\n    match:\n      macaddress: \"{}\"\n{mtu_line}    dhcp4: true\n    dhcp6: false\n",
         vm.mac()
     )
 }
 
-pub fn domain_xml(host: &Host, vm: &Vm, volume_group: Option<&str>) -> String {
+/// `overlay_mtu`: when set, `<mtu size=.../>` goes on the interface so
+/// virtio-net hands the mesh MTU to the guest.
+pub fn domain_xml(host: &Host, vm: &Vm, volume_group: Option<&str>, overlay_mtu: Option<u16>) -> String {
     let esc = |s: &str| {
         s.replace('&', "&amp;")
             .replace('<', "&lt;")
@@ -403,7 +412,7 @@ pub fn domain_xml(host: &Host, vm: &Vm, volume_group: Option<&str>) -> String {
     <interface type='bridge'>
       <mac address='{mac}'/>
       <source bridge='{bridge}'/>
-      <model type='virtio'/>
+      <model type='virtio'/>{mtu_xml}
     </interface>
     <channel type='unix'><target type='virtio' name='org.qemu.guest_agent.0'/></channel>
     <serial type='pty'><target port='0'/></serial>
@@ -423,7 +432,10 @@ pub fn domain_xml(host: &Host, vm: &Vm, volume_group: Option<&str>) -> String {
         data_disk = data_disk_xml,
         seed = esc(&Virsh::seed_vol(vm)),
         mac = vm.mac(),
-        bridge = esc(&host.bridge)
+        bridge = esc(&host.bridge),
+        mtu_xml = overlay_mtu
+            .map(|m| format!("\n      <mtu size='{m}'/>"))
+            .unwrap_or_default()
     )
 }
 
@@ -452,6 +464,16 @@ pub fn parse_pool_available(text: &str) -> Result<u64> {
         .unwrap_or("0")
         .parse()?;
     Ok(bytes / (1 << 30))
+}
+
+/// Interface names from `virsh domiflist` (skips the header and `-`).
+pub fn parse_domiflist(text: &str) -> Vec<String> {
+    text.lines()
+        .skip(2)
+        .filter_map(|l| l.split_whitespace().next())
+        .filter(|n| *n != "-" && !n.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 pub fn parse_domifaddr(text: &str) -> Vec<Address> {
@@ -512,7 +534,8 @@ impl Hypervisor for Virsh {
         if self.state(host, vm).await?.is_none() {
             let f = tempfile::Builder::new().suffix(".xml").tempfile()?;
             let vg = self.lvm.as_ref().map(|l| l.vg_name());
-            tokio::fs::write(f.path(), domain_xml(host, vm, vg)).await?;
+            let mtu = self.overlay.mtu_for(&host.bridge);
+            tokio::fs::write(f.path(), domain_xml(host, vm, vg, mtu)).await?;
             self.run(&host.uri, &["define", p(f.path())]).await?;
             self.run(&host.uri, &["autostart", &vm.domain_name()])
                 .await?;
@@ -568,6 +591,21 @@ impl Hypervisor for Virsh {
             }
         }
         Ok(())
+    }
+
+    async fn tap_owners(&self, host: &Host) -> Result<HashMap<String, String>> {
+        let names = self.run(&host.uri, &["list", "--name"]).await?;
+        let mut map = HashMap::new();
+        for dom in names.lines().map(str::trim).filter(|l| !l.is_empty()) {
+            let out = match self.run(&host.uri, &["domiflist", dom]).await {
+                Ok(o) => o,
+                Err(_) => continue,
+            };
+            for tap in parse_domiflist(&out) {
+                map.insert(tap, dom.to_string());
+            }
+        }
+        Ok(map)
     }
 
     async fn addresses(&self, host: &Host, vm: &Vm) -> Result<Vec<Address>> {
