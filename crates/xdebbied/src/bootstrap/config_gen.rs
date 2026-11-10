@@ -60,6 +60,27 @@ seed_command = ["cloud-localds", "--network-config={{net}}", "--vendor-data={{ve
 enable_discovery = true
 multicast_addr = "239.0.0.42:7442"
 
+# Geneve overlay mesh (off by default). One tunnel per peer is enslaved to the
+# overlay bridge; see docs/mesh.md. Enabling with zero peers only pins the
+# bridge MTU and installs the xdebbie_mesh nftables table. Manage peers at
+# runtime with `xdctl mesh ...` (API state overrides this section).
+# [mesh]
+# enabled = false
+# box = 0                      # this host's box id (0-253), unique per host
+# bridge = "{bridge}"
+# vni = 23
+# dstport = 6081
+# underlay = "wg-flock"        # interface peers are reached through
+# allow_plain_underlay = false # true to permit a non-WireGuard underlay
+# mtu = "auto"                 # or an integer >= 1280 (underlay mtu - 50)
+# fdb = "derived"              # "derived" (static 52:54:00:23:<box>:xx) or "learn"
+# firewall = true              # drop UDP dstport arriving on non-underlay ifaces
+#
+# [[mesh.peers]]
+# box = 1
+# remote = "10.22.1.1"
+# # probe = "10.23.1.1"        # defaults to 10.23.<box>.1 (derived) / remote (learn)
+
 # Configured hosts
 [[hosts]]
 name = "{hostname}"

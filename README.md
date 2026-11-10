@@ -44,6 +44,7 @@ No configuration, no coordination service, no shared storage. Just `dpkg -i` and
 ✅ **Placement Engine** — Spread/pack policies with anti-affinity  
 ✅ **Live Migration** — Move VMs between hosts without shared storage  
 ✅ **Cluster API** — Full v1beta2 infrastructure provider  
+✅ **Geneve Mesh** — Optional L2 overlay between hosts, off by default (`xdctl mesh`)  
 ✅ **Single Binary** — 9 MB daemon + 6 MB CLI tool  
 ✅ **Debian Package** — Systemd service with proper dependencies  
 
@@ -194,6 +195,7 @@ See [BOOTSTRAP.md](BOOTSTRAP.md) for detailed bootstrap documentation and
 - [Cluster API contract](docs/capi-contract.md) — What CAPI asks, how CAPX answers
 - [REST API](docs/api.md) — HTTP API reference
 - [Operations](docs/operations.md) — Drain, upgrades, backup, security, limits
+- [Geneve mesh](docs/mesh.md) — Overlay bridge stitching between hosts, `/v1/mesh`, `xdctl mesh`
 
 ## Status
 

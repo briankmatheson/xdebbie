@@ -533,11 +533,13 @@ impl NetOps for IpCliNetOps {
 /// In-memory kernel. Links, ports and FDB live in maps; `apply` mutates
 /// them the way the real kernel would, so the planner can be run against
 /// its own output to prove idempotence.
+#[cfg(test)]
 #[derive(Debug, Default)]
 pub struct FakeNetOps {
     pub state: Mutex<FakeState>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Default, Clone)]
 pub struct FakeState {
     pub links: BTreeMap<String, Link>,
@@ -554,6 +556,7 @@ pub struct FakeState {
     pub fail_on: Option<&'static str>,
 }
 
+#[cfg(test)]
 impl FakeNetOps {
     pub fn new() -> Self {
         let f = Self::default();
@@ -614,6 +617,7 @@ impl FakeNetOps {
     }
 }
 
+#[cfg(test)]
 impl NetOps for FakeNetOps {
     fn list_links(&self) -> Result<Vec<Link>> {
         Ok(self.state.lock().unwrap().links.values().cloned().collect())

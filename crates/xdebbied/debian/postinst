@@ -11,6 +11,10 @@ case "$1" in
         chmod 755 /etc/xdebbie
         chmod 755 /var/lib/xdebbie
         
+        # Geneve kernel module for the optional overlay mesh (also listed in
+        # /etc/modules-load.d/xdebbie-mesh.conf for boot). Harmless if unused.
+        modprobe geneve 2>/dev/null || true
+
         # Reload systemd
         systemctl daemon-reload || true
         

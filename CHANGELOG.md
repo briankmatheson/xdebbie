@@ -5,6 +5,31 @@ All notable changes to XDebbie will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0-1] - 2026-11-10
+
+### Added
+- **Geneve overlay mesh (X12).** New `mesh` module in `xdebbied` stitches the
+  overlay bridge of every host into one L2 segment: one `gnv-b<P>` Geneve
+  tunnel per peer (same VNI/dstport, different remote) enslaved to the bridge
+  with `isolated on`; `derived` mode pins 17 static FDB entries per peer and
+  disables learning/flooding on tunnel ports; MTU = underlay − 50 applied to
+  tunnels, bridge and new VM NICs; `nft table inet xdebbie_mesh` drops the
+  Geneve port on non-underlay interfaces; in-process ICMP probes with
+  hysteresis drive per-peer `Up/Down/Error` and `Ready/Degraded` conditions.
+  Reconciliation is derived from kernel state (zero writes on a converged
+  restart) and only ever touches links named `gnv-b*` carrying the
+  `xdebbie-mesh/v1` alias. Configured via a `[mesh]` TOML section (validated
+  at startup) or the new `/v1/mesh` API (`GET`/`PUT` with `If-Match`/`DELETE`,
+  `/v1/mesh/peers/{box}`, `POST /v1/mesh/reconcile`), persisted in
+  `/var/lib/xdebbie/mesh.json`; API state shadows TOML.
+- `xdctl mesh ls|get|apply|peer add|peer rm|delete|reconcile`.
+- `xdebbied serve --mesh-only` runs only the mesh manager and its routes.
+- `tests/mesh/`: 3-host network-namespace harness and M1–M13 acceptance
+  tests (run unprivileged under `unshare -Urnm`).
+- Package ships `/etc/modules-load.d/xdebbie-mesh.conf` (`geneve`) and now
+  depends on `iproute2` and `nftables`. The generated `xdebbied.toml` carries
+  a commented-out `[mesh]` section; the mesh is **off by default**.
+
 ## [Unreleased] - 2026-11-08
 
 ### Added

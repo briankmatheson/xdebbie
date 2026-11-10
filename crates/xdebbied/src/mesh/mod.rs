@@ -45,7 +45,9 @@ use chrono::{DateTime, Utc};
 use tokio::sync::{Mutex, Notify, RwLock, mpsc};
 use tracing::{debug, info, warn};
 
-pub use kernel::{FakeNetOps, IpCliNetOps, NetOps};
+#[cfg(test)]
+pub use kernel::FakeNetOps;
+pub use kernel::{IpCliNetOps, NetOps};
 pub use model::*;
 pub use validate::FieldError;
 

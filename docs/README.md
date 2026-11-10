@@ -9,6 +9,7 @@
 
 - [Bootstrap](bootstrap-implementation.md) - Automatic setup and configuration
 - [Autodiscovery](autodiscovery.md) - Multicast discovery and leader election
+- [Geneve mesh](mesh.md) - Optional L2 overlay between hosts
 - [Migration Guide](migration.md) - Upgrading from older versions
 
 ## Design Documents
