@@ -52,4 +52,91 @@ Script: `tests/mesh/t0-spike.sh` (kept for reference).
 
 ## Fix log
 
-(appended as work progresses)
+Things that bit during T1–T10, in the order they were found.
+
+| Where | Symptom | Fix |
+|---|---|---|
+| `plan.rs` | `remote_change_recreates_only_that_peer` planned 0 FDB adds instead of 17: when a tunnel is recreated its FDB entries vanish with the device, but the planner still counted them as present | track a `recreated` set and exclude those devs from the "present" FDB map |
+| `kernel.rs` | after convergence h0 logged 2 `fdb_del` per tick: the kernel's own `permanent` port-MAC entries on `gnv-b*` were treated as mesh-owned | `parse_fdb` sets `is_static` only for `state == "static"`; `permanent` entries are the kernel's |
+| harness | `vnet0` showed up in `vms_mtu_mismatch` | set `vnet0` MTU 1370 in `netns-3host.sh` (libvirt does this via `<mtu size=…/>`) |
+| `run.sh` M4/M6 | `nft -f` rejected one-line `table … { chain … { … } }` ("unexpected '}'") and `counter arp {}` ("unexpected arp": keyword) | multi-line heredocs; counter named `arpreq` |
+| `run.sh` M4 | flaky `got2=3` vs `sent=2`: the neighbour state machine keeps sending `mcast_solicit` broadcasts ~1 s apart after `ping -W1` exits, so a third request slipped between reading the egress and ingress counters | count only `arp daddr ip 10.23.0.250` (the unowned probe target) and wait 4 s for solicitation to finish before reading; now deterministic (3/3/3) |
+| `run.sh` M8 | `grep -c … \|\| echo 0` printed twice → "0\n0 actions" | `\|\| true` + `${acts:-0}` |
+| `reconcile.rs` | pre-existing test didn't compile (`VmSpec` missing `data_disk_gib`) | added the field |
+| `api/mod.rs` | `Router<App>: From<Router>` when merging the mesh router | call `.with_state()` before `.merge()`; auth is `from_fn_with_state(token, bearer_auth)` shared with `--mesh-only` |
+| `xdctl` | `gen` is a reserved identifier in edition 2024; `serde_json::Value` ignores width formatting so the table was ragged | renamed; `.to_string()` the cells |
+| T0 → design | `ip -j link` reports `df: "set"` and `bridge fdb` shows vlan-1 twins for every static entry | parser dedups by (mac, dev); twins are not diffed |
+| packaging | `FakeNetOps` compiled into the release binary (dead-code warnings) | `#[cfg(test)]` |
+
+## Results
+
+### Unit tests (spec 11.1, `cargo test -p xdebbied`)
+
+72 passed, 0 failed, 1 ignored (pre-existing). Mesh coverage: model (6),
+validate (11), kernel parsers against captured fixtures, planner (11, incl.
+idempotence: applying the plan to the fake kernel and re-diffing yields an
+empty plan), firewall golden files (2), probe hysteresis (6), manager (9:
+put→noop, idempotent put, If-Match/validation, restart adopts without
+writes, delete, blocking conditions, route mismatch, config fallback, probe
+events → Ready/Degraded), API handlers (4).
+
+### Acceptance (spec 11.2, `tests/mesh/run.sh`, unprivileged `unshare -Urnm`, ~55 s)
+
+Two consecutive full runs, 13/13 each:
+
+```
+PASS M1: every VM reaches every other VM and every host bridge address
+PASS M2: all hosts show 2 peers Up and Ready within 10s
+PASS M3: 2 tunnels per host with alias/master/flags, 34 static FDB entries
+PASS M4: ARP broadcast from vm0 seen exactly once at vm1 and vm2 (3); tunnel rx +6 pkts/3s
+PASS M5: 1342-byte payload passes, 1343 fails; bridge and tunnels at 1370
+PASS M6: h0 sees peer 1 Down within 5s and Degraded; h0↔h2, h1↔h2 fine; recovers to Up
+PASS M7: removing peer 2 deletes gnv-b2 + its FDB only; peer 1 untouched
+PASS M8: daemon restart in h0: same ifindexes, zero actions, 0% loss
+PASS M9: VM traffic across hosts keeps flowing with the h0 daemon stopped
+PASS M10: foreign gnv-b9 and unrelated nft table survive reconcile and DELETE
+PASS M11: route via non-underlay → peer Error UnderlayRouteMismatch, tunnel down not deleted
+PASS M12: delete removes all gnv-b* and the nft table; br-int and VMs untouched
+PASS M13: UDP 6081 on a non-underlay interface is counted+dropped (+3); mesh unaffected
+[run] 13 passed, 0 failed
+```
+
+Zero-peer check (T10 acceptance): enabling the mesh on h0 with `peers: []`
+and the bridge at 1500 logged exactly one action (`set_bridge_mtu br-int`),
+created no `gnv-b*` links, and installed `table inet xdebbie_mesh`; status
+`Ready=true`, `generation=observed_generation`.
+
+### Packaging
+
+`cargo deb -p xdebbied` → `xdebbied_0.4.0-1_amd64.deb`
+(`Depends: … iproute2, nftables …`), ships
+`/etc/modules-load.d/xdebbie-mesh.conf` (conffile) and
+`usr/share/doc/xdebbie/mesh.md`; postinst `modprobe geneve`. The generated
+`xdebbied.toml` has `[mesh]` commented out with `enabled = false`. The
+systemd unit sets no `PrivateNetwork`/`RestrictAddressFamilies`/
+`CapabilityBoundingSet`; `/var/lib/xdebbie` (home of `mesh.json`) is already
+in `ReadWritePaths`.
+
+Install on the dev host needs an interactive `sudo`:
+
+```
+sudo dpkg -i target/debian/xdebbied_0.4.0-1_amd64.deb
+sudo systemctl restart xdebbied && xdctl mesh ls      # expect enabled=false
+```
+
+### Not done here
+
+- 11.3 two-box test (needs a second box; record iperf3 there).
+- T9 on real libvirt (new VM reporting MTU 1370 on the overlay NIC) — code
+  path is in place (`<mtu size=…/>` + network-config `mtu:`), needs the mesh
+  enabled on `virbr-int` with a real underlay.
+
+## Commits
+
+```
+fe30bba mesh: T0 spike — same-VNI Geneve devices per peer work (netns)
+e677c0c mesh: model, validation, kernel ops, planner, firewall, probe, manager
+8613a6d mesh: wire into daemon — [mesh] config, /v1/mesh API, --mesh-only, xdctl mesh
+c0fcb54 mesh: 3-host netns harness and M1–M13 acceptance tests (T7/T8)
+608177f mesh: packaging for 0.4.0-1 (T10)
+```
