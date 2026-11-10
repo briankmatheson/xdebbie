@@ -130,20 +130,29 @@ For 96% faster VM disk creation, configure LVM thin provisioning:
 # On each node, create a thin pool
 sudo lvcreate -L 200G -T your-vg/xdebbie-pool
 
-# Enable in config
+# Enable in config (top-level keys, not a table)
 sudo tee -a /etc/xdebbie/xdebbied.toml << 'EOF'
-
-[lvm]
-enabled = true
-vg_name = "your-vg"
+volume_group = "your-vg"
 thin_pool = "xdebbie-pool"
 EOF
+
+# Import a base image as a thin volume
+sudo lvcreate -V 25G -T your-vg/xdebbie-pool -n base-debian-13
+sudo qemu-img convert -f qcow2 -O raw -t none debian-13-generic-amd64.qcow2 /dev/your-vg/base-debian-13
 
 # Restart service
 sudo systemctl restart xdebbied
 ```
 
 Without LVM configuration, xdebbie falls back to qcow2 overlays (slower but works).
+
+> **Base images must boot headless.** xdebbie domains have no video device.
+> If a customised image sets `GRUB_TERMINAL_OUTPUT="gfxterm serial"`, GRUB
+> has no display to initialise and silently loops on `Booting 'Debian
+> GNU/Linux'` forever. Use `GRUB_TERMINAL="console serial"` and run
+> `update-grub` (e.g. via `virt-customize`). Test with
+> `qemu-system-x86_64 -vga none -display none -serial stdio ...` -- plain
+> `-nographic` still provides a VGA device and will hide the problem.
 
 ### Use the CLI
 
