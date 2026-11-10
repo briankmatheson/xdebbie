@@ -231,6 +231,7 @@ mod tests {
             vcpus: cpus,
             memory_mib: mem_gib * 1024,
             disk_gib: 20,
+            data_disk_gib: None,
             image: "debian-13".into(),
             placement: Placement {
                 anti_affinity_group: group.map(Into::into),
