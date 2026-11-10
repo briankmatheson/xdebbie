@@ -291,7 +291,8 @@ pub fn parse_bridge_ports(json: &str) -> Result<Vec<BridgePort>> {
 
 /// Entries on bridge ports (not the bridge's own `self` entries). The
 /// kernel lists a `vlan 1` twin for every entry when `default_pvid` is set;
-/// they are collapsed to one `(mac, dev)`.
+/// they are collapsed to one `(mac, dev)`. Only `static` counts as ours:
+/// `permanent` entries are the kernel's own (a port's MAC on enslave).
 pub fn parse_fdb(json: &str) -> Result<Vec<FdbEntry>> {
     let arr: Vec<Value> = serde_json::from_str(json).context("parsing `bridge -j fdb` output")?;
     let mut set = std::collections::BTreeSet::new();
@@ -306,7 +307,7 @@ pub fn parse_fdb(json: &str) -> Result<Vec<FdbEntry>> {
         set.insert(FdbEntry {
             mac,
             dev,
-            is_static: state == "static" || state == "permanent",
+            is_static: state == "static",
         });
     }
     Ok(set.into_iter().collect())

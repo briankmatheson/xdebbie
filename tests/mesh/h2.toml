@@ -1,0 +1,31 @@
+# Mesh test harness: "host" h2 (network namespace). See netns-3host.sh.
+listen = "127.0.0.1:7443"
+state_file = "/tmp/xdebbie-mesh/h2/state.json"
+enable_discovery = false
+
+[mesh]
+# Off in config; run.sh enables it over the API so DELETE /v1/mesh tears
+# everything down (M12) instead of rebuilding from config.
+enabled              = false
+box                  = 2
+bridge               = "br-int"
+vni                  = 23
+dstport              = 6081
+underlay             = "ul0"
+allow_plain_underlay = true
+mtu                  = "auto"
+fdb                  = "derived"
+firewall             = true
+probe_interval_ms    = 1000
+probe_timeout_ms     = 800
+probe_down_after     = 3
+probe_up_after       = 3
+
+[[mesh.peers]]
+box    = 0
+remote = "10.22.0.1"
+
+[[mesh.peers]]
+box    = 1
+remote = "10.22.1.1"
+

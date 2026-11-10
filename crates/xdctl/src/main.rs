@@ -324,13 +324,13 @@ fn print_mesh(doc: &Value) {
             .unwrap_or_else(|| "-".into());
         println!(
             "{:<5} {:<9} {:<16} {:<16} {:<8} {:>8} {:>4}  {}",
-            p["box"],
+            p["box"].to_string(),
             p["device"].as_str().unwrap_or("-"),
             p["remote"].as_str().unwrap_or("-"),
             p["probe"].as_str().unwrap_or("-"),
             state,
             rtt,
-            p["fdb_entries"],
+            p["fdb_entries"].to_string(),
             age
         );
     }
@@ -341,7 +341,7 @@ fn print_mesh(doc: &Value) {
         println!(
             "  {:<20} {:<5} {}{}",
             c["type"].as_str().unwrap_or("?"),
-            c["status"],
+            c["status"].to_string(),
             c["reason"].as_str().unwrap_or(""),
             msg
         );
