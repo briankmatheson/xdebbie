@@ -132,6 +132,18 @@ pub fn discover_storage_pools(uri: &str) -> Result<Vec<StoragePoolInfo>> {
 }
 
 /// Discover all libvirt resources
+/// Cheap connectivity check: `virsh -c <uri> uri`. Errors carry virsh's stderr.
+pub fn probe(uri: &str) -> Result<()> {
+    let out = Command::new("virsh")
+        .args(["-c", uri, "uri"])
+        .output()
+        .context("running virsh")?;
+    if out.status.success() {
+        return Ok(());
+    }
+    anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim())
+}
+
 pub fn discover_libvirt(uri: &str) -> Result<LibvirtResources> {
     info!("Discovering existing libvirt resources on {}", uri);
     Ok(LibvirtResources {
@@ -147,6 +159,21 @@ pub fn discover_libvirt(uri: &str) -> Result<LibvirtResources> {
 /// - systemd-resolved
 /// - Other custom DNS servers
 ///
+/// Split `a.b.c.d/N` into the libvirt `<ip>` gateway (first usable host,
+/// network + 1) and dotted netmask. libvirt's `<ip address>` is the host's
+/// own address on the bridge, not the network number.
+pub fn subnet_gateway(subnet: &str) -> Result<(String, String)> {
+    use std::net::Ipv4Addr;
+    let (addr, prefix) = subnet.split_once('/').unwrap_or((subnet, "24"));
+    let addr: Ipv4Addr = addr.parse().context("network address")?;
+    let prefix: u32 = prefix.parse().context("prefix length")?;
+    anyhow::ensure!((8..=30).contains(&prefix), "prefix length must be 8..=30");
+    let mask = u32::MAX << (32 - prefix);
+    let network = u32::from(addr) & mask;
+    let gateway = Ipv4Addr::from(network + 1);
+    Ok((gateway.to_string(), Ipv4Addr::from(mask).to_string()))
+}
+
 /// DHCP can be disabled by passing empty strings for dhcp_start/dhcp_end.
 /// This is useful when using external DHCP servers like ISC DHCP.
 pub fn ensure_network(
@@ -183,18 +210,8 @@ pub fn ensure_network(
 
     info!("Creating network '{}' on subnet {}", name, subnet);
 
-    // Parse subnet to get network address
-    let parts: Vec<&str> = subnet.split('/').collect();
-    let network_addr = parts[0];
-    let prefix = parts.get(1).unwrap_or(&"24");
-
-    // Calculate netmask from prefix
-    let netmask = match *prefix {
-        "24" => "255.255.255.0",
-        "16" => "255.255.0.0",
-        "8" => "255.0.0.0",
-        _ => "255.255.255.0",
-    };
+    let (gateway, netmask) = subnet_gateway(subnet)
+        .with_context(|| format!("invalid network subnet {subnet:?}"))?;
 
     let bridge_name = format!("virbr-{}", name);
 
@@ -227,7 +244,7 @@ pub fn ensure_network(
 {}  <ip address='{}' netmask='{}'>
 {}  </ip>
 </network>"#,
-        name, bridge_name, dns_tag, network_addr, netmask, dhcp_section
+        name, bridge_name, dns_tag, gateway, netmask, dhcp_section
     );
 
     // Write XML to temp file
@@ -345,4 +362,26 @@ pub fn get_hostname() -> String {
         .ok()
         .and_then(|h| h.into_string().ok())
         .unwrap_or_else(|| "localhost".to_string())
+}
+
+#[cfg(test)]
+mod gateway_tests {
+    use super::subnet_gateway;
+
+    #[test]
+    fn gateway_is_first_host() {
+        assert_eq!(
+            subnet_gateway("192.168.100.0/24").unwrap(),
+            ("192.168.100.1".into(), "255.255.255.0".into())
+        );
+        assert_eq!(
+            subnet_gateway("10.23.0.0/16").unwrap(),
+            ("10.23.0.1".into(), "255.255.0.0".into())
+        );
+        // a host address inside the subnet still yields the network's .1
+        assert_eq!(subnet_gateway("192.168.100.37/24").unwrap().0, "192.168.100.1");
+        assert_eq!(subnet_gateway("192.168.100.0").unwrap().0, "192.168.100.1");
+        assert!(subnet_gateway("192.168.100.0/31").is_err());
+        assert!(subnet_gateway("nope/24").is_err());
+    }
 }

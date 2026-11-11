@@ -150,6 +150,19 @@ pub fn ensure_libvirtd_running() -> Result<()> {
     Ok(())
 }
 
+/// `systemctl status libvirtd` (head) for error messages.
+pub fn libvirtd_status() -> String {
+    Command::new("systemctl")
+        .args(["--no-pager", "-n", "8", "status", "libvirtd"])
+        .output()
+        .map(|o| {
+            let mut t = String::from_utf8_lossy(&o.stdout).into_owned();
+            t.push_str(&String::from_utf8_lossy(&o.stderr));
+            t.lines().take(20).collect::<Vec<_>>().join("\n")
+        })
+        .unwrap_or_else(|e| format!("(systemctl status failed: {e})"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

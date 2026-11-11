@@ -81,7 +81,18 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     info!("Step 2/6: Checking libvirtd availability");
     if let Err(e) = deps::ensure_libvirtd_running() {
         warn!("libvirtd service not available (this is OK if using socket activation): {}", e);
-        info!("Continuing - libvirt may work via socket activation");
+        // Socket activation is fine, but if nothing answers on the URI there is
+        // no point continuing: every later step would fail with a bare
+        // "failed to connect socket". Fail here with the service status.
+        if let Err(probe) = libvirt_setup::probe(&opts.libvirt_uri) {
+            let status = deps::libvirtd_status();
+            anyhow::bail!(
+                "libvirt is not reachable on {} ({probe}); libvirtd failed to start:\n{status}\n\
+                 Fix libvirtd (see `journalctl -u libvirtd`) and re-run `xdebbied bootstrap`.",
+                opts.libvirt_uri
+            );
+        }
+        info!("libvirt answers on {} via socket activation - continuing", opts.libvirt_uri);
     }
 
     // Step 3: Discover existing resources

@@ -8,6 +8,7 @@ edition = "2024"
 description = "Self-bootstrapping VM orchestrator for libvirt with cluster support"
 
 [package.metadata.deb]
+revision = "2"
 maintainer = "xdebbie Team"
 copyright = "2026, xdebbie Team"
 license-file = ["../../LICENSE", "0"]
