@@ -1,14 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-use std::{net::SocketAddr, path::PathBuf};
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    path::PathBuf,
+};
 
 use xdebbie_core::{Host, PlacementPolicy};
 use serde::Deserialize;
+use tracing::warn;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Config {
-    #[serde(default = "d_listen")]
-    pub listen: SocketAddr,
+    /// API listen address. Omit (or set to 0.0.0.0:7443) to auto-detect the
+    /// IP of the interface that holds the default route. Explicit value always
+    /// wins.
+    #[serde(default)]
+    pub listen: Option<SocketAddr>,
     #[serde(default = "d_state")]
     pub state_file: PathBuf,
     /// File holding the API bearer token. Unset = no auth (lab use only).
@@ -58,10 +65,6 @@ fn d_discovery() -> bool {
 fn d_multicast() -> String {
     "239.0.0.42:7442".to_string()
 }
-
-fn d_listen() -> SocketAddr {
-    "127.0.0.1:7443".parse().unwrap()
-}
 fn d_state() -> PathBuf {
     "/var/lib/xdebbie/state.json".into()
 }
@@ -87,10 +90,99 @@ fn d_seed() -> Vec<String> {
     .to_vec()
 }
 
+/// Read `/proc/net/route` and return the IP address of the interface that
+/// carries the default route (destination == 0.0.0.0, mask == 0.0.0.0).
+/// Returns `None` if no default route is found or any parse step fails.
+fn default_route_ip() -> Option<Ipv4Addr> {
+    let table = std::fs::read_to_string("/proc/net/route").ok()?;
+    // Find the default-route line: destination field (col 1) == "00000000"
+    // and mask field (col 7) == "00000000".
+    let iface = table.lines().skip(1).find_map(|line| {
+        let mut cols = line.split_whitespace();
+        let iface = cols.next()?;
+        let dest  = cols.next()?;
+        // skip flags, refcnt, use, metric
+        let _flags  = cols.next()?;
+        let _refs   = cols.next()?;
+        let _use    = cols.next()?;
+        let _metric = cols.next()?;
+        let mask    = cols.next()?;
+        if dest == "00000000" && mask == "00000000" {
+            Some(iface.to_string())
+        } else {
+            None
+        }
+    })?;
+
+    // Walk the interface list via getifaddrs to find the IPv4 address
+    // assigned to that interface.
+    // SAFETY: standard getifaddrs usage; all pointers are checked before use.
+    unsafe {
+        let mut ifap: *mut libc::ifaddrs = std::ptr::null_mut();
+        if libc::getifaddrs(&mut ifap) != 0 {
+            return None;
+        }
+        let mut cursor = ifap;
+        let mut found: Option<Ipv4Addr> = None;
+        while !cursor.is_null() {
+            let ifa = &*cursor;
+            if !ifa.ifa_name.is_null() && !ifa.ifa_addr.is_null() {
+                let name = std::ffi::CStr::from_ptr(ifa.ifa_name)
+                    .to_string_lossy();
+                if name == iface {
+                    let sa = &*(ifa.ifa_addr as *const libc::sockaddr_in);
+                    if (*ifa.ifa_addr).sa_family as i32 == libc::AF_INET {
+                        let octets = sa.sin_addr.s_addr.to_ne_bytes();
+                        found = Some(Ipv4Addr::from(octets));
+                        break;
+                    }
+                }
+            }
+            cursor = ifa.ifa_next;
+        }
+        libc::freeifaddrs(ifap);
+        found
+    }
+}
+
+const DEFAULT_PORT: u16 = 7443;
+
 impl Config {
     pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
         Ok(toml::from_str(&std::fs::read_to_string(path)?)?)
     }
+
+    /// Resolve the effective listen address.
+    ///
+    /// Priority:
+    ///   1. `listen` explicitly set in config — used as-is.
+    ///   2. Auto-detected IP of the default-route interface, port 7443.
+    ///   3. Fallback: `127.0.0.1:7443` (with a warning).
+    pub fn effective_listen(&self) -> SocketAddr {
+        // 1. Explicit config value.
+        if let Some(addr) = self.listen {
+            return addr;
+        }
+
+        // 2. Auto-detect from default route.
+        if let Some(ip) = default_route_ip() {
+            let addr = SocketAddr::new(IpAddr::V4(ip), DEFAULT_PORT);
+            tracing::info!(
+                "listen not configured — using default-route interface address {}",
+                addr
+            );
+            return addr;
+        }
+
+        // 3. Last-resort fallback.
+        warn!(
+            "could not determine default-route IP; falling back to 127.0.0.1:{}. \
+             Set `listen` in xdebbied.toml to fix peer discovery.",
+            DEFAULT_PORT
+        );
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), DEFAULT_PORT)
+    }
+
     /// Directory holding `state.json`, `mesh.json`, ...
     pub fn state_dir(&self) -> PathBuf {
         self.state_file

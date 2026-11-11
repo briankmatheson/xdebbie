@@ -130,6 +130,7 @@ async fn main() -> anyhow::Result<()> {
 
     if matches!(cli.cmd, Some(Cmd::Serve { mesh_only: true, .. })) {
         let token = load_token(&cfg)?;
+        let listen = cfg.effective_listen();
         tokio::spawn(mesh.clone().run());
         let v1 = api::mesh::router(api::mesh::MeshApi { mesh })
             .layer(axum::middleware::from_fn_with_state(token, api::bearer_auth));
@@ -137,7 +138,7 @@ async fn main() -> anyhow::Result<()> {
             .route("/healthz", axum::routing::get(|| async { "ok" }))
             .nest("/v1", v1);
         info!("xdebbied --mesh-only: API + mesh module only");
-        return serve(&cfg, app).await;
+        return serve(&cfg, listen, app).await;
     }
 
     // Initialize LVM if configured
@@ -219,6 +220,9 @@ async fn main() -> anyhow::Result<()> {
 
     let token = load_token(&cfg)?;
 
+    // Resolve listen address once: explicit config > default-route IP > loopback.
+    let listen = cfg.effective_listen();
+
     // Start discovery engine if enabled
     let discovery_cfg = discovery::DiscoveryConfig {
         enable_discovery: cfg.enable_discovery,
@@ -226,7 +230,7 @@ async fn main() -> anyhow::Result<()> {
         api_url: format!(
             "{}://{}",
             if cfg.tls_cert.is_some() { "https" } else { "http" },
-            cfg.listen
+            listen
         ),
         hostname: hostname::get()
             .ok()
@@ -263,7 +267,7 @@ async fn main() -> anyhow::Result<()> {
         token,
         mesh,
     });
-    serve(&cfg, app).await
+    serve(&cfg, listen, app).await
 }
 
 fn load_token(cfg: &config::Config) -> anyhow::Result<Option<Arc<String>>> {
@@ -281,8 +285,8 @@ fn load_token(cfg: &config::Config) -> anyhow::Result<Option<Arc<String>>> {
     })
 }
 
-/// Serve `app` on `cfg.listen`, HTTPS if a cert/key pair is configured.
-async fn serve(cfg: &config::Config, app: axum::Router) -> anyhow::Result<()> {
+/// Serve `app` on `listen`, HTTPS if a cert/key pair is configured.
+async fn serve(cfg: &config::Config, listen: std::net::SocketAddr, app: axum::Router) -> anyhow::Result<()> {
     match (&cfg.tls_cert, &cfg.tls_key) {
         (Some(c), Some(k)) => {
             let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
@@ -295,20 +299,20 @@ async fn serve(cfg: &config::Config, app: axum::Router) -> anyhow::Result<()> {
                 let _ = tokio::signal::ctrl_c().await;
                 h2.graceful_shutdown(Some(std::time::Duration::from_secs(10)));
             });
-            info!(listen = %cfg.listen, "xdebbied serving https");
-            axum_server::bind_rustls(cfg.listen, tls)
+            info!(%listen, "xdebbied serving https");
+            axum_server::bind_rustls(listen, tls)
                 .handle(h)
                 .serve(app.into_make_service())
                 .await?;
         }
         (None, None) => {
-            if !cfg.listen.ip().is_loopback() {
+            if !listen.ip().is_loopback() {
                 tracing::warn!(
                     "serving plain HTTP on a non-loopback address; set tls_cert/tls_key"
                 );
             }
-            let l = tokio::net::TcpListener::bind(cfg.listen).await?;
-            info!(listen = %cfg.listen, "xdebbied serving http");
+            let l = tokio::net::TcpListener::bind(listen).await?;
+            info!(%listen, "xdebbied serving http");
             axum::serve(l, app)
                 .with_graceful_shutdown(async {
                     let _ = tokio::signal::ctrl_c().await;
