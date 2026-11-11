@@ -11,7 +11,7 @@ use std::{sync::Arc, time::Duration};
 
 use chrono::Utc;
 use futures::future::join_all;
-use xdebbie_core::{Address, Host, PowerIntent, Vm, VmPhase, place};
+use xdebbie_core::{Address, Disk, Host, PowerIntent, Storage, Vm, VmPhase, place};
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -39,6 +39,9 @@ pub struct Patch {
     pub message: Option<Option<String>>,
     pub observed_reboot_generation: Option<u64>,
     pub clear_migration: bool,
+    /// Network disks allocated/attached so far (persisted even when the
+    /// rest of provisioning failed, so nothing is allocated twice).
+    pub disks: Option<Vec<Disk>>,
 }
 
 impl Patch {
@@ -69,6 +72,9 @@ impl Patch {
         }
         if self.clear_migration {
             vm.migrate_to = None;
+        }
+        if let Some(d) = self.disks {
+            vm.disks = d;
         }
         vm.updated = Utc::now();
     }
@@ -215,6 +221,10 @@ impl<H: Hypervisor> Reconciler<H> {
         let host = vm.host.as_ref().and_then(|h| st.hosts.get(h));
         if vm.phase == VmPhase::Deleting {
             let Some(h) = host else {
+                if !vm.disks.is_empty() {
+                    tracing::warn!(vm = %vm.spec.name, "deleting without a host; its abe volumes are left behind: {:?}",
+                        vm.disks.iter().map(|d| format!("{} {}", d.server, d.id)).collect::<Vec<_>>());
+                }
                 return Patch {
                     remove: true,
                     ..Default::default()
@@ -244,25 +254,39 @@ impl<H: Hypervisor> Reconciler<H> {
 
         match vm.phase {
             VmPhase::Provisioning => {
-                if let Err(e) = self.hv.provision(h, vm).await {
-                    return Patch::msg(e.to_string());
+                let mut vm = vm.clone();
+                let mut p = Patch::default();
+                if vm.spec.storage == Storage::Abe {
+                    let mut disks = vm.disks.clone();
+                    let r = self.hv.prepare_disks(h, &vm, &mut disks).await;
+                    if disks != vm.disks {
+                        p.disks = Some(disks.clone());
+                        vm.disks = disks;
+                    }
+                    if let Err(e) = r {
+                        p.message = Some(Some(format!("{e:#}")));
+                        return p;
+                    }
+                }
+                if let Err(e) = self.hv.provision(h, &vm).await {
+                    p.message = Some(Some(e.to_string()));
+                    return p;
                 }
                 if vm.power == PowerIntent::On
-                    && let Err(e) = self.hv.start(h, vm).await
+                    && let Err(e) = self.hv.start(h, &vm).await
                 {
-                    return Patch::msg(e.to_string());
+                    p.message = Some(Some(e.to_string()));
+                    return p;
                 }
                 info!(vm = %vm.spec.name, host = %h.name, "provisioned");
-                Patch {
-                    phase: Some(if vm.power == PowerIntent::On {
-                        VmPhase::Running
-                    } else {
-                        VmPhase::Stopped
-                    }),
-                    message: Some(None),
-                    observed_reboot_generation: Some(vm.reboot_generation),
-                    ..Default::default()
-                }
+                p.phase = Some(if vm.power == PowerIntent::On {
+                    VmPhase::Running
+                } else {
+                    VmPhase::Stopped
+                });
+                p.message = Some(None);
+                p.observed_reboot_generation = Some(vm.reboot_generation);
+                p
             }
             VmPhase::Migrating => {
                 let Some(dst) = vm.migrate_to.as_ref().and_then(|d| st.hosts.get(d)) else {
@@ -358,8 +382,41 @@ mod tests {
     #[derive(Default)]
     struct Fake {
         doms: Mutex<BTreeMap<(String, String), DomState>>,
+        /// abe simulation: how many volumes were allocated / released, and
+        /// whether the next populate should fail (once).
+        allocated: Mutex<u32>,
+        released: Mutex<Vec<String>>,
+        fail_populate_once: Mutex<bool>,
     }
     impl Hypervisor for Fake {
+        async fn prepare_disks(&self, h: &Host, v: &Vm, disks: &mut Vec<Disk>) -> anyhow::Result<()> {
+            if v.spec.storage != Storage::Abe {
+                return Ok(());
+            }
+            let server = h.abe.clone().ok_or_else(|| anyhow::anyhow!("host {} has no ABE", h.name))?;
+            if !disks.iter().any(|d| d.role == xdebbie_core::DiskRole::Root) {
+                let mut n = self.allocated.lock().unwrap();
+                *n += 1;
+                disks.push(Disk {
+                    role: xdebbie_core::DiskRole::Root,
+                    server,
+                    traddr: "10.22.0.1".into(),
+                    port: "44001".into(),
+                    id: format!("{:032x}", *n),
+                    bytes: v.spec.disk_gib << 30,
+                    populated: false,
+                });
+            }
+            let mut fail = self.fail_populate_once.lock().unwrap();
+            if *fail {
+                *fail = false;
+                anyhow::bail!("qemu-img convert: boom");
+            }
+            for d in disks.iter_mut() {
+                d.populated = true;
+            }
+            Ok(())
+        }
         async fn inventory(&self, _: &Host) -> anyhow::Result<Capacity> {
             Ok(Capacity {
                 cpus: 16,
@@ -405,6 +462,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .remove(&(h.name.clone(), v.domain_name()));
+            self.released.lock().unwrap().extend(v.disks.iter().map(|d| d.id.clone()));
             Ok(())
         }
         async fn tap_owners(&self, _: &Host) -> anyhow::Result<std::collections::HashMap<String, String>> {
@@ -463,6 +521,7 @@ mod tests {
                 disk_gib: 20,
                 data_disk_gib: None,
                 ip: None,
+                storage: Default::default(),
                 image: "img".into(),
                 placement: Placement {
                     anti_affinity_group: Some("cp".into()),
@@ -485,6 +544,7 @@ mod tests {
                             host: None,
                             addresses: vec![],
                             ip: None,
+                            disks: Vec::new(),
                             message: None,
                             migrate_to: None,
                             reboot_generation: 0,
@@ -533,5 +593,96 @@ mod tests {
         r.tick().await.unwrap();
         assert!(store.read().await.vms.is_empty());
         assert!(r.hv.doms.lock().unwrap().is_empty());
+    }
+
+    fn vm(spec: VmSpec) -> Vm {
+        let now = Utc::now();
+        Vm {
+            id: Uuid::new_v4(),
+            spec,
+            phase: VmPhase::Pending,
+            power: PowerIntent::On,
+            host: None,
+            addresses: vec![],
+            ip: None,
+            disks: Vec::new(),
+            message: None,
+            migrate_to: None,
+            reboot_generation: 0,
+            observed_reboot_generation: 0,
+            created: now,
+            updated: now,
+        }
+    }
+
+    #[tokio::test]
+    async fn abe_disks_survive_a_failed_provision_and_are_released_on_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("s.json")).unwrap();
+        let mut h = host("a", "r1");
+        h.abe = Some("http://10.22.0.1:80".into());
+        store.update(|s| { s.hosts.insert("a".into(), h); }).await.unwrap();
+        let fake = Arc::new(Fake::default());
+        *fake.fail_populate_once.lock().unwrap() = true;
+        let r = Reconciler { store: store.clone(), hv: fake.clone(), cfg: Arc::new(cfg()), mesh: None };
+        let v = vm(VmSpec {
+            name: "abe-vm".into(),
+            vcpus: 1,
+            memory_mib: 512,
+            disk_gib: 8,
+            data_disk_gib: None,
+            ip: None,
+            storage: Storage::Abe,
+            image: "img".into(),
+            placement: Default::default(),
+            user_data: None,
+            meta_data: Default::default(),
+            labels: Default::default(),
+        });
+        let id = v.id;
+        store.update(|s| { s.vms.insert(id, v); }).await.unwrap();
+
+        r.tick().await.unwrap(); // place + prepare_disks fails after allocating
+        {
+            let s = store.read().await;
+            let v = &s.vms[&id];
+            assert_eq!(v.phase, VmPhase::Provisioning);
+            assert_eq!(v.disks.len(), 1, "allocation persisted despite the failure");
+            assert!(!v.disks[0].populated);
+            assert!(v.message.as_deref().unwrap().contains("boom"));
+        }
+        r.tick().await.unwrap(); // retry: no new allocation, populate, provision, start
+        {
+            let s = store.read().await;
+            let v = &s.vms[&id];
+            assert_eq!(v.phase, VmPhase::Running);
+            assert_eq!(*fake.allocated.lock().unwrap(), 1, "no second volume");
+            assert!(v.disks[0].populated);
+            assert_eq!(v.message, None);
+        }
+        store.update(|s| { s.vms.get_mut(&id).unwrap().phase = VmPhase::Deleting; }).await.unwrap();
+        r.tick().await.unwrap();
+        assert!(store.read().await.vms.is_empty());
+        assert_eq!(fake.released.lock().unwrap().as_slice(), [format!("{:032x}", 1)]);
+    }
+
+    #[tokio::test]
+    async fn abe_vm_on_a_host_without_abe_stays_provisioning_with_a_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("s.json")).unwrap();
+        store.update(|s| { s.hosts.insert("a".into(), host("a", "r1")); }).await.unwrap();
+        let r = Reconciler { store: store.clone(), hv: Arc::new(Fake::default()), cfg: Arc::new(cfg()), mesh: None };
+        let v = vm(VmSpec {
+            name: "abe-vm".into(), vcpus: 1, memory_mib: 512, disk_gib: 8, data_disk_gib: None, ip: None,
+            storage: Storage::Abe, image: "img".into(), placement: Default::default(),
+            user_data: None, meta_data: Default::default(), labels: Default::default(),
+        });
+        let id = v.id;
+        store.update(|s| { s.vms.insert(id, v); }).await.unwrap();
+        r.tick().await.unwrap();
+        let s = store.read().await;
+        assert_eq!(s.vms[&id].phase, VmPhase::Provisioning);
+        assert!(s.vms[&id].message.as_deref().unwrap().contains("no ABE"));
+        assert!(s.vms[&id].disks.is_empty());
     }
 }

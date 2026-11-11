@@ -1,0 +1,8 @@
+#!/bin/bash
+# Stub qemu-img for tests/abe/run.sh: record the call and "fill" the target.
+WORK=@WORK@
+echo "$*" >> "$WORK/qemu-img.log"
+dst="${@: -1}"; src="${@: -2:1}"
+[ -e "$src" ] || { echo "no source $src" >&2; exit 1; }
+[ -e "$dst" ] || { echo "no target $dst" >&2; exit 1; }
+echo "FILLED-FROM:$src" > "$dst"

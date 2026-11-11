@@ -1,0 +1,29 @@
+#!/bin/bash
+# Stub virsh for tests/abe/run.sh: just enough libvirt for one host and a
+# couple of domains. State lives under $WORK/doms and $WORK/pool.
+WORK=@WORK@
+shift 3  # -q -c <uri>
+echo "$*" >> "$WORK/virsh.log"
+DOMS="$WORK/doms"; POOL="$WORK/pool"
+case "$1" in
+  nodeinfo)     printf 'CPU(s):              8\nMemory size:         16777216 KiB\n' ;;
+  pool-info)    printf 'Name: default\nAvailable:      107374182400\n' ;;
+  pool-refresh) ;;
+  vol-path)     echo "$POOL/$4" ;;
+  vol-info)     [ -f "$POOL/$4" ] || { echo "error: no vol" >&2; exit 1; } ;;
+  vol-create-as) : > "$POOL/$3" ;;
+  vol-upload)   cp "$5" "$POOL/$4" ;;
+  vol-delete)   rm -f "$POOL/$4" ;;
+  define)       name=$(sed -n 's/.*<name>\(.*\)<\/name>.*/\1/p' "$2")
+                cp "$2" "$DOMS/$name.xml"; echo off > "$DOMS/$name.state" ;;
+  autostart)    ;;
+  start)        echo running > "$DOMS/$2.state" ;;
+  destroy)      echo off > "$DOMS/$2.state" ;;
+  undefine)     rm -f "$DOMS/$2".* ;;
+  domstate)     [ -f "$DOMS/$2.state" ] || { echo "error: failed to get domain '$2'" >&2; exit 1; }
+                [ "$(cat "$DOMS/$2.state")" = running ] && echo running || echo "shut off" ;;
+  list)         ls "$DOMS" 2>/dev/null | sed -n 's/\.state$//p' ;;
+  domifaddr)    echo " vnet0 52:54:00:00:00:01 ipv4 10.23.0.50/16" ;;
+  domiflist)    printf 'Interface Type Source Model MAC\n----\n' ;;
+esac
+exit 0

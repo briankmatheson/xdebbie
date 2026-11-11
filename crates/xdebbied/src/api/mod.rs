@@ -418,6 +418,7 @@ async fn put_vm(
                 host: None,
                 addresses,
                 ip,
+                disks: Vec::new(),
                 message: None,
                 migrate_to: None,
                 reboot_generation: 0,

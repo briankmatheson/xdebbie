@@ -5,6 +5,37 @@ All notable changes to XDebbie will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-11-11
+
+### Added
+- **ABE-backed VM disks** (`spec.storage = abe`, `docs/storage.md`). Each
+  hypervisor runs an [ABE](https://github.com/brianmatheson/abe) NVMe/TCP
+  exporter (`[[hosts]].abe = "http://…"`); a VM scheduled there gets its root
+  (and optional data) volume from that ABE, attached on the host with
+  `nvme connect … --ctrl-loss-tmo -1`, addressed by the stable
+  `/dev/disk/by-id/nvme-uuid.<id>` link, root filled once from the base image
+  with `qemu-img convert -n`. Volumes are recorded in `Vm.disks[]` (server,
+  traddr, port, id, bytes, populated) *before* provisioning continues, so a
+  failure or crash never allocates twice; `start` re-attaches after a host
+  reboot; delete disconnects and removes every volume. Local storage is
+  unchanged and remains the default.
+- `xdctl vm create --storage abe`, `xdctl host add --abe URL`; CAPX
+  `XDebbie8sMachineTemplate.spec.template.spec.storage` and `dataDiskGib`.
+- Config: `nvme`, `qemu_img`, `nvme_sys` (binary/sysfs paths, for tests).
+- `tests/abe/run.sh`: unprivileged end-to-end with the real daemon, a fake
+  ABE API, stub nvme/qemu-img/virsh and a tmpfs over `/dev/disk/by-id`
+  (10 checks incl. retry-without-leak and reboot re-attach).
+
+### Changed
+- `Hypervisor` trait gains `prepare_disks(host, vm, &mut disks)` (default
+  no-op) and `Patch.disks`; the reconciler persists partial disk allocation
+  even when provisioning fails.
+- Live migration of `storage = abe` VMs is refused with a clear message
+  (attaching on a remote host is the next step).
+
+### Requires
+- abe ≥ 0.2.0 on the hosts (`device_uuid`, `traddr` in replies, `raw=true`).
+
 ## [0.6.0] - 2026-11-11
 
 ### Added

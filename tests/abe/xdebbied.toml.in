@@ -1,0 +1,16 @@
+listen = "127.0.0.1:7443"
+state_file = "@WORK@/state.json"
+enable_discovery = false
+reconcile_interval_secs = 1
+virsh = "@WORK@/bin/virsh"
+nvme = "@WORK@/bin/nvme"
+qemu_img = "@WORK@/bin/qemu-img"
+nvme_sys = "@WORK@/sys"
+seed_command = ["cp", "{user}", "{out}"]
+
+[[hosts]]
+name = "h1"
+uri = "test:///default"
+bridge = "br0"
+storage_pool = "default"
+abe = "http://127.0.0.1:8000"

@@ -35,6 +35,14 @@ pub struct Config {
     /// Path to the `virsh` binary on the xdebbied machine.
     #[serde(default = "d_virsh")]
     pub virsh: String,
+    /// `nvme` and `qemu-img` binaries used for `storage = abe` disks, and the
+    /// sysfs directory listing NVMe controllers (overridable for tests).
+    #[serde(default = "d_nvme")]
+    pub nvme: String,
+    #[serde(default = "d_qemu_img")]
+    pub qemu_img: String,
+    #[serde(default = "d_nvme_sys")]
+    pub nvme_sys: String,
     /// Command used to build the NoCloud seed ISO. `{out}`, `{user}`,
     /// `{meta}`, `{net}`, `{vendor}` are substituted.
     #[serde(default = "d_seed")]
@@ -63,6 +71,15 @@ pub struct Config {
     pub network: Option<crate::dhcp::NetworkConfig>,
 }
 
+fn d_nvme() -> String {
+    "nvme".into()
+}
+fn d_qemu_img() -> String {
+    "qemu-img".into()
+}
+fn d_nvme_sys() -> String {
+    "/sys/class/nvme".into()
+}
 fn d_discovery() -> bool {
     true
 }

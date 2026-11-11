@@ -327,6 +327,7 @@ mod tests {
                 image: "img".into(),
                 data_disk_gib: None,
                 ip: None,
+                storage: Default::default(),
                 placement: Placement::default(),
                 user_data: None,
                 meta_data: Default::default(),
@@ -339,6 +340,7 @@ mod tests {
                 .map(|a| vec![Address { kind: "InternalIP".into(), address: a.into() }])
                 .unwrap_or_default(),
             ip,
+            disks: Vec::new(),
             message: None,
             migrate_to: None,
             reboot_generation: 0,

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! xdebbied — a small VM scheduler and lifecycle manager for libvirt hosts.
 
+mod abe;
 mod api;
 mod bootstrap;
 mod config;
@@ -170,6 +171,12 @@ async fn main() -> anyhow::Result<()> {
         seed_command: cfg.seed_command.clone(),
         lvm: lvm_manager,
         overlay: mesh.overlay.clone(),
+        abe: abe::Client::new(),
+        nvme: abe::Nvme {
+            nvme_bin: cfg.nvme.clone(),
+            qemu_img_bin: cfg.qemu_img.clone(),
+            sys_class: cfg.nvme_sys.clone(),
+        },
     });
 
     match cli.cmd {

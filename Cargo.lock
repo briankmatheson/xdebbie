@@ -313,7 +313,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "capx"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -403,6 +403,15 @@ dependencies = [
  "anstyle",
  "clap_lex",
  "strsim",
+]
+
+[[package]]
+name = "clap_complete"
+version = "4.6.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "037e2a1a92236d0aff7e845093f64661d6df4c02c9fcc61a60e9e1d736fa392f"
+dependencies = [
+ "clap",
 ]
 
 [[package]]
@@ -3407,11 +3416,12 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "xdctl"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "clap_complete",
  "libc",
  "reqwest",
  "serde",
@@ -3422,7 +3432,7 @@ dependencies = [
 
 [[package]]
 name = "xdebbie-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "chrono",
  "serde",
@@ -3433,7 +3443,7 @@ dependencies = [
 
 [[package]]
 name = "xdebbied"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -3447,6 +3457,7 @@ dependencies = [
  "libc",
  "num_cpus",
  "rand 0.8.8",
+ "reqwest",
  "rustls",
  "serde",
  "serde_json",

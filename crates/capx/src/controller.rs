@@ -359,8 +359,16 @@ async fn apply_machine(
             memory_mib: fm.spec.memory_mib,
             disk_gib: fm.spec.disk_gib,
             image: fm.spec.image.clone(),
-            data_disk_gib: None, // TODO: expose in XDebbie8sMachine CRD
-            ip: None,            // allocated by xdebbied from [network]
+            data_disk_gib: fm.spec.data_disk_gib,
+            ip: None, // allocated by xdebbied from [network]
+            storage: fm
+                .spec
+                .storage
+                .as_deref()
+                .map(str::parse)
+                .transpose()
+                .map_err(|e: String| anyhow::anyhow!("{}: spec.storage: {e}", fm.name_any()))?
+                .unwrap_or_default(),
             placement: Placement {
                 failure_domain: machine
                     .data

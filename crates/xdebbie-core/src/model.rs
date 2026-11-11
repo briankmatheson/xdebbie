@@ -33,6 +33,11 @@ pub struct Host {
     /// CPU overcommit ratio (vCPU : pCPU). 1.0 = no overcommit.
     #[serde(alias = "cpu_overcommit", default = "default_cpu_ratio")]
     pub cpu_overcommit: f64,
+    /// ABE (NVMe-oF block exporter) API on this host, e.g. `http://10.22.0.1:80`.
+    /// VMs with `storage = abe` get their disks from the ABE of the host they
+    /// are scheduled on; any host can attach them later.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub abe: Option<String>,
     /// Memory overcommit ratio. Keep at 1.0 unless you know why not.
     #[serde(alias = "mem_overcommit", default = "one")]
     pub mem_overcommit: f64,
@@ -135,6 +140,81 @@ pub struct VmSpec {
     /// from `[network]` at creation; either way the result lands in `Vm::ip`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ip: Option<std::net::Ipv4Addr>,
+    /// Where the disks live: the host's local pool/LVM (default) or ABE
+    /// volumes exported over NVMe/TCP, which any host can attach.
+    #[serde(default, skip_serializing_if = "Storage::is_local")]
+    pub storage: Storage,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Storage {
+    #[default]
+    Local,
+    Abe,
+}
+
+impl Storage {
+    pub fn is_local(&self) -> bool {
+        *self == Storage::Local
+    }
+}
+
+impl std::str::FromStr for Storage {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s {
+            "local" => Ok(Storage::Local),
+            "abe" => Ok(Storage::Abe),
+            other => Err(format!("unknown storage {other:?} (local|abe)")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum DiskRole {
+    Root,
+    Data,
+}
+
+/// A network block volume backing one of the VM's disks. Allocated once at
+/// provisioning time and kept for the VM's life; the id is the NVMe
+/// subsystem NQN on the exporting host.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Disk {
+    pub role: DiskRole,
+    /// ABE API that owns the volume (for re-export / delete).
+    pub server: String,
+    /// NVMe/TCP transport address and service id the exporter advertises.
+    pub traddr: String,
+    pub port: String,
+    /// Volume id == NQN (32 hex chars).
+    pub id: String,
+    pub bytes: u64,
+    /// Root disks are filled from the base image once; this records that it
+    /// happened so an interrupted provision never boots a blank disk.
+    #[serde(default)]
+    pub populated: bool,
+}
+
+impl Disk {
+    pub fn nqn(&self) -> &str {
+        &self.id
+    }
+    /// Stable host path udev creates from the namespace's device_uuid.
+    pub fn dev_path(&self) -> String {
+        let id = &self.id;
+        if id.len() == 32 {
+            format!(
+                "/dev/disk/by-id/nvme-uuid.{}-{}-{}-{}-{}",
+                &id[0..8], &id[8..12], &id[12..16], &id[16..20], &id[20..32]
+            )
+        } else {
+            format!("/dev/disk/by-id/nvme-uuid.{id}")
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -203,6 +283,9 @@ pub struct Vm {
     /// the (MAC, IP) pair is part of the VM record rather than a lease.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ip: Option<std::net::Ipv4Addr>,
+    /// Network block volumes backing this VM (empty for local storage).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disks: Vec<Disk>,
     #[serde(default)]
     pub message: Option<String>,
     /// Set when a migration has been requested.
@@ -273,4 +356,36 @@ pub struct MigrateRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiError {
     pub error: String,
+}
+
+#[cfg(test)]
+mod disk_tests {
+    use super::*;
+
+    #[test]
+    fn dev_path_is_the_dashed_uuid_by_id_link() {
+        let d = Disk {
+            role: DiskRole::Root,
+            server: "http://10.22.0.1".into(),
+            traddr: "10.22.0.1".into(),
+            port: "44001".into(),
+            id: "0123456789abcdef0123456789abcdef".into(),
+            bytes: 1,
+            populated: false,
+        };
+        assert_eq!(
+            d.dev_path(),
+            "/dev/disk/by-id/nvme-uuid.01234567-89ab-cdef-0123-456789abcdef"
+        );
+        assert_eq!(d.nqn(), "0123456789abcdef0123456789abcdef");
+    }
+
+    #[test]
+    fn storage_defaults_to_local_and_round_trips() {
+        let v: serde_json::Value = serde_json::from_str(r#"{"storage":"abe"}"#).unwrap();
+        assert_eq!(serde_json::from_value::<Storage>(v["storage"].clone()).unwrap(), Storage::Abe);
+        assert_eq!("local".parse::<Storage>().unwrap(), Storage::Local);
+        assert!("nfs".parse::<Storage>().is_err());
+        assert_eq!(Storage::default(), Storage::Local);
+    }
 }

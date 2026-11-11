@@ -213,6 +213,7 @@ mod tests {
             storage_pool: "default".into(),
             bridge: "br0".into(),
             cpu_overcommit: 1.0,
+            abe: None,
             mem_overcommit: 1.0,
             reserved_memory_mib: 0,
             reserved_cpus: 0,
@@ -233,6 +234,7 @@ mod tests {
             disk_gib: 20,
             data_disk_gib: None,
             ip: None,
+            storage: Default::default(),
             image: "debian-13".into(),
             placement: Placement {
                 anti_affinity_group: group.map(Into::into),
@@ -252,6 +254,7 @@ mod tests {
             host: Some(host.into()),
             addresses: vec![],
             ip: None,
+            disks: Vec::new(),
             message: None,
             migrate_to: None,
             reboot_generation: 0,

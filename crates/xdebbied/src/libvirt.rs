@@ -5,11 +5,11 @@
 
 use std::{collections::{BTreeMap, HashMap}, future::Future, path::Path, sync::Arc};
 
-use anyhow::{Context, Result, bail};
-use xdebbie_core::{Address, Capacity, Host, Vm};
+use anyhow::{Context, Result, anyhow, bail};
+use xdebbie_core::{Address, Capacity, Disk, DiskRole, Host, Storage, Vm};
 use tokio::process::Command;
 
-use crate::lvm::LvmManager;
+use crate::{abe, lvm::LvmManager};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DomState {
@@ -24,6 +24,18 @@ pub enum DomState {
 pub trait Hypervisor: Send + Sync + 'static {
     fn inventory(&self, host: &Host) -> impl Future<Output = Result<Capacity>> + Send;
     fn state(&self, host: &Host, vm: &Vm) -> impl Future<Output = Result<Option<DomState>>> + Send;
+    /// Allocate and attach the VM's network disks (`storage = abe`) before
+    /// `provision`. Appends to `disks` as it goes, so the reconciler can
+    /// persist partial progress and a retry never allocates twice.
+    fn prepare_disks(
+        &self,
+        host: &Host,
+        vm: &Vm,
+        disks: &mut Vec<Disk>,
+    ) -> impl Future<Output = Result<()>> + Send {
+        let _ = (host, vm, disks);
+        async { Ok(()) }
+    }
     fn provision(&self, host: &Host, vm: &Vm) -> impl Future<Output = Result<()>> + Send;
     fn start(&self, host: &Host, vm: &Vm) -> impl Future<Output = Result<()>> + Send;
     fn shutdown(
@@ -48,6 +60,9 @@ pub struct Virsh {
     pub lvm: Option<LvmManager>,
     /// Geneve mesh view: MTU for NICs on the overlay bridge, if managed.
     pub overlay: Arc<crate::mesh::Overlay>,
+    /// ABE API client and host-side NVMe ops for `storage = abe` VMs.
+    pub abe: abe::Client,
+    pub nvme: abe::Nvme,
 }
 
 impl Virsh {
@@ -115,6 +130,9 @@ impl Virsh {
 
     /// Thin qcow2 overlay on the host-local base image, or LVM snapshot if configured.
     async fn ensure_disk(&self, host: &Host, vm: &Vm) -> Result<()> {
+        if vm.spec.storage == Storage::Abe {
+            return Ok(()); // prepare_disks did it
+        }
         // Use LVM if configured
         if let Some(ref lvm) = self.lvm {
             let _device = lvm.create_root_disk(&vm.domain_name(), &vm.spec.image, vm.spec.disk_gib)
@@ -147,6 +165,52 @@ impl Virsh {
         .await
         .context("creating root disk (is the base image in the pool?)")?;
         Ok(())
+    }
+
+    /// Where the base image lives on this host and in what format, for
+    /// filling an ABE root disk.
+    async fn base_image(&self, host: &Host, image: &str) -> Result<(String, &'static str)> {
+        if let Some(ref lvm) = self.lvm {
+            let lv = if image.starts_with("base-") { image.to_string() } else { format!("base-{image}") };
+            let path = format!("/dev/{}/{lv}", lvm.vg_name());
+            if !Path::new(&path).exists() {
+                bail!("base image {path} not found (import it with lvm-import-base)");
+            }
+            return Ok((path, "raw"));
+        }
+        let path = self
+            .run(&host.uri, &["vol-path", "--pool", &host.storage_pool, &format!("{image}.qcow2")])
+            .await
+            .context("locating base image in the pool")?;
+        Ok((path.trim().to_string(), "qcow2"))
+    }
+
+    /// Attach every disk of an ABE-backed VM on this host (after a host
+    /// reboot the domain still exists but its devices do not).
+    async fn ensure_connected(&self, vm: &Vm) -> Result<()> {
+        for d in &vm.disks {
+            self.nvme.connect(d).await?;
+            self.nvme.wait_dev(d, std::time::Duration::from_secs(15)).await?;
+        }
+        Ok(())
+    }
+
+    /// Detach and delete every disk. All of them are attempted; the first
+    /// error is returned so the reconciler retries.
+    async fn release_disks(&self, vm: &Vm) -> Result<()> {
+        let mut first_err = None;
+        for d in &vm.disks {
+            let r = async {
+                self.nvme.disconnect(d.nqn()).await?;
+                self.abe.delete(&d.server, &d.id).await
+            }
+            .await;
+            if let Err(e) = r {
+                tracing::warn!(vm = %vm.spec.name, disk = ?d.role, id = %d.id, "releasing disk: {e:#}");
+                first_err.get_or_insert(e);
+            }
+        }
+        first_err.map_or(Ok(()), Err)
     }
 
     /// Build a NoCloud seed locally and upload it through libvirt.
@@ -228,6 +292,9 @@ impl Virsh {
         let Some(size_gib) = vm.spec.data_disk_gib else {
             return Ok(()); // No data disk requested
         };
+        if vm.spec.storage == Storage::Abe {
+            return Ok(()); // prepare_disks did it
+        }
         
         // Use LVM if configured
         if let Some(ref lvm) = self.lvm {
@@ -335,8 +402,23 @@ pub fn domain_xml(host: &Host, vm: &Vm, volume_group: Option<&str>, overlay_mtu:
             .replace('\'', "&apos;")
     };
     
-    // Root disk: LVM block device or qcow2 volume
-    let root_disk_xml = if let Some(vg) = volume_group {
+    let block_disk = |dev: &str, target: &str| {
+        format!(
+            r#"    <disk type='block' device='disk'>
+      <driver name='qemu' type='raw' cache='none' io='native' discard='unmap'/>
+      <source dev='{dev}'/>
+      <target dev='{target}' bus='virtio'/>
+    </disk>
+"#,
+            dev = esc(dev)
+        )
+    };
+    let abe_disk = |role: DiskRole| vm.disks.iter().find(|d| d.role == role).map(|d| d.dev_path());
+
+    // Root disk: ABE volume, LVM block device or qcow2 volume
+    let root_disk_xml = if let (Storage::Abe, Some(dev)) = (vm.spec.storage, abe_disk(DiskRole::Root)) {
+        block_disk(&dev, "vda")
+    } else if let Some(vg) = volume_group {
         format!(
             r#"    <disk type='block' device='disk'>
       <driver name='qemu' type='raw' cache='none' io='native' discard='unmap'/>
@@ -360,9 +442,11 @@ pub fn domain_xml(host: &Host, vm: &Vm, volume_group: Option<&str>, overlay_mtu:
         )
     };
     
-    // Optional data disk (for ABE storage)
+    // Optional data disk
     let data_disk_xml = if vm.spec.data_disk_gib.is_some() {
-        if let Some(vg) = volume_group {
+        if let (Storage::Abe, Some(dev)) = (vm.spec.storage, abe_disk(DiskRole::Data)) {
+            block_disk(&dev, "vdb")
+        } else if let Some(vg) = volume_group {
             format!(
                 r#"    <disk type='block' device='disk'>
       <driver name='qemu' type='raw' cache='none' io='native' discard='unmap'/>
@@ -526,8 +610,61 @@ impl Hypervisor for Virsh {
         }
     }
 
+    async fn prepare_disks(&self, host: &Host, vm: &Vm, disks: &mut Vec<Disk>) -> Result<()> {
+        if vm.spec.storage != Storage::Abe {
+            return Ok(());
+        }
+        let server = host
+            .abe
+            .as_deref()
+            .ok_or_else(|| anyhow!("host {} has no ABE ([[hosts]].abe) for storage = abe", host.name))?;
+        let mut wanted = vec![(DiskRole::Root, abe::gib(vm.spec.disk_gib))];
+        if let Some(g) = vm.spec.data_disk_gib {
+            wanted.push((DiskRole::Data, abe::gib(g)));
+        }
+        for (role, bytes) in wanted {
+            if disks.iter().any(|d| d.role == role) {
+                continue;
+            }
+            let e = self
+                .abe
+                .create(server, bytes)
+                .await
+                .with_context(|| format!("allocating {role:?} disk for {} on {server}", vm.spec.name))?;
+            tracing::info!(vm = %vm.spec.name, ?role, id = %e.id, traddr = %e.traddr, port = %e.port, "abe: allocated volume");
+            disks.push(Disk {
+                role,
+                server: server.to_string(),
+                traddr: e.traddr,
+                port: e.port,
+                id: e.id,
+                bytes,
+                // data disks stay blank
+                populated: role == DiskRole::Data,
+            });
+        }
+        for i in 0..disks.len() {
+            let d = disks[i].clone();
+            self.nvme.connect(&d).await?;
+            let dev = self.nvme.wait_dev(&d, std::time::Duration::from_secs(15)).await?;
+            if !d.populated {
+                let (src, fmt) = self.base_image(host, &vm.spec.image).await?;
+                tracing::info!(vm = %vm.spec.name, %src, %dev, "abe: filling root disk from base image");
+                self.nvme.populate(&src, fmt, &dev).await?;
+                disks[i].populated = true;
+            }
+        }
+        Ok(())
+    }
+
     async fn provision(&self, host: &Host, vm: &Vm) -> Result<()> {
         tracing::info!("provision called for VM: {} on host: {}", vm.spec.name, host.name);
+        if vm.spec.storage == Storage::Abe {
+            if !vm.disks.iter().any(|d| d.role == DiskRole::Root && d.populated) {
+                bail!("abe root disk not prepared yet");
+            }
+            self.ensure_connected(vm).await?;
+        }
         self.ensure_disk(host, vm).await?;
         self.ensure_seed(host, vm).await?;
         self.ensure_data_disk(host, vm).await?;
@@ -544,6 +681,9 @@ impl Hypervisor for Virsh {
     }
 
     async fn start(&self, host: &Host, vm: &Vm) -> Result<()> {
+        if vm.spec.storage == Storage::Abe {
+            self.ensure_connected(vm).await?;
+        }
         self.run(&host.uri, &["start", &vm.domain_name()])
             .await
             .map(drop)
@@ -590,6 +730,7 @@ impl Hypervisor for Virsh {
                 .await?;
             }
         }
+        self.release_disks(vm).await?;
         Ok(())
     }
 
@@ -629,6 +770,12 @@ impl Hypervisor for Virsh {
     /// Live migration with incremental storage copy. Base images exist on
     /// every host, so only the overlay and seed travel over the wire.
     async fn migrate(&self, src: &Host, dst: &Host, vm: &Vm) -> Result<()> {
+        if vm.spec.storage == Storage::Abe {
+            // The volumes are reachable from any host, but attaching them
+            // there means running nvme on the destination, which this
+            // driver cannot do for a remote host yet.
+            bail!("live migration of abe-backed VMs is not supported yet (needs nvme connect on {})", dst.name);
+        }
         if src.storage_pool != dst.storage_pool || src.bridge != dst.bridge {
             bail!(
                 "migration requires matching pool and bridge names on {} and {}",
@@ -688,5 +835,28 @@ mod tests {
                 address: "10.0.0.50".into()
             }]
         );
+    }
+
+    #[test]
+    fn domain_xml_uses_by_id_block_devices_for_abe_disks() {
+        let host: Host = serde_json::from_value(serde_json::json!({"name": "a", "uri": "test:///"})).unwrap();
+        let mut vm: Vm = serde_json::from_value(serde_json::json!({
+            "id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+            "spec": {"name": "x", "vcpus": 1, "memoryMib": 512, "diskGib": 8, "image": "img",
+                     "dataDiskGib": 4, "storage": "abe"},
+            "phase": "Pending", "power": "On",
+            "created": "2026-01-01T00:00:00Z", "updated": "2026-01-01T00:00:00Z"
+        })).unwrap();
+        let mk = |role: DiskRole, id: &str| Disk {
+            role, server: "http://10.22.0.1:80".into(), traddr: "10.22.0.1".into(), port: "44001".into(),
+            id: id.into(), bytes: 1, populated: true,
+        };
+        vm.disks = vec![mk(DiskRole::Root, "0123456789abcdef0123456789abcdef"), mk(DiskRole::Data, "fedcba9876543210fedcba9876543210")];
+        let xml = domain_xml(&host, &vm, Some("vg-that-must-be-ignored"), None);
+        assert!(xml.contains("<source dev='/dev/disk/by-id/nvme-uuid.01234567-89ab-cdef-0123-456789abcdef'/>"));
+        assert!(xml.contains("<source dev='/dev/disk/by-id/nvme-uuid.fedcba98-7654-3210-fedc-ba9876543210'/>"));
+        assert!(xml.contains("<target dev='vda'"));
+        assert!(xml.contains("<target dev='vdb'"));
+        assert!(!xml.contains("vg-that-must-be-ignored"));
     }
 }

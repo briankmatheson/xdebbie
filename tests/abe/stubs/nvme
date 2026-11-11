@@ -1,0 +1,28 @@
+#!/bin/bash
+# Stub nvme-cli for tests/abe/run.sh. connect = sysfs entry + by-id link;
+# disconnect = remove both. @WORK@ is substituted by run.sh.
+WORK=@WORK@
+SYS="$WORK/sys"; BYID="$WORK/byid"; LOG="$WORK/nvme.log"
+echo "$*" >> "$LOG"
+dashed() { echo "$1" | sed -E 's/(.{8})(.{4})(.{4})(.{4})(.{12})/\1-\2-\3-\4-\5/'; }
+case "$1" in
+  connect)
+    while [ $# -gt 0 ]; do case "$1" in -n) nqn=$2;; -a) a=$2;; -s) s=$2;; esac; shift; done
+    [ "$a" = 10.22.0.1 ] || { echo "bad traddr $a" >&2; exit 1; }
+    for d in "$SYS"/nvme*; do
+      [ -f "$d/subsysnqn" ] && [ "$(cat "$d/subsysnqn")" = "$nqn" ] && { echo "already connected" >&2; exit 1; }
+    done
+    n=$(ls "$SYS" 2>/dev/null | wc -l)
+    mkdir -p "$SYS/nvme$n"; echo "$nqn" > "$SYS/nvme$n/subsysnqn"
+    truncate -s 16M "$WORK/dev-$nqn"
+    ln -sf "$WORK/dev-$nqn" "$BYID/nvme-uuid.$(dashed "$nqn")"
+    ;;
+  disconnect)
+    nqn=$3
+    for d in "$SYS"/nvme*; do
+      [ -f "$d/subsysnqn" ] && [ "$(cat "$d/subsysnqn")" = "$nqn" ] && rm -rf "$d"
+    done
+    rm -f "$BYID/nvme-uuid.$(dashed "$nqn")"
+    ;;
+esac
+exit 0

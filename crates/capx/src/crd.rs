@@ -142,6 +142,13 @@ pub struct XDebbie8sMachineSpec {
     pub disk_gib: u64,
     /// Base image volume present in every host's storage pool.
     pub image: String,
+    /// Optional extra raw disk attached as /dev/vdb.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_disk_gib: Option<u64>,
+    /// `local` (default): disks in the host's pool/LVM. `abe`: NVMe/TCP
+    /// volumes from the host's ABE exporter, attachable from any host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage: Option<String>,
     /// Host labels the VM's host must carry.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub host_selector: BTreeMap<String, String>,
