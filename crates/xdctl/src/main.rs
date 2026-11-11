@@ -215,6 +215,8 @@ enum VmCmd {
     },
     Rm {
         id: String,
+        #[arg(long)]
+        force: bool,
     },
     Start {
         id: String,
@@ -811,8 +813,13 @@ fn main() -> Result<()> {
                     Some(body),
                 )?)?;
             }
-            VmCmd::Rm { id } => {
-                api.call(Method::DELETE, &format!("/vms/{}", api.resolve(&id)?), None)?;
+            VmCmd::Rm { id, force } => {
+                let path = if force {
+                    format!("/vms/{}?force=true", api.resolve(&id)?)
+                } else {
+                    format!("/vms/{}", api.resolve(&id)?)
+                };
+                api.call(Method::DELETE, &path, None)?;
             }
             VmCmd::Start { id } => {
                 api.call(

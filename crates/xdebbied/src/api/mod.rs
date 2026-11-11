@@ -443,8 +443,24 @@ async fn mutate(a: &App, id: Uuid, f: impl FnOnce(&mut Vm) -> R<()>) -> R<(Statu
         .await?
 }
 
-async fn delete_vm(State(a): State<App>, Path(id): Path<Uuid>) -> R<(StatusCode, Json<Vm>)> {
+#[derive(Deserialize)]
+struct DeleteQ {
+    #[serde(default)]
+    force: bool,
+}
+
+async fn delete_vm(
+    State(a): State<App>,
+    Path(id): Path<Uuid>,
+    Query(q): Query<DeleteQ>,
+) -> R<(StatusCode, Json<Vm>)> {
     mutate(&a, id, |v| {
+        if v.spec.is_protected() && !q.force {
+            return Err(conflict(format!(
+                "vm \"{}\" is protected (label {}=true); delete with ?force=true / xdctl vm rm --force",
+                v.spec.name, PROTECTED_LABEL
+            )));
+        }
         v.phase = VmPhase::Deleting;
         v.power = PowerIntent::Off;
         Ok(())

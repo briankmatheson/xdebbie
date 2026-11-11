@@ -7,6 +7,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Label key for marking VMs as protected from deletion.
+pub const PROTECTED_LABEL: &str = "xdebbie.io/protected";
+
 /// A physical (or nested) Linux box running libvirtd + QEMU/KVM.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -144,6 +147,16 @@ pub struct VmSpec {
     /// volumes exported over NVMe/TCP, which any host can attach.
     #[serde(default, skip_serializing_if = "Storage::is_local")]
     pub storage: Storage,
+}
+
+impl VmSpec {
+    /// Returns true if this VM is protected from deletion (label xdebbie.io/protected=true).
+    pub fn is_protected(&self) -> bool {
+        self.labels
+            .get(PROTECTED_LABEL)
+            .map(|v| v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -387,5 +400,36 @@ mod disk_tests {
         assert_eq!("local".parse::<Storage>().unwrap(), Storage::Local);
         assert!("nfs".parse::<Storage>().is_err());
         assert_eq!(Storage::default(), Storage::Local);
+    }
+
+    #[test]
+    fn is_protected_label() {
+        let mut spec = VmSpec {
+            name: "test".into(),
+            vcpus: 1,
+            memory_mib: 512,
+            disk_gib: 10,
+            image: "img".into(),
+            data_disk_gib: None,
+            placement: Default::default(),
+            user_data: None,
+            meta_data: Default::default(),
+            labels: Default::default(),
+            ip: None,
+            storage: Storage::Local,
+        };
+        assert!(!spec.is_protected());
+
+        spec.labels.insert(PROTECTED_LABEL.into(), "true".into());
+        assert!(spec.is_protected());
+
+        spec.labels.insert(PROTECTED_LABEL.into(), "TRUE".into());
+        assert!(spec.is_protected());
+
+        spec.labels.insert(PROTECTED_LABEL.into(), "false".into());
+        assert!(!spec.is_protected());
+
+        spec.labels.insert(PROTECTED_LABEL.into(), "".into());
+        assert!(!spec.is_protected());
     }
 }
