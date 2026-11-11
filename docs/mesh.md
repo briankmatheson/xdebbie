@@ -133,8 +133,11 @@ xdctl mesh delete --yes               # tear down; falls back to [mesh] TOML
 
 Conditions: `Ready`, `Degraded` (some peer not Up), and blocking ones that
 stop all kernel writes: `GeneveModuleMissing`, `UnderlayMissing`,
-`BridgeMissing`. Warnings: `BridgeStpEnabled`, `BridgeMacMismatch`,
-`NameConflict`. Peers carry `state` (`Pending`/`Up`/`Down`/`Error`), `rtt_ms`,
+`BridgeMissing`, `WireguardModuleMissing`, `WireguardConflict`. Warnings:
+`BridgeMacMismatch`, `NameConflict`, and `BridgeStpEnabled` — which only
+stays set if turning STP off failed: the mesh **forces STP off** on its
+bridge every tick, since isolated tunnel ports make it loop-free and BPDUs
+crossing tunnels would only make STP misbehave. Peers carry `state` (`Pending`/`Up`/`Down`/`Error`), `rtt_ms`,
 `reason` (e.g. `UnderlayRouteMismatch` — the route to `remote` leaves via a
 device other than `underlay`; the tunnel is set down but never deleted),
 `fdb_entries`, and `last_change`. `vms_mtu_mismatch` lists VM ports whose MTU

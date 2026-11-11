@@ -119,7 +119,12 @@ if want M3; then
     done
     n=$(static_fdb_count $N); [[ "$n" == 34 ]] || { ok=0; why+=" h$N fdb=$n"; }
   done
-  [[ $ok == 1 ]] && pass M3 "2 tunnels per host with alias/master/flags, 34 static FDB entries" || fail M3 "kernel objects:$why"
+  # STP: something (libvirt) turns it on → the next tick turns it back off.
+  H 0 ip link set br-int type bridge stp_state 1
+  X 0 mesh reconcile >/dev/null; sleep 1
+  [[ $(ip -n h0 -j -d link show br-int | jq_ "d[0]['linkinfo']['info_data']['stp_state']") == 0 ]] || { ok=0; why+=" stp not forced off"; }
+  [[ $(cond 0 BridgeStpEnabled) == False ]] || { ok=0; why+=" BridgeStpEnabled still set"; }
+  [[ $ok == 1 ]] && pass M3 "2 tunnels per host with alias/master/flags, 34 static FDB entries, STP forced off" || fail M3 "kernel objects:$why"
 fi
 
 # ---------------- M4 no loops ----------------

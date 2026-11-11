@@ -685,10 +685,12 @@ impl MeshManager {
             }
         }
 
-        // 10. bridge checks (warnings only)
-        let stp = matches!(&bridge_link.kind, kernel::LinkKind::Bridge(b) if b.stp_enabled);
-        set_condition(&mut st.conditions, ConditionType::BridgeStpEnabled, stp, Some("StpOn"),
-            stp.then(|| format!("STP is enabled on {bridge}; the mesh relies on isolated ports, not STP")));
+        // 10. bridge checks. STP is forced off by the plan; the condition
+        // only stays set if that action failed.
+        let stp_was_on = matches!(&bridge_link.kind, kernel::LinkKind::Bridge(b) if b.stp_enabled);
+        let stp_fix_failed = stp_was_on && plan.actions.iter().any(|a| matches!(a, kernel::Action::SetBridgeStpOff { .. })) && !all_ok;
+        set_condition(&mut st.conditions, ConditionType::BridgeStpEnabled, stp_fix_failed, Some("StpOn"),
+            stp_fix_failed.then(|| format!("STP is enabled on {bridge} and turning it off failed; the mesh relies on isolated ports, not STP")));
         let want_mac = bridge_mac(spec.box_id);
         let mac_bad = spec.fdb == FdbMode::Derived
             && bridge_link.address.as_deref().map(|a| !a.eq_ignore_ascii_case(&want_mac)).unwrap_or(true);
@@ -1373,5 +1375,34 @@ mod tests {
         f.clear_applied();
         m.reconcile_once(false).await;
         assert!(f.applied().is_empty(), "{:?}", f.applied());
+    }
+
+    #[tokio::test]
+    async fn stp_is_forced_off_on_the_mesh_bridge() {
+        let f = FakeNetOps::new();
+        f.add_bridge_stp("br-int", 1500, "52:54:00:23:00:fe", true);
+        f.add_underlay("ul0", 1420, Ipv4Addr::new(10, 22, 0, 1));
+        let f = Arc::new(f);
+        let dir = tempfile::tempdir().unwrap();
+        let m = MeshManager::new_for_test(f.clone(), dir.path().into(), Some(&cfg())).unwrap();
+        let (_, st) = m.put(spec(1), None).await.ok().unwrap();
+        assert!(f.applied().iter().any(|a| matches!(a, kernel::Action::SetBridgeStpOff { bridge } if bridge == "br-int")));
+        assert!(matches!(&f.snapshot().links["br-int"].kind, kernel::LinkKind::Bridge(b) if !b.stp_enabled));
+        assert!(!st.is(ConditionType::BridgeStpEnabled), "{:?}", st.condition(ConditionType::BridgeStpEnabled));
+        f.clear_applied();
+        m.reconcile_once(false).await;
+        assert!(f.applied().is_empty());
+
+        // if the kernel refuses, the condition says so
+        let f2 = FakeNetOps::new();
+        f2.add_bridge_stp("br-int", 1500, "52:54:00:23:00:fe", true);
+        f2.add_underlay("ul0", 1420, Ipv4Addr::new(10, 22, 0, 1));
+        f2.state.lock().unwrap().fail_on = Some("set_bridge_stp_off");
+        let f2 = Arc::new(f2);
+        let dir2 = tempfile::tempdir().unwrap();
+        let m2 = MeshManager::new_for_test(f2.clone(), dir2.path().into(), Some(&cfg())).unwrap();
+        let (_, st) = m2.put(spec(1), None).await.ok().unwrap();
+        assert!(st.is(ConditionType::BridgeStpEnabled));
+        assert_ne!(st.observed_generation, st.generation);
     }
 }

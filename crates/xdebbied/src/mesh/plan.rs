@@ -174,12 +174,15 @@ pub fn diff(input: PlanInput<'_>) -> Plan {
         fdb_adds.push(Action::FdbAdd { mac: mac.clone(), dev: dev.clone(), bridge: bridge.clone() });
     }
 
-    // Bridge MTU.
+    // Bridge MTU and STP (always off on a mesh bridge; see Action docs).
     let mut bridge_mtu = Vec::new();
-    if let Some(b) = observed.link(&bridge)
-        && b.mtu != mtu as u32
-    {
-        bridge_mtu.push(Action::SetBridgeMtu { bridge: bridge.clone(), mtu });
+    if let Some(b) = observed.link(&bridge) {
+        if b.mtu != mtu as u32 {
+            bridge_mtu.push(Action::SetBridgeMtu { bridge: bridge.clone(), mtu });
+        }
+        if matches!(&b.kind, super::kernel::LinkKind::Bridge(bi) if bi.stp_enabled) {
+            bridge_mtu.push(Action::SetBridgeStpOff { bridge: bridge.clone() });
+        }
     }
 
     let mut actions = deletes;

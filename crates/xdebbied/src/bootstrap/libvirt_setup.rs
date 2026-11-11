@@ -240,7 +240,7 @@ pub fn ensure_network(
     let xml = format!(
         r#"<network>
   <name>{}</name>
-  <bridge name='{}' stp='on' delay='0'/>
+  <bridge name='{}' stp='off' delay='0'/>
 {}  <ip address='{}' netmask='{}'>
 {}  </ip>
 </network>"#,

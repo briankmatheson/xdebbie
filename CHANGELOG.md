@@ -5,6 +5,21 @@ All notable changes to XDebbie will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-11-11
+
+### Changed
+- **STP is forced off on the mesh bridge.** The mesh is loop-free by
+  construction (isolated tunnel ports), and BPDUs leaking across Geneve
+  tunnels would only make STP block ports or storm topology changes. The
+  planner now emits `set_bridge_stp_off` whenever the bridge reports
+  `stp_state 1` (libvirt turns it on by default; the next tick turns it
+  back off), and `BridgeStpEnabled` only remains set if that write failed.
+  Bootstrap creates the libvirt network with `stp='off'`.
+
+### Fixed
+- `xdctl … | head` no longer panics with "Broken pipe" (SIGPIPE restored to
+  its default disposition).
+
 ## [0.5.0] - 2026-11-11
 
 ### Added

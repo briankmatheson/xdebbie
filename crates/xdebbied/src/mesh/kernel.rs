@@ -180,6 +180,10 @@ pub enum Action {
     FdbAdd { mac: String, dev: String, bridge: String },
     FdbDel { mac: String, dev: String, bridge: String },
     SetBridgeMtu { bridge: String, mtu: u16 },
+    /// `ip link set <bridge> type bridge stp_state 0`: the mesh relies on
+    /// isolated ports, and BPDUs leaking across tunnels would make STP
+    /// block ports or storm topology changes. Always off.
+    SetBridgeStpOff { bridge: String },
     // WireGuard underlay (0.5.0)
     WgCreate { dev: String },
     /// `wg set <dev> private-key <key_path> listen-port <port>`
@@ -207,6 +211,7 @@ impl Action {
             Action::FdbAdd { .. } => "fdb_add",
             Action::FdbDel { .. } => "fdb_del",
             Action::SetBridgeMtu { .. } => "set_bridge_mtu",
+            Action::SetBridgeStpOff { .. } => "set_bridge_stp_off",
             Action::WgCreate { .. } => "wg_create",
             Action::WgSetIface { .. } => "wg_set_iface",
             Action::WgPeerSet { .. } => "wg_peer_set",
@@ -234,7 +239,7 @@ impl Action {
             | Action::WgPeerDel { dev, .. }
             | Action::AddrAdd { dev, .. }
             | Action::DeleteLink { dev } => dev,
-            Action::SetBridgeMtu { bridge, .. } => bridge,
+            Action::SetBridgeMtu { bridge, .. } | Action::SetBridgeStpOff { bridge } => bridge,
         }
     }
 }
@@ -640,6 +645,9 @@ impl NetOps for IpCliNetOps {
             Action::SetBridgeMtu { bridge, mtu } => {
                 self.ip(&["link", "set", bridge, "mtu", &mtu.to_string()])?;
             }
+            Action::SetBridgeStpOff { bridge } => {
+                self.ip(&["link", "set", bridge, "type", "bridge", "stp_state", "0"])?;
+            }
             Action::WgCreate { dev } => {
                 self.ip(&["link", "add", dev, "type", "wireguard"])?;
             }
@@ -778,6 +786,9 @@ impl FakeNetOps {
         st.links.insert(l.name.clone(), l);
     }
     pub fn add_bridge(&self, name: &str, mtu: u32, mac: &str) {
+        self.add_bridge_stp(name, mtu, mac, false);
+    }
+    pub fn add_bridge_stp(&self, name: &str, mtu: u32, mac: &str, stp: bool) {
         self.add_link(Link {
             ifindex: 0,
             name: name.into(),
@@ -786,7 +797,7 @@ impl FakeNetOps {
             master: None,
             alias: None,
             address: Some(mac.into()),
-            kind: LinkKind::Bridge(BridgeInfo::default()),
+            kind: LinkKind::Bridge(BridgeInfo { stp_enabled: stp }),
         });
     }
     pub fn add_underlay(&self, name: &str, mtu: u32, addr: Ipv4Addr) {
@@ -954,6 +965,13 @@ impl NetOps for FakeNetOps {
             }
             Action::SetBridgeMtu { bridge, mtu } => {
                 st.links.get_mut(bridge).ok_or_else(|| anyhow!("no {bridge}"))?.mtu = *mtu as u32;
+            }
+            Action::SetBridgeStpOff { bridge } => {
+                let l = st.links.get_mut(bridge).ok_or_else(|| anyhow!("no {bridge}"))?;
+                match &mut l.kind {
+                    LinkKind::Bridge(b) => b.stp_enabled = false,
+                    _ => bail!("{bridge} is not a bridge"),
+                }
             }
             Action::WgCreate { dev } => {
                 if st.links.contains_key(dev) {

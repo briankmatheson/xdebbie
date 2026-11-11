@@ -400,6 +400,11 @@ fn print_mesh(doc: &Value) {
 }
 
 fn main() -> Result<()> {
+    // `xdctl ... | head` must not panic: let a closed pipe end the process quietly.
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     let cli = Cli::parse();
     let api = Api {
         c: Client::new(),
