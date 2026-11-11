@@ -4,7 +4,7 @@
 
 use std::{collections::BTreeMap, io::Write, path::PathBuf, sync::Arc};
 
-use xdebbie_core::{Host, Vm};
+use xdebbie_core::{Host, Vm, Volume};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -13,6 +13,9 @@ use uuid::Uuid;
 pub struct State {
     pub hosts: BTreeMap<String, Host>,
     pub vms: BTreeMap<Uuid, Vm>,
+    /// Standalone volumes keyed by ABE id.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub volumes: BTreeMap<String, Volume>,
 }
 
 #[derive(Clone)]

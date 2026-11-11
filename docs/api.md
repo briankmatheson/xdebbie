@@ -58,4 +58,35 @@ Vm status fields: `phase` (`Pending`, `Provisioning`, `Running`, `Stopped`,
 `Migrating`, `Deleting`, `Failed`), `host`, `addresses[{type, address}]`,
 `message` (last error or wait reason).
 
+## Volumes
+
+Standalone ABE volumes with their own lifecycle, hot-plugged into VMs as
+virtio disks. The host does the NVMe/TCP; the guest never needs a route to
+ABE. This is what the `abe-csi` driver uses from inside Kubernetes VMs.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/v1/volumes` | |
+| POST | `/v1/volumes` | `{"name": "pvc-…", "bytes": N, "host": null}`. Synchronous: asks ABE and returns 201 with the id ABE assigned (200 if a volume with that name already exists, 409 if it is smaller than asked). 502 when ABE fails, 503 with no healthy ABE host |
+| GET | `/v1/volumes/{id}` | |
+| DELETE | `/v1/volumes/{id}` | 204; 409 while attached (detach first). Synchronous on ABE |
+| POST | `/v1/volumes/{id}/attach` | `{"vm": "<uuid>", "force": false}` → 202. The reconciler connects on the VM's host and hot-plugs; poll until `attached.vm` matches. 409 if a *running* VM still has it, unless `force` |
+| POST | `/v1/volumes/{id}/detach` | 202; poll until `attached` is absent |
+
+Volume:
+
+```json
+{"id": "7c0a…(32 hex)", "name": "pvc-1b2c", "server": "http://10.22.0.1:80",
+ "traddr": "10.22.0.1", "port": "44002", "bytes": 5368709120,
+ "perf": {"bs": "4M", "seconds": 5, "write_mib_s": 940.0, "write_iops": 235.0, "write_lat_ms": 33.0},
+ "attachTo": "<vm uuid>", "attached": {"vm": "<vm uuid>", "host": "timesink", "target": "vdc"},
+ "message": null}
+```
+
+`attachTo` is the wish, `attached` what the reconciler did. Inside the guest
+the disk is `/dev/disk/by-id/virtio-<first 20 chars of id>` (virtio-blk
+serials are 20 bytes). A VM that is deleted while holding a volume just
+drops it: the volume survives, unattached. `perf` is ABE's fio
+characterization when it ran one.
+
 `GET /healthz` is unauthenticated and returns `ok`.

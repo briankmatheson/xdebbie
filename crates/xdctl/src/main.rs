@@ -60,11 +60,46 @@ enum Cmd {
     /// Overlay addressing and the built-in DHCP responder.
     #[command(subcommand)]
     Net(NetCmd),
+    /// Standalone ABE volumes, hot-plugged into VMs as virtio disks.
+    #[command(subcommand)]
+    Volume(VolumeCmd),
     /// Generate shell completion script.
     Completion {
         /// Shell to generate completion for (bash, zsh, fish, elvish, powershell)
         #[arg(value_enum)]
         shell: Shell,
+    },
+}
+
+#[derive(Subcommand)]
+enum VolumeCmd {
+    Ls,
+    Get {
+        id: String,
+    },
+    /// Create a blank volume on a host's ABE.
+    Create {
+        name: String,
+        #[arg(long)]
+        gib: u64,
+        /// Host whose ABE should hold it (default: any healthy host with one).
+        #[arg(long)]
+        host: Option<String>,
+    },
+    Rm {
+        id: String,
+    },
+    /// Plug the volume into a VM (name or id). The guest sees it at
+    /// /dev/disk/by-id/virtio-<first 20 chars of the volume id>.
+    Attach {
+        id: String,
+        vm: String,
+        /// Take it from a running VM that still has it.
+        #[arg(long)]
+        force: bool,
+    },
+    Detach {
+        id: String,
     },
 }
 
@@ -846,6 +881,48 @@ fn main() -> Result<()> {
                 Method::POST,
                 &format!("/vms/{}/migrate", api.resolve(&id)?),
                 Some(serde_json::json!({ "host": to })),
+            )?)?,
+        },
+        Cmd::Volume(c) => match c {
+            VolumeCmd::Ls => {
+                let v = api.call(Method::GET, "/volumes", None)?;
+                if cli.json {
+                    return out(v);
+                }
+                let vols: Vec<Volume> = serde_json::from_value(v)?;
+                println!("{:<32} {:<24} {:>8} {:<36} {:<8} {:<6} MESSAGE", "ID", "NAME", "GIB", "ATTACHED", "TARGET", "AGE");
+                for v in vols {
+                    let gib = v.bytes as f64 / (1u64 << 30) as f64;
+                    let (vm, target) = match (&v.attached, v.attach_to) {
+                        (Some(a), _) => (a.vm.to_string(), a.target.clone()),
+                        (None, Some(w)) => (format!("{w} (pending)"), "-".into()),
+                        (None, None) => ("-".into(), "-".into()),
+                    };
+                    println!(
+                        "{:<32} {:<24} {:>8.1} {:<36} {:<8} {:<6} {}",
+                        v.id, v.name, gib, vm, target, format_age(v.created),
+                        v.message.as_deref().unwrap_or("")
+                    );
+                }
+            }
+            VolumeCmd::Get { id } => out(api.call(Method::GET, &format!("/volumes/{id}"), None)?)?,
+            VolumeCmd::Create { name, gib, host } => out(api.call(
+                Method::POST,
+                "/volumes",
+                Some(serde_json::json!({ "name": name, "bytes": gib << 30, "host": host })),
+            )?)?,
+            VolumeCmd::Rm { id } => {
+                api.call(Method::DELETE, &format!("/volumes/{id}"), None)?;
+            }
+            VolumeCmd::Attach { id, vm, force } => out(api.call(
+                Method::POST,
+                &format!("/volumes/{id}/attach"),
+                Some(serde_json::json!({ "vm": api.resolve(&vm)?, "force": force })),
+            )?)?,
+            VolumeCmd::Detach { id } => out(api.call(
+                Method::POST,
+                &format!("/volumes/{id}/detach"),
+                None,
             )?)?,
         },
         Cmd::Completion { shell } => {

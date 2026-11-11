@@ -5,6 +5,24 @@ All notable changes to XDebbie will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-11-11
+
+### Added
+- **Standalone volumes** (`/v1/volumes`, `xdctl volume`): ABE volumes with
+  their own lifecycle, hot-plugged into a VM as a virtio disk. Create and
+  delete talk to ABE synchronously (the caller needs the id ABE assigns);
+  attach and detach are reconciled (`attachTo` wish, `attached {vm, host,
+  target}` observation, `message`). The host does `nvme connect` and `virsh
+  attach-device --persistent` with the volume id as the virtio serial, so
+  the guest finds it at `/dev/disk/by-id/virtio-<first 20 chars of id>`
+  and never needs a route to ABE. Re-attached every tick while wanted, so
+  host reboots and recreated domains heal; a deleted VM just lets go of its
+  volumes. ABE's `bytes` and fio `perf` are carried in the record. This is
+  the path `abe-csi` uses from inside Kubernetes VMs (3× faster sequential
+  reads than an in-guest NVMe/TCP initiator in our tests).
+- `DiskRole::Volume` and `Volume`/`Attachment`/`VolumePerf` in
+  `xdebbie-core`; `State.volumes` in the store (absent in old files).
+
 ## [0.8.6] - 2026-11-11
 
 ### Fixed

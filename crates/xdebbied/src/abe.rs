@@ -27,6 +27,12 @@ pub struct Export {
     pub traddr: String,
     #[serde(default)]
     pub nqn: String,
+    /// Size ABE actually made (abe >= 0.3.2).
+    #[serde(default)]
+    pub bytes: Option<u64>,
+    /// fio characterization, when ABE ran one (abe >= 0.3.1).
+    #[serde(default)]
+    pub perf: Option<xdebbie_core::VolumePerf>,
 }
 
 /// One entry of `GET /volumes`.

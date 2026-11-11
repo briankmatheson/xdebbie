@@ -59,6 +59,33 @@ libvirt pool), thin clones (every root is a full copy of the base image over
 the network — a few GB), migration (refused with a clear message), picking a
 different ABE than the scheduled host's.
 
+## Standalone volumes (`/v1/volumes`)
+
+Guests have no route to ABE (it listens on the WireGuard underlay only), so
+block storage for things *inside* a VM — Kubernetes PersistentVolumes via
+`abe-csi` — goes through xdebbied too:
+
+```sh
+xdctl volume create pvc-demo --gib 5        # ABE /configure on a healthy host's ABE
+xdctl volume attach <id> my-vm              # host: nvme connect + virsh attach-device --persistent
+#   guest: /dev/disk/by-id/virtio-<first 20 chars of id>
+xdctl volume detach <id>                    # host: virsh detach-disk + nvme disconnect
+xdctl volume rm <id>                        # ABE DELETE /id/<id>; refused while attached
+```
+
+Create and delete are synchronous (the caller needs ABE's id); attach and
+detach are reconciled like everything else: `attachTo` is the wish,
+`attached {vm, host, target}` the observation, `message` says why not. The
+reconciler re-runs the attach every tick while it is wanted, so a host
+reboot (devices gone) or a recreated domain heals itself. If the VM is
+deleted the volume is unplugged and kept.
+
+Hot-plugging a virtio disk on the host beat an in-guest NVMe/TCP initiator
+in every fio test we ran (3× on sequential reads, 6× lower p99 on random
+writes), because the TCP session stays on the host and the guest only sees
+virtio-blk. Volumes attach on the VM's own host only (the same local-nvme
+limitation as above).
+
 ## Setting up a host
 
 ```sh

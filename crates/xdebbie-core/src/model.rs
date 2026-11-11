@@ -189,6 +189,9 @@ impl std::str::FromStr for Storage {
 pub enum DiskRole {
     Root,
     Data,
+    /// A standalone [`Volume`] hot-plugged into the VM; owned by its own
+    /// record, never deleted with the VM.
+    Volume,
 }
 
 /// A network block volume backing one of the VM's disks. Allocated once at
@@ -227,6 +230,83 @@ impl Disk {
         } else {
             format!("/dev/disk/by-id/nvme-uuid.{id}")
         }
+    }
+}
+
+/// Length of the virtio-blk serial a guest can see (`VIRTIO_BLK_ID_BYTES`).
+pub const VIRTIO_SERIAL_LEN: usize = 20;
+
+/// fio numbers ABE measured when it made the volume (`perf` in its reply).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VolumePerf {
+    pub bs: String,
+    pub seconds: f64,
+    pub write_mib_s: f64,
+    pub write_iops: f64,
+    pub write_lat_ms: f64,
+}
+
+/// A standalone ABE volume with its own lifecycle: created and deleted
+/// through the API, hot-plugged into a VM as a virtio disk on request
+/// (`attachTo` is the wish, `attached` is what the reconciler did). This is
+/// how guests get block storage without a route to ABE: the host does the
+/// NVMe/TCP, the guest sees `/dev/disk/by-id/virtio-<serial>`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Volume {
+    /// ABE volume id == NQN (32 hex chars).
+    pub id: String,
+    /// Caller's name (e.g. a PV name); unique among live volumes.
+    #[serde(default)]
+    pub name: String,
+    /// ABE API that owns the volume.
+    pub server: String,
+    pub traddr: String,
+    pub port: String,
+    pub bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub perf: Option<VolumePerf>,
+    /// Desired: the VM this volume should be plugged into.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attach_to: Option<Uuid>,
+    /// Observed: where it is plugged in right now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attached: Option<Attachment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    pub created: DateTime<Utc>,
+    pub updated: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Attachment {
+    pub vm: Uuid,
+    pub host: String,
+    /// libvirt target (`vdc`, ...).
+    pub target: String,
+}
+
+impl Volume {
+    /// The volume as a host-side disk, for the NVMe initiator code.
+    pub fn disk(&self) -> Disk {
+        Disk {
+            role: DiskRole::Volume,
+            server: self.server.clone(),
+            traddr: self.traddr.clone(),
+            port: self.port.clone(),
+            id: self.id.clone(),
+            bytes: self.bytes,
+            populated: true,
+        }
+    }
+    /// virtio-blk serial: the id truncated to what the guest can read, so
+    /// the guest finds the disk at `/dev/disk/by-id/virtio-<serial>`.
+    pub fn serial(&self) -> &str {
+        &self.id[..self.id.len().min(VIRTIO_SERIAL_LEN)]
+    }
+    pub fn guest_dev_path(&self) -> String {
+        format!("/dev/disk/by-id/virtio-{}", self.serial())
     }
 }
 
@@ -391,6 +471,31 @@ mod disk_tests {
             "/dev/disk/by-id/nvme-uuid.01234567-89ab-cdef-0123-456789abcdef"
         );
         assert_eq!(d.nqn(), "0123456789abcdef0123456789abcdef");
+    }
+
+    #[test]
+    fn volume_serial_is_what_virtio_blk_can_carry() {
+        let now = Utc::now();
+        let v = Volume {
+            id: "0123456789abcdef0123456789abcdef".into(),
+            name: "pvc-1".into(),
+            server: "http://10.22.0.1".into(),
+            traddr: "10.22.0.1".into(),
+            port: "44002".into(),
+            bytes: 1 << 30,
+            perf: None,
+            attach_to: None,
+            attached: None,
+            message: None,
+            created: now,
+            updated: now,
+        };
+        assert_eq!(v.serial(), "0123456789abcdef0123");
+        assert_eq!(v.guest_dev_path(), "/dev/disk/by-id/virtio-0123456789abcdef0123");
+        assert_eq!(v.disk().role, DiskRole::Volume);
+        assert_eq!(v.disk().dev_path(), Disk { role: DiskRole::Root, ..v.disk() }.dev_path());
+        let j = serde_json::to_value(&v).unwrap();
+        assert!(j.get("attachTo").is_none(), "unset fields are omitted");
     }
 
     #[test]

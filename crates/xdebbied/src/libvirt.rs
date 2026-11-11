@@ -6,7 +6,7 @@
 use std::{collections::{BTreeMap, HashMap}, future::Future, path::Path, sync::Arc};
 
 use anyhow::{Context, Result, anyhow, bail};
-use xdebbie_core::{Address, Capacity, Disk, DiskRole, Host, Storage, Vm};
+use xdebbie_core::{Address, Attachment, Capacity, Disk, DiskRole, Host, Storage, Vm, Volume};
 use tokio::process::Command;
 
 use crate::{abe, lvm::LvmManager};
@@ -51,6 +51,20 @@ pub trait Hypervisor: Send + Sync + 'static {
     /// Used by the mesh to name VMs whose NIC MTU is stale.
     fn tap_owners(&self, host: &Host) -> impl Future<Output = Result<HashMap<String, String>>> + Send;
     fn migrate(&self, src: &Host, dst: &Host, vm: &Vm) -> impl Future<Output = Result<()>> + Send;
+    /// Make `vol` a virtio disk of `vm` (host-side NVMe connect + libvirt
+    /// hot-plug). Idempotent: called every tick while the attachment is
+    /// wanted, so a host reboot or a recreated domain heals itself.
+    /// Returns the libvirt target (`vdc`, ...).
+    fn attach_volume(&self, host: &Host, vm: &Vm, vol: &Volume) -> impl Future<Output = Result<String>> + Send {
+        let _ = (host, vm, vol);
+        async { Ok("vdc".to_string()) }
+    }
+    /// Unplug `vol` from the domain (which may already be gone) and drop
+    /// the host-side NVMe connection.
+    fn detach_volume(&self, host: &Host, vol: &Volume, att: &Attachment) -> impl Future<Output = Result<()>> + Send {
+        let _ = (host, vol, att);
+        async { Ok(()) }
+    }
 }
 
 #[derive(Clone)]
@@ -525,6 +539,41 @@ pub fn domain_xml(host: &Host, vm: &Vm, volume_group: Option<&str>, overlay_mtu:
     )
 }
 
+/// `virsh domblklist` → (target, source) pairs.
+pub fn parse_domblklist(text: &str) -> Vec<(String, String)> {
+    text.lines()
+        .filter_map(|l| {
+            let mut it = l.split_whitespace();
+            let t = it.next()?;
+            let s = it.next().unwrap_or("-");
+            (t != "Target" && !t.starts_with('-')).then(|| (t.to_string(), s.to_string()))
+        })
+        .collect()
+}
+
+/// First `vdX` not in `used`, after the slots provisioning may use (vda root,
+/// vdb data).
+pub fn free_target(used: &[String]) -> Option<String> {
+    ('c'..='z')
+        .map(|c| format!("vd{c}"))
+        .find(|t| !used.contains(t))
+}
+
+/// Hot-plug XML for a volume; same driver settings as the provisioned disks.
+pub fn volume_disk_xml(vol: &Volume, target: &str) -> String {
+    format!(
+        r#"<disk type='block' device='disk'>
+  <driver name='qemu' type='raw' cache='none' io='native' discard='unmap'/>
+  <source dev='{dev}'/>
+  <target dev='{target}' bus='virtio'/>
+  <serial>{serial}</serial>
+</disk>
+"#,
+        dev = vol.disk().dev_path(),
+        serial = vol.serial()
+    )
+}
+
 fn field<'a>(text: &'a str, key: &str) -> Option<&'a str> {
     text.lines()
         .find_map(|l| l.strip_prefix(key))
@@ -796,6 +845,48 @@ impl Hypervisor for Virsh {
         Ok(())
     }
 
+    async fn attach_volume(&self, host: &Host, vm: &Vm, vol: &Volume) -> Result<String> {
+        if !uri_is_local(&host.uri) {
+            bail!("attaching volumes on remote host {} is not supported yet (needs nvme connect there)", host.name);
+        }
+        let d = vol.disk();
+        self.nvme.connect(&d).await?;
+        let dev = self.nvme.wait_dev(&d, std::time::Duration::from_secs(15)).await?;
+        let dom = vm.domain_name();
+        let blk = parse_domblklist(&self.run(&host.uri, &["domblklist", &dom]).await?);
+        if let Some((t, _)) = blk.iter().find(|(_, src)| *src == dev) {
+            return Ok(t.clone());
+        }
+        let used: Vec<String> = blk.into_iter().map(|(t, _)| t).collect();
+        let target = free_target(&used).ok_or_else(|| anyhow!("no free virtio slot on {dom}"))?;
+        let f = tempfile::Builder::new().suffix(".xml").tempfile()?;
+        tokio::fs::write(f.path(), volume_disk_xml(vol, &target)).await?;
+        self.run(&host.uri, &["attach-device", &dom, p(f.path()), "--persistent"])
+            .await
+            .with_context(|| format!("hot-plugging {} into {dom}", vol.id))?;
+        tracing::info!(vm = %vm.spec.name, volume = %vol.id, %target, "attached volume");
+        Ok(target)
+    }
+
+    async fn detach_volume(&self, host: &Host, vol: &Volume, att: &Attachment) -> Result<()> {
+        if !uri_is_local(&host.uri) {
+            bail!("detaching volumes on remote host {} is not supported yet", host.name);
+        }
+        let dev = vol.disk().dev_path();
+        // The domain may have been deleted already; then there is nothing to unplug.
+        let doms = self.run(&host.uri, &["list", "--all", "--name"]).await?;
+        for dom in doms.lines().map(str::trim).filter(|l| !l.is_empty()) {
+            let blk = parse_domblklist(&self.run(&host.uri, &["domblklist", dom]).await?);
+            if let Some((t, _)) = blk.iter().find(|(_, src)| *src == dev) {
+                self.run(&host.uri, &["detach-disk", dom, t, "--persistent"])
+                    .await
+                    .with_context(|| format!("unplugging {} ({t}) from {dom}", vol.id))?;
+                tracing::info!(vm = %att.vm, volume = %vol.id, target = %t, "detached volume");
+            }
+        }
+        self.nvme.disconnect(vol.disk().nqn()).await
+    }
+
     async fn tap_owners(&self, host: &Host) -> Result<HashMap<String, String>> {
         let names = self.run(&host.uri, &["list", "--name"]).await?;
         let mut map = HashMap::new();
@@ -906,6 +997,45 @@ mod tests {
             parse_pool_available("Name: default\nAvailable:      1099511627776\n").unwrap(),
             1024
         );
+    }
+    #[test]
+    fn parses_domblklist_and_picks_a_free_slot() {
+        let t = " Target   Source\n---------------------------------------------\n vda      /dev/timesink-vg/node0-root\n vdc      /dev/disk/by-id/nvme-uuid.0123\n sda      -\n";
+        let blk = parse_domblklist(t);
+        assert_eq!(
+            blk,
+            vec![
+                ("vda".to_string(), "/dev/timesink-vg/node0-root".to_string()),
+                ("vdc".to_string(), "/dev/disk/by-id/nvme-uuid.0123".to_string()),
+                ("sda".to_string(), "-".to_string()),
+            ]
+        );
+        let used: Vec<String> = blk.into_iter().map(|(t, _)| t).collect();
+        assert_eq!(free_target(&used).as_deref(), Some("vdd"));
+        assert_eq!(free_target(&[]).as_deref(), Some("vdc"));
+    }
+    #[test]
+    fn volume_hotplug_xml_carries_the_serial() {
+        let now = chrono::Utc::now();
+        let v = Volume {
+            id: "0123456789abcdef0123456789abcdef".into(),
+            name: "pv".into(),
+            server: "http://10.22.0.1".into(),
+            traddr: "10.22.0.1".into(),
+            port: "44002".into(),
+            bytes: 1,
+            perf: None,
+            attach_to: None,
+            attached: None,
+            message: None,
+            created: now,
+            updated: now,
+        };
+        let x = volume_disk_xml(&v, "vdc");
+        assert!(x.contains("<source dev='/dev/disk/by-id/nvme-uuid.01234567-89ab-cdef-0123-456789abcdef'/>"));
+        assert!(x.contains("<target dev='vdc' bus='virtio'/>"));
+        assert!(x.contains("<serial>0123456789abcdef0123</serial>"));
+        assert!(x.contains("discard='unmap'"));
     }
     #[test]
     fn parses_ifaddr() {

@@ -329,6 +329,7 @@ async fn main() -> anyhow::Result<()> {
         token,
         mesh,
         dhcp,
+        abe: abe::Client::new(),
     });
     serve(&cfg, listen, app).await
 }

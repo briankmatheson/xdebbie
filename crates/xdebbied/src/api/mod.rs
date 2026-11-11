@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! REST API. Handlers only mutate desired state; all hypervisor I/O happens
 //! in the reconciler. Every write is idempotent so controllers can retry.
+//! (One exception: creating/deleting a standalone volume talks to ABE
+//! inline, because the caller needs the id ABE assigns.)
 
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -17,7 +19,7 @@ use xdebbie_core::*;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::{config::Config, mesh::MeshManager, store::Store};
+use crate::{abe, config::Config, mesh::MeshManager, store::Store};
 
 pub mod mesh;
 
@@ -29,6 +31,8 @@ pub struct App {
     pub mesh: Arc<MeshManager>,
     /// Present when `[network]` is configured (even with `dhcp = false`).
     pub dhcp: Option<Arc<crate::dhcp::DhcpServer>>,
+    /// For standalone volumes (`/v1/volumes`).
+    pub abe: abe::Client,
 }
 
 pub struct ApiErr(StatusCode, String);
@@ -71,6 +75,10 @@ pub fn router(app: App) -> Router {
         .route("/vms/{id}/stop", post(stop))
         .route("/vms/{id}/reboot", post(reboot))
         .route("/vms/{id}/migrate", post(migrate))
+        .route("/volumes", get(list_volumes).post(create_volume))
+        .route("/volumes/{id}", get(get_volume).delete(delete_volume))
+        .route("/volumes/{id}/attach", post(attach_volume))
+        .route("/volumes/{id}/detach", post(detach_volume))
         .route("/network", get(network))
         .with_state(app.clone())
         .merge(mesh::router(mesh::MeshApi { mesh: app.mesh.clone() }))
@@ -528,4 +536,193 @@ async fn migrate(
             Ok((StatusCode::ACCEPTED, Json(vm.clone())))
         })
         .await?
+}
+
+// ---------- volumes ----------
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateVolume {
+    /// Caller's name; a second POST with the same name returns the
+    /// existing volume (200) instead of making another.
+    name: String,
+    bytes: u64,
+    /// Which host's ABE should hold it; default: any healthy host with one.
+    #[serde(default)]
+    host: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AttachVolume {
+    vm: Uuid,
+    /// Take the volume away from a VM that still has it (data loss if the
+    /// guest is using it).
+    #[serde(default)]
+    force: bool,
+}
+
+async fn list_volumes(State(a): State<App>) -> Json<Vec<Volume>> {
+    Json(a.store.read().await.volumes.into_values().collect())
+}
+
+async fn get_volume(State(a): State<App>, Path(id): Path<String>) -> R<Json<Volume>> {
+    a.store
+        .read()
+        .await
+        .volumes
+        .remove(&id)
+        .map(Json)
+        .ok_or_else(|| nf("volume"))
+}
+
+/// Create on ABE now (the id is ABE's), then record it. Idempotent on name.
+async fn create_volume(
+    State(a): State<App>,
+    Json(req): Json<CreateVolume>,
+) -> R<(StatusCode, Json<Volume>)> {
+    if req.name.is_empty() || req.name.len() > 253 {
+        return Err(bad("name is required"));
+    }
+    if req.bytes == 0 {
+        return Err(bad("bytes must be > 0"));
+    }
+    let st = a.store.read().await;
+    if let Some(v) = st.volumes.values().find(|v| v.name == req.name) {
+        return if v.bytes >= req.bytes {
+            Ok((StatusCode::OK, Json(v.clone())))
+        } else {
+            Err(conflict(format!(
+                "volume {} exists with {} bytes (< {} requested)",
+                req.name, v.bytes, req.bytes
+            )))
+        };
+    }
+    let stale = a.cfg.host_stale_secs;
+    let now = Utc::now();
+    let server = match &req.host {
+        Some(h) => st
+            .hosts
+            .get(h)
+            .ok_or_else(|| nf("host"))?
+            .abe
+            .clone()
+            .ok_or_else(|| bad(format!("host {h} has no abe configured")))?,
+        None => st
+            .hosts
+            .values()
+            .filter(|h| h.is_healthy(now, stale))
+            .find_map(|h| h.abe.clone())
+            .ok_or_else(|| ApiErr(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "no healthy host with an ABE ([[hosts]].abe)".into(),
+            ))?,
+    };
+    drop(st);
+    let e = a
+        .abe
+        .create(&server, req.bytes)
+        .await
+        .map_err(|e| ApiErr(StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
+    let bytes = e.bytes.unwrap_or(req.bytes);
+    tracing::info!(name = %req.name, id = %e.id, %server, bytes, "created volume");
+    let vol = Volume {
+        id: e.id,
+        name: req.name,
+        server,
+        traddr: e.traddr,
+        port: e.port,
+        bytes,
+        perf: e.perf,
+        attach_to: None,
+        attached: None,
+        message: None,
+        created: now,
+        updated: now,
+    };
+    a.store
+        .update(|s| {
+            s.volumes.insert(vol.id.clone(), vol.clone());
+        })
+        .await?;
+    Ok((StatusCode::CREATED, Json(vol)))
+}
+
+/// Delete on ABE and forget. Refused while attached (detach first); a
+/// volume that is already gone is a success.
+async fn delete_volume(State(a): State<App>, Path(id): Path<String>) -> R<StatusCode> {
+    let Some(vol) = a.store.read().await.volumes.remove(&id) else {
+        return Ok(StatusCode::NO_CONTENT);
+    };
+    if vol.attach_to.is_some() || vol.attached.is_some() {
+        return Err(conflict(format!(
+            "volume {id} is attached (to {}); detach it first",
+            vol.attached.as_ref().map(|a| a.vm).or(vol.attach_to).unwrap_or_default()
+        )));
+    }
+    a.abe
+        .delete(&vol.server, &vol.id)
+        .await
+        .map_err(|e| ApiErr(StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
+    a.store
+        .update(|s| {
+            s.volumes.remove(&id);
+        })
+        .await?;
+    tracing::info!(%id, server = %vol.server, "deleted volume");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn mutate_volume(
+    a: &App,
+    id: &str,
+    f: impl FnOnce(&crate::store::State, &mut Volume) -> R<()>,
+) -> R<(StatusCode, Json<Volume>)> {
+    a.store
+        .update(|s| {
+            let snapshot = s.clone();
+            let v = s.volumes.get_mut(id).ok_or_else(|| nf("volume"))?;
+            f(&snapshot, v)?;
+            v.updated = Utc::now();
+            Ok((StatusCode::ACCEPTED, Json(v.clone())))
+        })
+        .await?
+}
+
+/// Ask for the volume to be plugged into a VM. The reconciler does it;
+/// poll `GET /volumes/{id}` until `attached.vm` matches.
+async fn attach_volume(
+    State(a): State<App>,
+    Path(id): Path<String>,
+    Json(req): Json<AttachVolume>,
+) -> R<(StatusCode, Json<Volume>)> {
+    mutate_volume(&a, &id, |st, v| {
+        let vm = st.vms.get(&req.vm).ok_or_else(|| nf("vm"))?;
+        if vm.phase == VmPhase::Deleting {
+            return Err(conflict("vm is deleting"));
+        }
+        if let Some(att) = &v.attached
+            && att.vm != req.vm
+            && !req.force
+        {
+            let live = st.vms.get(&att.vm).is_some_and(|o| o.phase == VmPhase::Running);
+            if live {
+                return Err(conflict(format!(
+                    "volume is attached to running vm {}; detach it there first or attach with force=true",
+                    att.vm
+                )));
+            }
+        }
+        v.attach_to = Some(req.vm);
+        Ok(())
+    })
+    .await
+}
+
+async fn detach_volume(State(a): State<App>, Path(id): Path<String>) -> R<(StatusCode, Json<Volume>)> {
+    mutate_volume(&a, &id, |_, v| {
+        v.attach_to = None;
+        Ok(())
+    })
+    .await
 }

@@ -11,7 +11,7 @@ use std::{sync::Arc, time::Duration};
 
 use chrono::Utc;
 use futures::future::join_all;
-use xdebbie_core::{Address, Disk, Host, PowerIntent, Storage, Vm, VmPhase, place};
+use xdebbie_core::{Address, Attachment, Disk, Host, PowerIntent, Storage, Vm, VmPhase, Volume, place};
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -80,6 +80,44 @@ impl Patch {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct VolPatch {
+    pub attached: Option<Option<Attachment>>,
+    pub clear_attach_to: bool,
+    pub message: Option<Option<String>>,
+}
+
+impl VolPatch {
+    fn msg(m: impl Into<String>) -> Self {
+        Self { message: Some(Some(m.into())), ..Default::default() }
+    }
+    fn detached() -> Self {
+        Self { attached: Some(None), message: Some(None), ..Default::default() }
+    }
+    fn apply(self, v: &mut Volume) {
+        let mut changed = false;
+        if let Some(a) = self.attached
+            && v.attached != a
+        {
+            v.attached = a;
+            changed = true;
+        }
+        if self.clear_attach_to && v.attach_to.is_some() {
+            v.attach_to = None;
+            changed = true;
+        }
+        if let Some(m) = self.message
+            && v.message != m
+        {
+            v.message = m;
+            changed = true;
+        }
+        if changed {
+            v.updated = Utc::now();
+        }
+    }
+}
+
 impl<H: Hypervisor> Reconciler<H> {
     pub fn healthy(&self, h: &Host) -> bool {
         h.is_healthy(Utc::now(), self.cfg.host_stale_secs)
@@ -120,7 +158,83 @@ impl<H: Hypervisor> Reconciler<H> {
                     }
                 }
             })
+            .await?;
+        self.volumes().await
+    }
+
+    /// Drive every standalone volume toward its `attach_to`. Runs after the
+    /// VM steps so a VM that just became Running gets its disks this tick.
+    async fn volumes(&self) -> anyhow::Result<()> {
+        let st = self.store.read().await;
+        if st.volumes.is_empty() {
+            return Ok(());
+        }
+        let work = st
+            .volumes
+            .values()
+            .map(|v| async { (v.id.clone(), self.volume_step(&st, v).await) });
+        let patches = join_all(work).await;
+        self.store
+            .update(|s| {
+                for (id, p) in patches {
+                    if let Some(v) = s.volumes.get_mut(&id) {
+                        p.apply(v);
+                    }
+                }
+            })
             .await
+    }
+
+    async fn volume_step(&self, st: &State, vol: &Volume) -> VolPatch {
+        // The wish, if it still points at a VM that exists and is staying.
+        let want = vol
+            .attach_to
+            .and_then(|id| st.vms.get(&id))
+            .filter(|vm| vm.phase != VmPhase::Deleting);
+        let wish_stale = vol.attach_to.is_some() && want.is_none();
+        if wish_stale {
+            warn!(volume = %vol.id, vm = ?vol.attach_to, "attach target is gone; dropping the request");
+        }
+        // 1. Plugged in where it should not be (wrong VM, VM gone, nothing
+        //    wanted): unplug first; attaching happens next tick.
+        if let Some(att) = &vol.attached
+            && want.map(|vm| vm.id) != Some(att.vm)
+        {
+            let Some(h) = st.hosts.get(&att.host) else {
+                warn!(volume = %vol.id, host = %att.host, "attached on an unregistered host; forgetting the attachment");
+                return VolPatch { clear_attach_to: wish_stale, ..VolPatch::detached() };
+            };
+            if !self.healthy(h) {
+                return VolPatch::msg(format!("waiting for host {} to detach", h.name));
+            }
+            return match self.hv.detach_volume(h, vol, att).await {
+                Ok(()) => VolPatch { clear_attach_to: wish_stale, ..VolPatch::detached() },
+                Err(e) => VolPatch::msg(format!("detach: {e:#}")),
+            };
+        }
+        if wish_stale {
+            return VolPatch { clear_attach_to: true, message: Some(None), ..Default::default() };
+        }
+        let Some(vm) = want else {
+            return VolPatch::default();
+        };
+        let Some(h) = vm.host.as_ref().and_then(|h| st.hosts.get(h)) else {
+            return VolPatch::msg(format!("waiting for vm {} to be placed", vm.spec.name));
+        };
+        if !matches!(vm.phase, VmPhase::Running | VmPhase::Stopped) {
+            return VolPatch::msg(format!("waiting for vm {} ({:?})", vm.spec.name, vm.phase));
+        }
+        if !self.healthy(h) {
+            return VolPatch::msg(format!("host {} unreachable", h.name));
+        }
+        match self.hv.attach_volume(h, vm, vol).await {
+            Ok(target) => VolPatch {
+                attached: Some(Some(Attachment { vm: vm.id, host: h.name.clone(), target })),
+                message: Some(None),
+                ..Default::default()
+            },
+            Err(e) => VolPatch::msg(format!("attach: {e:#}")),
+        }
     }
 
     /// If the mesh sees bridge ports with a stale MTU, tell it which VM
@@ -387,8 +501,22 @@ mod tests {
         allocated: Mutex<u32>,
         released: Mutex<Vec<String>>,
         fail_populate_once: Mutex<bool>,
+        /// (domain, volume id) pairs currently plugged in.
+        plugged: Mutex<Vec<(String, String)>>,
     }
     impl Hypervisor for Fake {
+        async fn attach_volume(&self, _: &Host, v: &Vm, vol: &Volume) -> anyhow::Result<String> {
+            let mut p = self.plugged.lock().unwrap();
+            let key = (v.domain_name(), vol.id.clone());
+            if !p.contains(&key) {
+                p.push(key);
+            }
+            Ok("vdc".into())
+        }
+        async fn detach_volume(&self, _: &Host, vol: &Volume, _: &Attachment) -> anyhow::Result<()> {
+            self.plugged.lock().unwrap().retain(|(_, id)| *id != vol.id);
+            Ok(())
+        }
         async fn prepare_disks(&self, h: &Host, v: &Vm, disks: &mut Vec<Disk>) -> anyhow::Result<()> {
             if v.spec.storage != Storage::Abe {
                 return Ok(());
@@ -684,5 +812,65 @@ mod tests {
         assert_eq!(s.vms[&id].phase, VmPhase::Provisioning);
         assert!(s.vms[&id].message.as_deref().unwrap().contains("no ABE"));
         assert!(s.vms[&id].disks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn volume_follows_attach_to_and_lets_go_when_the_vm_dies() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("s.json")).unwrap();
+        store.update(|s| { s.hosts.insert("a".into(), host("a", "r1")); }).await.unwrap();
+        let fake = Arc::new(Fake::default());
+        let r = Reconciler { store: store.clone(), hv: fake.clone(), cfg: Arc::new(cfg()), mesh: None };
+        let mk = |name: &str| vm(VmSpec {
+            name: name.into(), vcpus: 1, memory_mib: 512, disk_gib: 8, data_disk_gib: None, ip: None,
+            storage: Storage::Local, image: "img".into(), placement: Default::default(),
+            user_data: None, meta_data: Default::default(), labels: Default::default(),
+        });
+        let (v1, v2) = (mk("one"), mk("two"));
+        let (id1, id2) = (v1.id, v2.id);
+        let now = Utc::now();
+        let vol = Volume {
+            id: "0123456789abcdef0123456789abcdef".into(), name: "pv".into(),
+            server: "http://abe".into(), traddr: "10.22.0.1".into(), port: "44002".into(),
+            bytes: 1, perf: None, attach_to: Some(id1), attached: None, message: None,
+            created: now, updated: now,
+        };
+        let vid = vol.id.clone();
+        store.update(|s| {
+            s.vms.insert(id1, v1);
+            s.vms.insert(id2, v2);
+            s.volumes.insert(vid.clone(), vol);
+        }).await.unwrap();
+
+        r.tick().await.unwrap(); // VMs placed + provisioned; volume plugged in the same tick
+        {
+            let s = store.read().await;
+            assert_eq!(s.vms[&id1].phase, VmPhase::Running);
+            let v = &s.volumes[&vid];
+            assert_eq!(v.attached.as_ref().map(|a| a.vm), Some(id1));
+            assert_eq!(v.attached.as_ref().unwrap().target, "vdc");
+            assert_eq!(v.message, None);
+            assert_eq!(fake.plugged.lock().unwrap().as_slice(), [("one".to_string(), vid.clone())]);
+        }
+
+        // Re-point at the other VM: unplug this tick, plug next.
+        store.update(|s| s.volumes.get_mut(&vid).unwrap().attach_to = Some(id2)).await.unwrap();
+        r.tick().await.unwrap();
+        assert_eq!(store.read().await.volumes[&vid].attached, None);
+        assert!(fake.plugged.lock().unwrap().is_empty());
+        r.tick().await.unwrap();
+        assert_eq!(store.read().await.volumes[&vid].attached.as_ref().map(|a| a.vm), Some(id2));
+
+        // The VM goes away: the attachment and the wish are dropped, the
+        // volume itself stays.
+        store.update(|s| s.vms.get_mut(&id2).unwrap().phase = VmPhase::Deleting).await.unwrap();
+        r.tick().await.unwrap();
+        r.tick().await.unwrap();
+        let s = store.read().await;
+        assert!(!s.vms.contains_key(&id2));
+        let v = &s.volumes[&vid];
+        assert_eq!(v.attached, None);
+        assert_eq!(v.attach_to, None);
+        assert!(fake.plugged.lock().unwrap().is_empty());
     }
 }
