@@ -5,6 +5,15 @@ All notable changes to XDebbie will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.6] - 2026-11-11
+
+### Fixed
+- `xdebbied.service` lets bootstrap write `/etc/ufw` and `/etc/default/ufw`
+  (0.8.5's firewall step failed under `ProtectSystem` with
+  "'/etc/default/ufw' is not writable" and ufw was never enabled). The unit
+  now also carries `/etc/lvm` and `/dev` itself, replacing the hand-made
+  `lvm-access.conf` drop-in hosts needed before.
+
 ## [0.8.5] - 2026-11-11
 
 ### Changed

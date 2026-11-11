@@ -22,12 +22,17 @@ Group=root
 # Working directory
 WorkingDirectory=/var/lib/xdebbie
 
-# Security hardening (relaxed for libvirt access)
+# Security hardening. ProtectSystem=full keeps /usr, /boot and /etc
+# read-only; the paths below are what bootstrap and serve write:
+#   /etc/xdebbie              config, token, env file
+#   /etc/lvm                  lvm archive/backup on lvcreate
+#   /etc/ufw /etc/default/ufw bootstrap's firewall rules and `ufw enable`
+#   /dev                      device-mapper nodes
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectSystem=strict
+ProtectSystem=full
 ProtectHome=true
-ReadWritePaths=/etc/xdebbie /var/lib/xdebbie /var/lib/libvirt /run/libvirt
+ReadWritePaths=/etc/xdebbie /etc/lvm /etc/ufw /etc/default/ufw /var/lib/xdebbie /var/lib/libvirt /run/libvirt /dev
 
 # Resource limits
 LimitNOFILE=65536
