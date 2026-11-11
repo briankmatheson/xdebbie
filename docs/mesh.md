@@ -154,23 +154,27 @@ The `.deb` ships `/etc/modules-load.d/xdebbie-mesh.conf` (`geneve`,
 ICMP (peer probes) work. The dev host should use `bridge = "virbr-int"` and
 `fdb = "learn"` until VM MACs are derivable.
 
-### Host firewalls (ufw / firewalld)
+### Host firewall (ufw)
 
-xdebbie's own `inet xdebbie_mesh` table only *accepts* Geneve from enrolled
-peers; it cannot override a `drop` in another table on the same hook. If the
-host runs ufw/firewalld with a default-deny input policy, two things must be
-opened — the symptom otherwise is a WireGuard handshake that succeeds and
-`gnv-b<N>` tunnels whose TX counters climb while RX stays at 0 on the far side:
+`xdebbied bootstrap` (run by the unit's `ExecStartPre`) owns the host
+firewall through ufw: default deny inbound, and `ufw allow` rules tagged
+`xdebbie …` for ssh, the API and libvirt TLS from every local network,
+WireGuard from anywhere, Geneve on the underlay interface only, discovery
+multicast, and DHCP on the bridge. It also removes the `XDEBBIE-INPUT`
+iptables chain older versions installed. Services that run next to xdebbied
+(ABE, DNS, an apt proxy) add their own rules where they are set up.
 
-```bash
-# the WireGuard carrier, on the physical NIC
-sudo ufw allow 51820/udp comment 'xdebbie wireguard underlay'
-# the Geneve payload, which hits INPUT a second time after decryption
-sudo ufw allow in on wg-flock proto udp to any port 6081 comment 'xdebbie geneve over wireguard'
+The symptom of a missing Geneve/WireGuard rule is a WireGuard handshake that
+succeeds and `gnv-b<N>` tunnels whose TX counters climb while RX stays at 0
+on the far side; `sudo ufw status` should show:
+
+```
+51820/udp                  ALLOW IN    Anywhere        # xdebbie wireguard underlay
+6081/udp on wg-flock       ALLOW IN    Anywhere        # xdebbie geneve
 ```
 
-(Without a managed WireGuard underlay, open `6081/udp` on the underlay NIC
-instead — and consider restricting it to peer addresses.)
+The mesh's own `inet xdebbie_mesh` nft table stays: it drops Geneve arriving
+on any interface other than the underlay, independent of ufw.
 
 ### AppArmor
 

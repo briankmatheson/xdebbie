@@ -17,6 +17,8 @@ const REQUIRED_PACKAGES: &[&str] = &[
     // disk in the pool silently stays inactive and libvirt autostart fails.
     "lvm2",
     "thin-provisioning-tools",
+    // The host firewall; bootstrap writes its rules (bootstrap/firewall.rs).
+    "ufw",
 ];
 
 /// Check if a command exists in PATH

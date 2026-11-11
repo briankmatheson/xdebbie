@@ -180,12 +180,17 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
         warn!("Multi-host libvirt connections may not work until certificates are set up manually");
     }
 
-    // Step 8: Configure firewall (restrict inbound TCP to LAN only)
+    // Step 8: Firewall (ufw) from the config written/kept above.
     info!("Step 8/8: Configuring firewall");
-    if let Err(e) = firewall::configure_firewall() {
-        warn!("Failed to configure firewall: {}", e);
-        warn!("You may want to configure iptables manually for security");
-        warn!("See: ~/block-inbound-tcp.sh");
+    let spec = match crate::config::Config::load(&opts.config_path) {
+        Ok(cfg) => firewall::FirewallSpec::from_config(&cfg),
+        Err(e) => {
+            warn!("could not load {} for the firewall ({e:#}); using defaults", opts.config_path.display());
+            firewall::FirewallSpec::minimal()
+        }
+    };
+    if let Err(e) = firewall::configure_firewall(&spec) {
+        warn!("Failed to configure firewall: {:#}", e);
     }
 
     // Write environment file to /etc/xdebbie/ (system-wide)

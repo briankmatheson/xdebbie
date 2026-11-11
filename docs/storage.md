@@ -107,18 +107,21 @@ Bind both the API (`ABE_LISTEN`) and nvmet (`ABE_TRADDR`) to that same
 underlay address: the API has no authentication, so it must not be reachable
 from the LAN or from guests on the bridge. The cost is that abe then depends
 on `wg-flock` existing, hence the `After=xdebbied.service` drop-in above.
-ABE opens one TCP port per volume (`44001`, `44002`, …) and adds a ufw rule
-for each when ufw is present.
+ABE opens one TCP port per volume (`44001`, `44002`, …) in the 44000-44999
+range.
 
 ### Firewall
 
-Hosts with a default-deny input policy need the ABE ports open on the
-underlay in addition to the [mesh rules](mesh.md#host-firewalls):
+xdebbied's bootstrap sets ufw to default-deny; the ABE ports must be opened
+on the underlay only, which `simple/bin/setup_abe_host.py` does:
 
 ```sh
-sudo ufw allow in on wg-flock proto tcp from 10.22.0.0/16 to any port 44000:44999
-sudo ufw allow in on wg-flock proto tcp from 10.22.0.0/16 to any port 80
+sudo ufw allow in on wg-flock proto tcp from 10.22.0.0/16 to any port 44000:44999 comment 'abe nvme/tcp'
+sudo ufw allow in on wg-flock proto tcp from 10.22.0.0/16 to any port 80 comment 'abe api'
 ```
+
+Guests on the bridge arrive on `virbr-xdebbie`, not `wg-flock`, so they
+cannot reach ABE even though 10.22.0.1 is routable from them.
 
 ## Configuration reference
 

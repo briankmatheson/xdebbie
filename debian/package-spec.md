@@ -21,6 +21,7 @@ Depends: libvirt-daemon-system,
          cloud-image-utils,
          lvm2,
          thin-provisioning-tools,
+         ufw,
          systemd
 ```
 
@@ -30,8 +31,7 @@ Depends: libvirt-daemon-system,
 
 ### Recommended
 ```
-Recommends: bridge-utils,
-            iptables
+Recommends: bridge-utils
 ```
 
 ### Suggested

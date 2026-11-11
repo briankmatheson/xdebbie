@@ -5,6 +5,21 @@ All notable changes to XDebbie will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.5] - 2026-11-11
+
+### Changed
+- **ufw is the host firewall.** `xdebbied bootstrap` (the unit's
+  `ExecStartPre`) replaces the `XDEBBIE-INPUT` iptables chain — which
+  allowed all TCP from every local network, overlay included — with ufw:
+  default deny inbound, `ufw allow` rules tagged `xdebbie …` for ssh, the
+  API and libvirt TLS from local networks, WireGuard from anywhere, Geneve
+  on the underlay interface only, discovery multicast, and DHCP on the
+  bridge; then `ufw --force enable`. The legacy chain is removed if found.
+  Rules are derived from `xdebbied.toml` (`listen`, `[mesh]`,
+  `[mesh.wireguard]`, `multicast_addr`, `[network]`). `ufw` is a package
+  dependency. See `docs/mesh.md` "Host firewall".
+- `get_hostname()` prefers `hostname -f` (FQDN everywhere).
+
 ## [0.7.0] - 2026-11-11
 
 ### Added

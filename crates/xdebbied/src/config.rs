@@ -166,7 +166,7 @@ fn default_route_ip() -> Option<Ipv4Addr> {
     }
 }
 
-const DEFAULT_PORT: u16 = 7443;
+pub const DEFAULT_PORT: u16 = 7443;
 
 impl Config {
     pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
