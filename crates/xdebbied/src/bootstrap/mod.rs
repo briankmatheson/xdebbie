@@ -7,7 +7,9 @@
 
 pub mod config_gen;
 pub mod deps;
+pub mod firewall;
 pub mod libvirt_setup;
+pub mod tls_certs;
 pub mod token;
 
 use anyhow::{Context, Result};
@@ -68,7 +70,7 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     info!("=== xdebbied Bootstrap ===");
 
     // Step 1: Check dependencies
-    info!("Step 1/6: Checking dependencies");
+    info!("Step 1/8: Checking dependencies");
     let missing = deps::check_dependencies()?;
     if !missing.is_empty() {
         warn!("Missing dependencies: {}", missing.join(", "));
@@ -78,7 +80,7 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     }
 
     // Step 2: Check libvirtd (optional - socket activation may be used)
-    info!("Step 2/6: Checking libvirtd availability");
+    info!("Step 2/8: Checking libvirtd availability");
     if let Err(e) = deps::ensure_libvirtd_running() {
         warn!("libvirtd service not available (this is OK if using socket activation): {}", e);
         // Socket activation is fine, but if nothing answers on the URI there is
@@ -96,7 +98,7 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     }
 
     // Step 3: Discover existing resources
-    info!("Step 3/6: Discovering libvirt resources");
+    info!("Step 3/8: Discovering libvirt resources");
     let resources = libvirt_setup::discover_libvirt(&opts.libvirt_uri)?;
     info!(
         "Found {} networks and {} storage pools",
@@ -105,7 +107,7 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     );
 
     // Step 4: Create resources if needed
-    info!("Step 4/6: Ensuring required resources exist");
+    info!("Step 4/8: Ensuring required resources exist");
     
     // Check if we need to create default network
     let network_exists = resources
@@ -141,7 +143,7 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     let resources = libvirt_setup::discover_libvirt(&opts.libvirt_uri)?;
 
     // Step 5: Generate configuration
-    info!("Step 5/6: Generating configuration");
+    info!("Step 5/8: Generating configuration");
     
     if config_gen::config_exists(&opts.config_path) && !opts.force {
         info!(
@@ -155,7 +157,7 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     }
 
     // Step 6: Generate token
-    info!("Step 6/6: Generating API token");
+    info!("Step 6/8: Generating API token");
     
     let token = if token::token_exists(&opts.token_path) && !opts.force {
         info!(
@@ -171,6 +173,20 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
 
     // Create state directory
     std::fs::create_dir_all(&opts.state_dir).context("creating state directory")?;
+
+    // Step 7: Generate TLS certificates for multi-host libvirt connections
+    if let Err(e) = tls_certs::ensure_tls_certificates(opts.force) {
+        warn!("Failed to generate TLS certificates: {}", e);
+        warn!("Multi-host libvirt connections may not work until certificates are set up manually");
+    }
+
+    // Step 8: Configure firewall (restrict inbound TCP to LAN only)
+    info!("Step 8/8: Configuring firewall");
+    if let Err(e) = firewall::configure_firewall() {
+        warn!("Failed to configure firewall: {}", e);
+        warn!("You may want to configure iptables manually for security");
+        warn!("See: ~/block-inbound-tcp.sh");
+    }
 
     // Write environment file to /etc/xdebbie/ (system-wide)
     let cfg_dir = opts.config_path.parent().unwrap_or_else(|| Path::new(DEFAULT_CONFIG_DIR));
