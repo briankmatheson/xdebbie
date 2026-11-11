@@ -67,23 +67,31 @@ sudo apt install ./abe_0.2.0-1_amd64.deb nvme-cli
 sudo tee /etc/default/abe <<'EOF'
 ABE_VG=timesink-vg            # any VG; a thin pool is recommended
 ABE_THIN_POOL=xdebbie-pool
-ABE_ADVERTISE=10.22.0.1       # what initiators connect to; the WireGuard
-                              # underlay address when the mesh is on
-ABE_LISTEN=0.0.0.0:80
+ABE_TRADDR=10.22.0.1          # bind nvmet ports and the API to the WireGuard
+ABE_ADVERTISE=10.22.0.1       # underlay address only: reachable from other
+ABE_LISTEN=10.22.0.1:80       # hypervisors, not from the LAN or from guests
 EOF
-sudo systemctl enable --now abe
+# wg-flock is created by xdebbied, so make abe wait for it at boot
+sudo mkdir -p /etc/systemd/system/abe.service.d
+sudo tee /etc/systemd/system/abe.service.d/underlay.conf <<'EOF'
+[Unit]
+After=xdebbied.service
+[Service]
+ExecStartPre=/usr/bin/timeout 90 /bin/sh -c 'until ip -4 addr show to 10.22.0.1/32 | grep -q inet; do sleep 1; done'
+EOF
+sudo systemctl daemon-reload && sudo systemctl enable --now abe
 sudo modprobe nvme-tcp && echo nvme-tcp | sudo tee /etc/modules-load.d/nvme-tcp.conf
 
 # tell xdebbied
 sudo tee -a /etc/xdebbie/xdebbied.toml <<'EOF'   # inside the host's [[hosts]] block
-abe = "http://127.0.0.1:80"
+abe = "http://10.22.0.1:80"
 EOF
 sudo systemctl restart xdebbied
 ```
 
 Then `xdctl vm create demo --image debian-13 --disk-gib 10 --storage abe`.
 `xdctl vm get demo --json | jq .disks` shows the volumes; `nvme list` on the
-host shows them attached; `curl -s http://127.0.0.1/volumes` shows them on
+host shows them attached; `curl -s http://10.22.0.1/volumes` shows them on
 the exporter.
 
 ### Addresses
@@ -95,9 +103,12 @@ encrypted underlay directly instead of the Geneve overlay, and the local
 host reaches its own underlay address too. The ABE HTTP API only needs to be
 reachable by the xdebbied that schedules VMs onto that host.
 
-The nvmet listener binds `0.0.0.0` (ABE_TRADDR), so the listener does not
-depend on `wg-flock` existing at boot. ABE opens one TCP port per volume
-(`44001`, `44002`, …) and adds a ufw rule for each when ufw is present.
+Bind both the API (`ABE_LISTEN`) and nvmet (`ABE_TRADDR`) to that same
+underlay address: the API has no authentication, so it must not be reachable
+from the LAN or from guests on the bridge. The cost is that abe then depends
+on `wg-flock` existing, hence the `After=xdebbied.service` drop-in above.
+ABE opens one TCP port per volume (`44001`, `44002`, …) and adds a ufw rule
+for each when ufw is present.
 
 ### Firewall
 
@@ -106,6 +117,7 @@ underlay in addition to the [mesh rules](mesh.md#host-firewalls):
 
 ```sh
 sudo ufw allow in on wg-flock proto tcp from 10.22.0.0/16 to any port 44000:44999
+sudo ufw allow in on wg-flock proto tcp from 10.22.0.0/16 to any port 80
 ```
 
 ## Configuration reference
@@ -114,7 +126,7 @@ sudo ufw allow in on wg-flock proto tcp from 10.22.0.0/16 to any port 44000:4499
 [[hosts]]
 name = "timesink"
 uri = "qemu:///system"
-abe = "http://127.0.0.1:80"     # this host's ABE API
+abe = "http://10.22.0.1:80"     # this host's ABE API (underlay address)
 
 # binaries, overridable for tests
 nvme = "nvme"
