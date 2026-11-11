@@ -87,6 +87,63 @@ fn generate_ca() -> Result<()> {
     Ok(())
 }
 
+/// Every global-scope IPv4 address on this host (LAN, WireGuard underlay,
+/// mesh bridge, ...). Used for the server cert's SubjectAltName.
+fn local_ipv4_addrs() -> Vec<String> {
+    let out = Command::new("ip")
+        .args(&["-4", "-o", "addr", "show", "scope", "global"])
+        .output();
+    let Ok(out) = out else { return vec![] };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        // "2: eth0    inet 192.168.1.156/24 brd ... scope global eth0"
+        .filter_map(|l| {
+            let mut f = l.split_whitespace();
+            f.position(|w| w == "inet")?;
+            f.next()?.split('/').next().map(str::to_string)
+        })
+        .collect()
+}
+
+/// Build the subjectAltName list for the server cert: short name, FQDN and
+/// every local IPv4 address. libvirt clients verify the server cert against
+/// whatever host appears in the URI (`qemu+tls://192.168.1.156/system`), so a
+/// cert with only CN=<name> is rejected with "Certificate owner does not
+/// match the hostname".
+fn server_san(hostname: &str) -> String {
+    let mut san = vec![format!("DNS:{}", hostname)];
+    if let Ok(fqdn) = Command::new("hostname").arg("-f").output() {
+        let fqdn = String::from_utf8_lossy(&fqdn.stdout).trim().to_string();
+        if !fqdn.is_empty() && fqdn != hostname {
+            san.push(format!("DNS:{}", fqdn));
+        }
+    }
+    for ip in local_ipv4_addrs() {
+        san.push(format!("IP:{}", ip));
+    }
+    san.join(",")
+}
+
+/// Does the server cert carry a SubjectAltName that covers `hostname` and the
+/// host's current IPs? Certs issued before SANs were added (or after an IP
+/// change) must be reissued or every qemu+tls connection fails.
+fn server_cert_san_ok(hostname: &str) -> bool {
+    let out = Command::new("openssl")
+        .args(&["x509", "-in", SERVER_CERT, "-noout", "-ext", "subjectAltName"])
+        .output();
+    let Ok(out) = out else { return false };
+    if !out.status.success() {
+        return false;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    if !text.contains(&format!("DNS:{}", hostname)) {
+        return false;
+    }
+    local_ipv4_addrs()
+        .iter()
+        .all(|ip| text.contains(&format!("IP Address:{}", ip)))
+}
+
 /// Generate server certificate for libvirtd
 fn generate_server_cert(hostname: &str) -> Result<()> {
     info!("Generating server certificate for {}...", hostname);
@@ -122,6 +179,20 @@ fn generate_server_cert(hostname: &str) -> Result<()> {
         anyhow::bail!("Failed to generate server CSR: {}", String::from_utf8_lossy(&output.stderr));
     }
     
+    // x509 extensions: SAN + server usage. `openssl x509 -req` drops CSR
+    // extensions unless given an -extfile, so write one explicitly.
+    let san = server_san(hostname);
+    info!("  SAN: {}", san);
+    let ext_path = "/tmp/server.ext";
+    fs::write(
+        ext_path,
+        format!(
+            "subjectAltName={}\nextendedKeyUsage=serverAuth\nkeyUsage=digitalSignature,keyEncipherment\n",
+            san
+        ),
+    )
+    .context("writing server cert extensions")?;
+
     // Sign with CA
     let output = Command::new("openssl")
         .args(&[
@@ -130,6 +201,7 @@ fn generate_server_cert(hostname: &str) -> Result<()> {
             "-CA", CA_CERT,
             "-CAkey", CA_KEY,
             "-CAcreateserial",
+            "-extfile", ext_path,
             "-out", SERVER_CERT,
             "-days", "365",
             "-sha256",
@@ -137,12 +209,12 @@ fn generate_server_cert(hostname: &str) -> Result<()> {
         .output()
         .context("signing server certificate")?;
     
+    let _ = fs::remove_file(csr_path);
+    let _ = fs::remove_file(ext_path);
+
     if !output.status.success() {
         anyhow::bail!("Failed to sign server cert: {}", String::from_utf8_lossy(&output.stderr));
     }
-    
-    // Clean up CSR
-    let _ = fs::remove_file(csr_path);
     
     // Set permissions
     fs::set_permissions(SERVER_KEY, fs::Permissions::from_mode(0o600))
@@ -338,7 +410,7 @@ auth_tls = "none"
 
 /// Ensure all TLS certificates exist and are valid
 pub fn ensure_tls_certificates(force: bool) -> Result<()> {
-    info!("Step 7/7: Ensuring TLS certificates for libvirt");
+    info!("Step 7/8: Ensuring TLS certificates for libvirt");
     
     // Get hostname
     let hostname = hostname::get()
@@ -354,8 +426,12 @@ pub fn ensure_tls_certificates(force: bool) -> Result<()> {
         info!("  ✓ CA certificate exists and is valid");
     }
     
-    // Check/generate server certificate
+    // Check/generate server certificate. A parseable cert is not enough: it
+    // must also carry a SAN matching this host's name and addresses.
     if !cert_is_valid(SERVER_CERT) || force {
+        generate_server_cert(hostname)?;
+    } else if !server_cert_san_ok(hostname) {
+        warn!("  Server certificate lacks a SAN for this host's name/IPs; reissuing");
         generate_server_cert(hostname)?;
     } else {
         info!("  ✓ Server certificate exists and is valid");

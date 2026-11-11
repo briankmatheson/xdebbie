@@ -1,108 +1,105 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//! Host firewall: restrict inbound TCP to the networks this host is a member
+//! of (LAN, WireGuard underlay, mesh overlay). Everything else is dropped.
+//!
+//! Rules live in a dedicated `XDEBBIE-INPUT` chain that is flushed and
+//! rebuilt on every run, so re-running bootstrap after an address change
+//! yields the right rule set and ordering. INPUT only gets a single jump to
+//! that chain. IPv4 only; ip6tables is not touched.
+
 use anyhow::{Context, Result};
+use std::net::Ipv4Addr;
 use std::process::Command;
 use tracing::{info, warn};
 
-/// Configure firewall to restrict inbound TCP to LAN only
+const CHAIN: &str = "XDEBBIE-INPUT";
+
+/// IPv4 prefixes (`a.b.c.0/24`) of every global-scope address on this host.
+/// Inbound TCP from these networks is allowed; this is what lets peers reach
+/// the API (7443), libvirt TLS (16514) and ABE (80) over the LAN, the
+/// wg-flock underlay (10.22/16) and the mesh overlay (10.23/16).
+fn local_ipv4_prefixes() -> Vec<String> {
+    let out = Command::new("ip")
+        .args(&["-4", "-o", "addr", "show", "scope", "global"])
+        .output();
+    let Ok(out) = out else { return vec![] };
+    let mut nets: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| {
+            let mut f = l.split_whitespace();
+            f.position(|w| w == "inet")?;
+            let (ip, len) = f.next()?.split_once('/')?;
+            let ip: Ipv4Addr = ip.parse().ok()?;
+            let len: u32 = len.parse().ok()?;
+            if len > 32 {
+                return None;
+            }
+            let mask = if len == 0 { 0 } else { u32::MAX << (32 - len) };
+            let net = Ipv4Addr::from(u32::from(ip) & mask);
+            Some(format!("{}/{}", net, len))
+        })
+        .collect();
+    nets.sort();
+    nets.dedup();
+    nets
+}
+
+fn iptables(args: &[&str]) -> Result<bool> {
+    let out = Command::new("iptables")
+        .args(args)
+        .output()
+        .with_context(|| format!("running iptables {}", args.join(" ")))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        // `-C`/`-N` on a missing rule/chain is an expected, non-fatal "no".
+        if !args.first().map_or(false, |a| *a == "-C" || *a == "-N") {
+            warn!("iptables {} failed: {}", args.join(" "), err.trim());
+        }
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+/// Configure the firewall. Idempotent; safe to re-run.
 pub fn configure_firewall() -> Result<()> {
     info!("Configuring firewall rules...");
-    
-    // TODO: Read LAN network from config
-    let lan_net = "192.168.1.0/24";
-    
-    info!("Restricting inbound TCP to LAN network: {}", lan_net);
-    
-    // Check if iptables is available
-    let iptables_check = Command::new("which")
+
+    if !Command::new("which")
         .arg("iptables")
         .output()
-        .context("Failed to check for iptables")?;
-    
-    if !iptables_check.status.success() {
+        .map_or(false, |o| o.status.success())
+    {
         warn!("iptables not found, skipping firewall configuration");
         return Ok(());
     }
-    
-    // Rule 1: Accept established/related connections
-    add_rule_if_missing(&[
-        "INPUT",
-        "-m",
-        "conntrack",
-        "--ctstate",
-        "ESTABLISHED,RELATED",
-        "-j",
-        "ACCEPT",
-    ])?;
-    
-    // Rule 2: Accept all loopback traffic
-    add_rule_if_missing(&[
-        "INPUT",
-        "-i",
-        "lo",
-        "-j",
-        "ACCEPT",
-    ])?;
-    
-    // Rule 3: Accept TCP from LAN network
-    add_rule_if_missing(&[
-        "INPUT",
-        "-p",
-        "tcp",
-        "-s",
-        lan_net,
-        "-j",
-        "ACCEPT",
-    ])?;
-    
-    // Rule 4: Drop all other inbound TCP
-    add_rule_if_missing(&[
-        "INPUT",
-        "-p",
-        "tcp",
-        "-j",
-        "DROP",
-    ])?;
-    
-    info!("Firewall configuration complete");
-    info!("Note: To persist these rules across reboots, install iptables-persistent:");
-    info!("  sudo apt install iptables-persistent");
-    info!("  sudo netfilter-persistent save");
-    
-    Ok(())
-}
 
-/// Add an iptables rule only if it doesn't already exist
-fn add_rule_if_missing(args: &[&str]) -> Result<()> {
-    // First check if the rule exists using -C (check)
-    let mut check_args = vec!["-C"];
-    check_args.extend_from_slice(args);
-    
-    let check = Command::new("iptables")
-        .args(&check_args)
-        .output()
-        .context("Failed to check iptables rule")?;
-    
-    if check.status.success() {
-        // Rule already exists
-        info!("iptables rule already exists: {}", args.join(" "));
+    let nets = local_ipv4_prefixes();
+    if nets.is_empty() {
+        warn!("No global IPv4 addresses found; not installing TCP drop rule");
         return Ok(());
     }
-    
-    // Rule doesn't exist, add it using -A (append)
-    let mut add_args = vec!["-A"];
-    add_args.extend_from_slice(args);
-    
-    let add = Command::new("iptables")
-        .args(&add_args)
-        .output()
-        .context("Failed to add iptables rule")?;
-    
-    if !add.status.success() {
-        let stderr = String::from_utf8_lossy(&add.stderr);
-        warn!("Failed to add iptables rule: {}", stderr);
-        return Err(anyhow::anyhow!("Failed to add iptables rule: {}", stderr));
+
+    // Build the chain from scratch so ordering is always correct.
+    iptables(&["-N", CHAIN])?; // no-op if it exists
+    iptables(&["-F", CHAIN])?;
+    iptables(&[
+        "-A", CHAIN, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT",
+    ])?;
+    iptables(&["-A", CHAIN, "-i", "lo", "-j", "ACCEPT"])?;
+    for net in &nets {
+        info!("  allow inbound TCP from {}", net);
+        iptables(&["-A", CHAIN, "-p", "tcp", "-s", net, "-j", "ACCEPT"])?;
     }
-    
-    info!("Added iptables rule: {}", args.join(" "));
+    iptables(&["-A", CHAIN, "-p", "tcp", "-j", "DROP"])?;
+
+    // Single jump from INPUT, at the top.
+    if !iptables(&["-C", "INPUT", "-j", CHAIN])? {
+        iptables(&["-I", "INPUT", "1", "-j", CHAIN])?;
+    }
+
+    info!("Firewall configured: inbound TCP limited to {}", nets.join(", "));
+    info!("Rules are not persistent across reboots; bootstrap re-applies them on service start.");
+    info!("To persist independently: apt install iptables-persistent && netfilter-persistent save");
     Ok(())
 }
 
@@ -111,9 +108,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_configure_firewall_dry_run() {
-        // This test just ensures the function compiles and doesn't panic
-        // We can't actually test iptables without root privileges
-        assert!(true);
+    fn prefixes_are_networks_not_hosts() {
+        // Can't control `ip` output in a unit test; just check the parsing
+        // path produces network addresses when it runs.
+        for n in local_ipv4_prefixes() {
+            let (ip, len) = n.split_once('/').unwrap();
+            let ip: Ipv4Addr = ip.parse().unwrap();
+            let len: u32 = len.parse().unwrap();
+            let mask = if len == 0 { 0 } else { u32::MAX << (32 - len) };
+            assert_eq!(u32::from(ip) & mask, u32::from(ip), "{} is not a network address", n);
+        }
     }
 }
