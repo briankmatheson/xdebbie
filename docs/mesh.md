@@ -154,6 +154,41 @@ The `.deb` ships `/etc/modules-load.d/xdebbie-mesh.conf` (`geneve`,
 ICMP (peer probes) work. The dev host should use `bridge = "virbr-int"` and
 `fdb = "learn"` until VM MACs are derivable.
 
+### Host firewalls (ufw / firewalld)
+
+xdebbie's own `inet xdebbie_mesh` table only *accepts* Geneve from enrolled
+peers; it cannot override a `drop` in another table on the same hook. If the
+host runs ufw/firewalld with a default-deny input policy, two things must be
+opened — the symptom otherwise is a WireGuard handshake that succeeds and
+`gnv-b<N>` tunnels whose TX counters climb while RX stays at 0 on the far side:
+
+```bash
+# the WireGuard carrier, on the physical NIC
+sudo ufw allow 51820/udp comment 'xdebbie wireguard underlay'
+# the Geneve payload, which hits INPUT a second time after decryption
+sudo ufw allow in on wg-flock proto udp to any port 6081 comment 'xdebbie geneve over wireguard'
+```
+
+(Without a managed WireGuard underlay, open `6081/udp` on the underlay NIC
+instead — and consider restricting it to peer addresses.)
+
+### AppArmor
+
+Debian's `wireguard-tools` confines `/usr/bin/wg` and only lets it read keys
+under `/etc/wireguard`. xdebbied therefore passes the private key to
+`wg set … private-key /dev/stdin` over a pipe, and the `.deb` ships
+`/etc/apparmor.d/local/wg` allowing `/var/lib/xdebbie/wg.key r,` for manual
+use.
+
+### Joining bridges that already have DHCP
+
+Once two boxes are meshed their bridges are **one L2 segment**: every DHCP
+server on either bridge hears every VM's DISCOVER. Run exactly one DHCP server
+per overlay (or disjoint ranges in one subnet), and give each box's bridge a
+distinct address in that subnet (e.g. `10.23.0.1/16` on box 0, `10.23.0.2/16`
+on box 1). A freshly bootstrapped host's libvirt network ships with its own
+dnsmasq DHCP range — remove `<dhcp>` from it before enrolling that host.
+
 ## Mesh-only mode
 
 `xdebbied serve --mesh-only` runs just the mesh manager and the `/v1/mesh`
