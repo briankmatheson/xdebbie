@@ -14,6 +14,7 @@ case "$1" in
         # Geneve kernel module for the optional overlay mesh (also listed in
         # /etc/modules-load.d/xdebbie-mesh.conf for boot). Harmless if unused.
         modprobe geneve 2>/dev/null || true
+        modprobe wireguard 2>/dev/null || true
 
         # Reload systemd
         systemctl daemon-reload || true

@@ -8,7 +8,7 @@
 # Env: XDEBBIED / XDCTL (binaries), MESH_TEST_WORK (state dir),
 #      KEEP=1 (leave namespaces up on exit), ONLY="M1 M5" (subset).
 set -uo pipefail
-export PATH=/usr/sbin:/sbin:$PATH
+export PATH=/usr/sbin:/sbin:$HOME/bin:$PATH   # ~/bin for an unprivileged `wg`
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
@@ -309,6 +309,78 @@ if want M13; then
   (( after - before >= 3 )) || ok=0
   pingok vm0 10.23.1.11 || ok=0
   [[ $ok == 1 ]] && pass M13 "UDP 6081 on a non-underlay interface is counted+dropped (+$((after-before))); mesh unaffected" || fail M13 "before=$before after=$after"
+fi
+
+# ---------------- M14 WireGuard underlay (0.5.0) ----------------
+# The mesh builds wg-flock itself on top of the carrier. ul0 is re-addressed
+# to 10.99.N.1 for the duration so the derived WireGuard addresses
+# (10.22.N.1/16) don't collide with it.
+if want M14 && command -v wg >/dev/null; then
+  ok=1; why=""
+  for N in 0 1 2; do H $N ip addr replace 10.99.$N.1/16 dev ul0; H $N ip addr del 10.22.$N.1/16 dev ul0; done
+  wg_spec() { # wg_spec <N> [peer json...]
+    local N=$1; shift
+    local peers; peers=$(printf '%s\n' "$@" | paste -sd,)
+    echo "{\"enabled\":true,\"box\":$N,\"networks\":[{\"bridge\":\"br-int\",\"vni\":23}],\"underlay\":\"wg-flock\",\"wireguard\":{},\"fdb\":\"derived\",\"firewall\":true,\"peers\":[${peers}]}"
+  }
+  # 1. enable with zero peers: each daemon generates its key and builds wg-flock
+  for N in 0 1 2; do wg_spec $N | X $N mesh apply -f - >/dev/null || { ok=0; why+=" apply0-h$N"; }; done
+  declare -A PK
+  for N in 0 1 2; do PK[$N]=$(X $N mesh wg --json | jq_ "d['pubkey']"); [[ ${#PK[$N]} == 44 ]] || { ok=0; why+=" h$N pubkey=${PK[$N]}"; }; done
+  for N in 0 1 2; do H $N wg show wg-flock public-key | grep -qx "${PK[$N]}" || { ok=0; why+=" h$N kernel pubkey differs"; }; done
+  # 2. enrol: remote omitted (derived), endpoint on the carrier
+  for N in 0 1 2; do
+    args=(); for P in 0 1 2; do [[ $P == "$N" ]] || args+=("{\"box\":$P,\"pubkey\":\"${PK[$P]}\",\"endpoint\":\"10.99.$P.1:51820\"}"); done
+    wg_spec $N "${args[@]}" | X $N mesh apply -f - >/dev/null || { ok=0; why+=" apply-h$N"; }
+  done
+  wait_for 15 all_up 0 1 2 || { ok=0; why+=" peers not Up: $(peer_state 0 1)/$(peer_state 0 2)"; }
+  [[ $(J 0 | jq_ "[p['remote'] for p in d['spec']['peers'] if p['box']==1][0]") == 10.22.1.1 ]] || { ok=0; why+=" remote not derived"; }
+  [[ $(J 0 | jq_ "d['status']['mtu']") == 1370 ]] || { ok=0; why+=" mtu=$(J 0 | jq_ "d['status']['mtu']")"; }
+  # 3. VM traffic flows, and the carrier sees only WireGuard (no plaintext Geneve)
+  H 1 nft -f - <<'EOF'
+table netdev m14 {
+  counter gnv {}
+  counter wgudp {}
+  chain in {
+    type filter hook ingress device ul0 priority 0;
+    udp dport 6081 counter name "gnv"
+    udp dport 51820 counter name "wgudp"
+  }
+}
+EOF
+  for i in 1 2 3; do pingok vm0 10.23.1.11 || { ok=0; why+=" vm0->vm1 ping $i"; }; done
+  pingok vm2 10.23.1.11 || { ok=0; why+=" vm2->vm1"; }
+  gcount=$(H 1 nft -j list counter netdev m14 gnv | jq_ "[e for e in d['nftables'] if 'counter' in e][0]['counter']['packets']")
+  wcount=$(H 1 nft -j list counter netdev m14 wgudp | jq_ "[e for e in d['nftables'] if 'counter' in e][0]['counter']['packets']")
+  H 1 nft delete table netdev m14
+  [[ $gcount == 0 ]] || { ok=0; why+=" plaintext geneve on carrier ($gcount pkts)"; }
+  (( wcount > 0 )) || { ok=0; why+=" no wireguard packets seen"; }
+  hs=$(X 0 mesh wg --json | jq_ "[p['handshake_age_s'] for p in d['peers'] if p['box']==1][0]")
+  [[ $hs != None && $hs -lt 60 ]] || { ok=0; why+=" no handshake with peer 1 ($hs)"; }
+  # 4. restart h0 daemon: zero actions, key reused, same pubkey
+  wgidx=$(ifindex 0 wg-flock)
+  $NS daemon-stop 0 >/dev/null; : > "$WORK/h0/xdebbied.log"; $NS daemon-start 0 >/dev/null
+  wait_for 10 all_up 0 1 2 || { ok=0; why+=" not Ready after restart"; }
+  acts=$(grep -c 'action=' "$WORK/h0/xdebbied.log" || true)
+  [[ ${acts:-0} == 0 ]] || { ok=0; why+=" $acts actions after restart"; }
+  [[ $(ifindex 0 wg-flock) == "$wgidx" ]] || { ok=0; why+=" wg-flock recreated"; }
+  [[ $(X 0 mesh wg --json | jq_ "d['pubkey']") == "${PK[0]}" ]] || { ok=0; why+=" pubkey changed"; }
+  # 5. drop peer 2 on h0: wg peer + tunnel removed, peer 1 untouched
+  X 0 mesh peer rm 2 >/dev/null || { ok=0; why+=" peer rm"; }
+  H 0 wg show wg-flock peers | grep -q "${PK[2]}" && { ok=0; why+=" wg peer 2 still present"; }
+  H 0 wg show wg-flock peers | grep -q "${PK[1]}" || { ok=0; why+=" wg peer 1 removed"; }
+  ip -n h0 link show gnv-b2 >/dev/null 2>&1 && { ok=0; why+=" gnv-b2 still present"; }
+  # 6. delete: wg-flock gone, key file kept, ul0 untouched
+  X 0 mesh delete --yes >/dev/null
+  ip -n h0 link show wg-flock >/dev/null 2>&1 && { ok=0; why+=" wg-flock survived delete"; }
+  [[ -s $WORK/h0/wg.key ]] || { ok=0; why+=" wg.key removed"; }
+  ip -n h0 link show ul0 >/dev/null 2>&1 || { ok=0; why+=" ul0 gone"; }
+  [[ $ok == 1 ]] && pass M14 "WireGuard underlay: keys, enrolment, encrypted carrier ($wcount wg pkts, 0 geneve), silent restart, peer rm, teardown" || fail M14 "$why"
+  # restore the plain-underlay world for anything that runs after
+  for N in 1 2; do X $N mesh delete --yes >/dev/null 2>&1; done
+  for N in 0 1 2; do H $N ip addr replace 10.22.$N.1/16 dev ul0; H $N ip addr del 10.99.$N.1/16 dev ul0 2>/dev/null; done
+elif want M14; then
+  fail M14 "wg not on PATH (apt install wireguard-tools, or drop wg into ~/bin)"
 fi
 
 echo

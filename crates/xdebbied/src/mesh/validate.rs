@@ -94,9 +94,28 @@ pub fn validate(spec: &MeshSpec, env: &Env) -> Vec<FieldError> {
         err(&mut e, "probe.up_after", "must be ≥ 1");
     }
 
+    if let Some(w) = &spec.wireguard {
+        if w.listen_port == 0 {
+            err(&mut e, "wireguard.listen_port", "must be 1–65535");
+        }
+        if !(8..=30).contains(&w.prefix) {
+            err(&mut e, "wireguard.prefix", format!("must be 8–30, got {}", w.prefix));
+        }
+        if w.mtu < MIN_MTU + GENEVE_OVERHEAD {
+            err(&mut e, "wireguard.mtu", format!("must be at least {} so the overlay keeps {MIN_MTU}", MIN_MTU + GENEVE_OVERHEAD));
+        }
+        if let Some(a) = w.address
+            && (a.is_unspecified() || a.is_loopback() || a.is_broadcast() || a.is_multicast())
+        {
+            err(&mut e, "wireguard.address", format!("{a} is not a usable unicast address"));
+        }
+    }
+
     let local: HashSet<Ipv4Addr> = env.local_addrs.iter().copied().collect();
     let mut boxes = HashSet::new();
     let mut remotes = HashSet::new();
+    let mut pubkeys = HashSet::new();
+    let wg_addr = spec.wg_address();
     for (i, p) in spec.peers.iter().enumerate() {
         let f = |name: &str| format!("peers[{i}].{name}");
         if p.box_id > 253 {
@@ -108,8 +127,13 @@ pub fn validate(spec: &MeshSpec, env: &Env) -> Vec<FieldError> {
         if !boxes.insert(p.box_id) {
             err(&mut e, f("box"), format!("duplicate peer box {}", p.box_id));
         }
-        if p.remote.is_unspecified() || p.remote.is_loopback() || p.remote.is_broadcast() || p.remote.is_multicast() {
+        if p.remote.is_unspecified() {
+            err(&mut e, f("remote"), "required (derived automatically only when `wireguard` is set)");
+        } else if p.remote.is_loopback() || p.remote.is_broadcast() || p.remote.is_multicast() {
             err(&mut e, f("remote"), format!("{} is not a usable unicast address", p.remote));
+        }
+        if wg_addr == Some(p.remote) {
+            err(&mut e, f("remote"), format!("{} is this box's own WireGuard address", p.remote));
         }
         if local.contains(&p.remote) {
             err(&mut e, f("remote"), format!("{} is one of this host's own addresses", p.remote));
@@ -122,8 +146,44 @@ pub fn validate(spec: &MeshSpec, env: &Env) -> Vec<FieldError> {
         {
             err(&mut e, f("probe"), format!("{pr} is not a usable unicast address"));
         }
+        match (&spec.wireguard, &p.pubkey) {
+            (Some(_), None) => err(&mut e, f("pubkey"), "required when `wireguard` is set"),
+            (None, Some(_)) => err(&mut e, f("pubkey"), "only meaningful when `wireguard` is set"),
+            (Some(_), Some(k)) => {
+                if !valid_wg_key(k) {
+                    err(&mut e, f("pubkey"), "must be a 32-byte base64 key (44 chars ending in '=')");
+                }
+                if !pubkeys.insert(k.clone()) {
+                    err(&mut e, f("pubkey"), "duplicate public key");
+                }
+            }
+            (None, None) => {}
+        }
+        if let Some(ep) = &p.endpoint {
+            if spec.wireguard.is_none() {
+                err(&mut e, f("endpoint"), "only meaningful when `wireguard` is set");
+            } else if !valid_endpoint(ep) {
+                err(&mut e, f("endpoint"), "must be host:port or [v6]:port with a non-zero port");
+            }
+        }
     }
     e
+}
+
+/// 44-char base64 of 32 bytes: `[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=`.
+pub fn valid_wg_key(k: &str) -> bool {
+    let b = k.as_bytes();
+    b.len() == 44
+        && b[..43].iter().all(|c| c.is_ascii_alphanumeric() || *c == b'+' || *c == b'/')
+        && b[43] == b'='
+        && b"AEIMQUYcgkosw048".contains(&b[42])
+}
+
+/// `host:port` / `[v6]:port`; the host part is left to `wg` to resolve.
+pub fn valid_endpoint(ep: &str) -> bool {
+    let Some((host, port)) = ep.rsplit_once(':') else { return false };
+    let host = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(host);
+    !host.is_empty() && !host.contains(char::is_whitespace) && port.parse::<u16>().map(|p| p != 0).unwrap_or(false)
 }
 
 /// Convenience for the config loader: one error naming every bad field.
@@ -146,8 +206,8 @@ mod tests {
             box_id: 0,
             underlay: "ul0".into(),
             peers: vec![
-                PeerSpec { box_id: 1, remote: "10.22.1.1".parse().unwrap(), probe: None },
-                PeerSpec { box_id: 2, remote: "10.22.2.1".parse().unwrap(), probe: None },
+                PeerSpec::new(1, "10.22.1.1".parse().unwrap()),
+                PeerSpec::new(2, "10.22.2.1".parse().unwrap()),
             ],
             ..Default::default()
         }
@@ -260,5 +320,46 @@ mod tests {
         s.peers[0].box_id = 0;
         let e = validate_or_err(&s, &env()).unwrap_err().to_string();
         assert!(e.contains("peers[0].box"), "{e}");
+    }
+
+    #[test]
+    fn wireguard_rules() {
+        let mut s = base();
+        s.wireguard = Some(WireguardSpec::default());
+        s.peers = vec![PeerSpec::new(1, Ipv4Addr::new(10, 22, 1, 1))];
+        let e = validate(&s, &Env::default());
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert_eq!(e[0].field, "peers[0].pubkey");
+
+        s.peers[0].pubkey = Some("EtEvrro2LlkElPgm+ge5ndqtzL2o9ehIWwyIFnKsBQU=".into());
+        s.peers[0].endpoint = Some("gram.local:51820".into());
+        assert!(validate(&s, &Env::default()).is_empty());
+
+        s.peers.push(PeerSpec { pubkey: s.peers[0].pubkey.clone(), ..PeerSpec::new(2, Ipv4Addr::new(10, 22, 2, 1)) });
+        s.peers[1].endpoint = Some("nohost".into());
+        let e = validate(&s, &Env::default());
+        let fields: Vec<&str> = e.iter().map(|x| x.field.as_str()).collect();
+        assert!(fields.contains(&"peers[1].pubkey") && fields.contains(&"peers[1].endpoint"), "{e:?}");
+
+        // own address as a remote, bad key shape, bad port/prefix
+        s.peers.truncate(1);
+        s.peers[0].remote = Ipv4Addr::new(10, 22, 0, 1);
+        s.peers[0].pubkey = Some("short".into());
+        s.wireguard.as_mut().unwrap().listen_port = 0;
+        s.wireguard.as_mut().unwrap().prefix = 31;
+        let e = validate(&s, &Env::default());
+        let fields: Vec<&str> = e.iter().map(|x| x.field.as_str()).collect();
+        for f in ["peers[0].remote", "peers[0].pubkey", "wireguard.listen_port", "wireguard.prefix"] {
+            assert!(fields.contains(&f), "missing {f} in {e:?}");
+        }
+
+        // pubkey without wireguard; missing remote without wireguard
+        let mut s = base();
+        s.peers = vec![PeerSpec { pubkey: Some("x".into()), ..PeerSpec::new(1, Ipv4Addr::UNSPECIFIED) }];
+        let e = validate(&s, &Env::default());
+        let fields: Vec<&str> = e.iter().map(|x| x.field.as_str()).collect();
+        assert!(fields.contains(&"peers[0].remote") && fields.contains(&"peers[0].pubkey"), "{e:?}");
+
+        assert!(valid_endpoint("[fe80::1]:51820") && !valid_endpoint("host:0") && !valid_endpoint(":51820"));
     }
 }

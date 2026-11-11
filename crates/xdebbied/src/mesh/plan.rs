@@ -215,7 +215,7 @@ mod tests {
             underlay: "ul0".into(),
             allow_plain_underlay: true,
             peers: (1..=n)
-                .map(|i| PeerSpec { box_id: i, remote: Ipv4Addr::new(10, 22, i, 1), probe: None })
+                .map(|i| PeerSpec::new(i, Ipv4Addr::new(10, 22, i, 1)))
                 .collect(),
             ..Default::default()
         }
@@ -227,7 +227,7 @@ mod tests {
         f
     }
     fn plan_for(f: &FakeNetOps, s: &MeshSpec) -> Plan {
-        let obs = f.observe(&s.bridge()).unwrap();
+        let obs = f.observe(&s.bridge(), None).unwrap();
         diff(PlanInput { spec: s, observed: &obs, mtu: 1370, route_bad: &BTreeSet::new() })
     }
     fn apply_all(f: &FakeNetOps, p: &Plan) {
@@ -355,7 +355,7 @@ mod tests {
         let f = fake();
         let s = spec(3);
         converge(&f, &s);
-        let obs = f.observe("br-int").unwrap();
+        let obs = f.observe("br-int", None).unwrap();
         let p = diff(PlanInput { spec: &s, observed: &obs, mtu: 1300, route_bad: &BTreeSet::new() });
         assert_eq!(count(&p, "set_mtu"), 3);
         assert_eq!(count(&p, "set_bridge_mtu"), 1);
@@ -367,7 +367,7 @@ mod tests {
         let f = fake();
         let s = spec(2);
         converge(&f, &s);
-        let obs = f.observe("br-int").unwrap();
+        let obs = f.observe("br-int", None).unwrap();
         let bad: BTreeSet<u8> = [2].into();
         let p = diff(PlanInput { spec: &s, observed: &obs, mtu: 1370, route_bad: &bad });
         assert_eq!(p.excluded, vec![Excluded { box_id: 2, reason: "UnderlayRouteMismatch" }]);
@@ -377,7 +377,7 @@ mod tests {
         assert_eq!(count(&p, "fdb_del"), 17);
         apply_all(&f, &p);
         // ...and nothing more happens while the route stays bad.
-        let obs = f.observe("br-int").unwrap();
+        let obs = f.observe("br-int", None).unwrap();
         assert!(diff(PlanInput { spec: &s, observed: &obs, mtu: 1370, route_bad: &bad }).is_empty());
         // Route fixed: back up, entries back.
         let p = plan_for(&f, &s);
@@ -436,7 +436,7 @@ mod tests {
             address: None,
             kind: LinkKind::Other("tun".into()),
         });
-        let obs = f.observe("br-int").unwrap();
+        let obs = f.observe("br-int", None).unwrap();
         let t = teardown(&obs);
         assert_eq!(t.len(), 2);
         assert!(t.iter().all(|a| a.dev() == "gnv-b1" || a.dev() == "gnv-b2"));

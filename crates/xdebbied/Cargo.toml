@@ -19,11 +19,11 @@ XDebbie is a self-bootstrapping VM orchestrator that provides:
 - Cluster API provider (CAPX) integration
 - Simple HTTP API for VM management
 - CLI tool (xdctl) for easy management
-- Optional Geneve overlay mesh between hosts (xdctl mesh)
+- Optional Geneve overlay mesh between hosts over a managed WireGuard underlay (xdctl mesh)
 .
 Includes both xdebbied (daemon) and xdctl (CLI tool).
 """
-depends = "libvirt-daemon-system, libvirt-clients, qemu-kvm, qemu-utils, cloud-image-utils, lvm2, thin-provisioning-tools, iproute2, nftables, systemd"
+depends = "libvirt-daemon-system, libvirt-clients, qemu-kvm, qemu-utils, cloud-image-utils, lvm2, thin-provisioning-tools, iproute2, nftables, wireguard-tools, systemd"
 section = "admin"
 priority = "optional"
 assets = [

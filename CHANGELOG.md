@@ -5,6 +5,36 @@ All notable changes to XDebbie will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-11-11
+
+### Added
+- **Managed WireGuard underlay for the mesh.** With `[mesh.wireguard]` (or
+  `spec.wireguard` over the API) `xdebbied` creates the underlay interface
+  named by `underlay` as a WireGuard link, keyed from
+  `/var/lib/xdebbie/wg.key` (generated once, 0600), addressed
+  `10.22.<box>.1/16`, and keeps one WireGuard peer per mesh peer
+  (`allowed-ips <remote>/32`, `persistent-keepalive`). Geneve packets between
+  boxes are therefore always encrypted and authenticated; a peer's `remote`
+  is derived (`10.22.<box>.1`) so enrolment is just the peer's `pubkey` and
+  `endpoint`. Same discipline as the Geneve layer: ownership by name + alias
+  + kind, derived from kernel state each tick, zero writes on a converged
+  restart, foreign links never touched (`WireguardConflict` blocks instead).
+  `status.wireguard` reports this box's public key, port, address and
+  per-peer handshake age / byte counters.
+- `xdctl mesh wg` prints the local WireGuard identity and the exact
+  `xdctl mesh peer add … --pubkey … --endpoint …` line to run on other boxes;
+  `xdctl mesh peer add` gains `--pubkey`/`--endpoint` and makes `REMOTE`
+  optional.
+- Harness test M14: keys, enrolment, encrypted carrier (nft counters prove
+  no plaintext Geneve crosses the carrier), silent restart, peer removal,
+  teardown.
+- Package now depends on `wireguard-tools`; `/etc/modules-load.d/xdebbie-mesh.conf`
+  also loads `wireguard`.
+
+### Changed
+- `peers[].remote` is optional in the API/TOML when `wireguard` is set
+  (required otherwise; validation says so).
+
 ## [0.4.1] - 2026-11-10
 
 ### Fixed

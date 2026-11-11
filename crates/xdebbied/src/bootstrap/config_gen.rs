@@ -76,9 +76,20 @@ multicast_addr = "239.0.0.42:7442"
 # fdb = "derived"              # "derived" (static 52:54:00:23:<box>:xx) or "learn"
 # firewall = true              # drop UDP dstport arriving on non-underlay ifaces
 #
+# Let xdebbied build the WireGuard underlay itself (recommended): it creates
+# `underlay` as a WireGuard link addressed 10.22.<box>.1/16, keyed from
+# /var/lib/xdebbie/wg.key, and keeps one WireGuard peer per mesh peer.
+# `xdctl mesh wg` prints this box's public key for enrolment elsewhere.
+# [mesh.wireguard]
+# listen_port = 51820
+# mtu = 1420
+# keepalive = 25
+#
 # [[mesh.peers]]
 # box = 1
-# remote = "10.22.1.1"
+# pubkey = "<peer's public key from `xdctl mesh wg`>"
+# endpoint = "gram.example:51820"
+# # remote = "10.22.1.1"       # derived when [mesh.wireguard] is set
 # # probe = "10.23.1.1"        # defaults to 10.23.<box>.1 (derived) / remote (learn)
 
 # Configured hosts

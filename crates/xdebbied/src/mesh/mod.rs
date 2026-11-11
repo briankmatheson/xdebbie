@@ -23,6 +23,16 @@
 //! A link is mesh-owned only if its name is `gnv-b<P>` **and** its ifalias
 //! is `xdebbie-mesh/v1`. Nothing else is ever modified or deleted. The only
 //! nftables object touched is `table inet xdebbie_mesh`.
+//!
+//! # WireGuard underlay (0.5.0)
+//!
+//! With `spec.wireguard` set the mesh also owns the underlay: a WireGuard
+//! link named `spec.underlay` (same alias rule, plus kind = wireguard),
+//! keyed from `<state_dir>/wg.key` (generated once, 0600), addressed
+//! `10.22.<box>.1/16`, with one WireGuard peer per mesh peer carrying a
+//! `pubkey`. Geneve packets to `10.22.<peer>.1` are therefore always
+//! encrypted; `allow_plain_underlay` is moot. Flock's "WireGuard peer up →
+//! PUT" ordering collapses into a single PUT carrying `pubkey`/`endpoint`.
 
 pub mod firewall;
 pub mod kernel;
@@ -31,10 +41,12 @@ pub mod model;
 pub mod plan;
 pub mod probe;
 pub mod validate;
+pub mod wg;
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     io::Write,
+    net::Ipv4Addr,
     path::{Path, PathBuf},
     sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock},
     time::Duration,
@@ -148,6 +160,9 @@ pub struct MeshManager {
     probe_rx: StdMutex<Option<mpsc::Receiver<ProbeEvent>>>,
     icmp: StdMutex<Option<IcmpClient>>,
     last_nft: StdMutex<Option<String>>,
+    /// Name of the WireGuard link the last reconcile managed, so a spec
+    /// that drops `wireguard` (or a DELETE) can still clean it up.
+    last_wg_dev: StdMutex<Option<String>>,
     tap_owners: StdMutex<HashMap<String, String>>,
     pub overlay: Arc<Overlay>,
     /// Set by tests to skip spawning ICMP probers.
@@ -167,7 +182,7 @@ impl MeshManager {
         let desired = match std::fs::read(&path) {
             Ok(b) => {
                 let spec: MeshSpec = serde_json::from_slice(&b).with_context(|| format!("parsing {}", path.display()))?;
-                let spec = merge_defaults(spec, &config_spec);
+                let spec = merge_defaults(spec, &config_spec).normalize();
                 if let Err(e) = validate::validate_or_err(&spec, &env_for(&*ops, &spec)) {
                     warn!("{} is invalid ({e:#}); ignoring it and using [mesh] config", path.display());
                     Desired { spec: config_spec.clone(), source: Source::Config, generation: 1 }
@@ -202,6 +217,7 @@ impl MeshManager {
             probe_rx: StdMutex::new(Some(rx)),
             icmp: StdMutex::new(None),
             last_nft: StdMutex::new(last_nft),
+            last_wg_dev: StdMutex::new(None),
             tap_owners: StdMutex::new(HashMap::new()),
             overlay: Arc::new(Overlay::default()),
             probes_enabled: true,
@@ -231,7 +247,7 @@ impl MeshManager {
 
     /// Declarative replace. Same body twice is a no-op (no generation bump).
     pub async fn put(&self, spec: MeshSpec, if_match: Option<u64>) -> Result<(MeshSpec, MeshStatus), PutError> {
-        let spec = merge_defaults(spec, &self.config_spec);
+        let spec = merge_defaults(spec, &self.config_spec).normalize();
         let env = env_for(&*self.ops, &spec);
         let errs = validate::validate(&spec, &env);
         if !errs.is_empty() {
@@ -368,14 +384,16 @@ impl MeshManager {
 
     fn do_teardown(&self, d: &Desired, st: &mut MeshStatus) -> &'static str {
         let bridge = d.spec.bridge();
-        let observed = match self.ops.observe(&bridge) {
+        let observed = match self.ops.observe(&bridge, None) {
             Ok(o) => o,
             Err(e) => {
                 warn!("mesh: observing kernel state failed: {e:#}");
                 return "error";
             }
         };
-        let actions = plan::teardown(&observed);
+        let mut actions = plan::teardown(&observed);
+        // The WireGuard link goes last: Geneve tunnels reference it via routes.
+        actions.extend(self.wg_teardown_actions(&observed, &d.spec));
         let mut ok = true;
         for a in &actions {
             info!(action = a.kind(), dev = a.dev(), "mesh teardown");
@@ -396,18 +414,11 @@ impl MeshManager {
         self.overlay.set(None);
         st.peers.clear();
         st.vms_mtu_mismatch.clear();
+        st.wireguard = None;
         st.mtu = 0;
         st.metrics.retain_peers(&[]);
-        for c in [
-            ConditionType::GeneveModuleMissing,
-            ConditionType::UnderlayMissing,
-            ConditionType::BridgeMissing,
-            ConditionType::BridgeStpEnabled,
-            ConditionType::BridgeMacMismatch,
-            ConditionType::NameConflict,
-            ConditionType::Degraded,
-        ] {
-            set_condition(&mut st.conditions, c, false, None, None);
+        for c in ConditionType::ALL.iter().filter(|c| **c != ConditionType::Ready) {
+            set_condition(&mut st.conditions, *c, false, None, None);
         }
         set_condition(&mut st.conditions, ConditionType::Ready, false, Some("Disabled"), None);
         if ok {
@@ -418,9 +429,144 @@ impl MeshManager {
         }
     }
 
+    /// Delete every WireGuard link we own among the names the mesh may have
+    /// used: the current spec's underlay, the last one reconciled, and the
+    /// config's. Ownership (name + alias + kind) is what makes this safe.
+    fn wg_teardown_actions(&self, observed: &Observed, spec: &MeshSpec) -> Vec<kernel::Action> {
+        let mut names: Vec<String> = vec![];
+        if spec.wireguard.is_some() {
+            names.push(spec.underlay.clone());
+        }
+        if let Some(d) = self.last_wg_dev.lock().unwrap().clone() {
+            names.push(d);
+        }
+        if self.config_spec.wireguard.is_some() {
+            names.push(self.config_spec.underlay.clone());
+        }
+        names.sort();
+        names.dedup();
+        let acts: Vec<_> = names.iter().flat_map(|n| wg::teardown(observed, n)).collect();
+        *self.last_wg_dev.lock().unwrap() = None;
+        acts
+    }
+
+    /// WireGuard underlay step (runs before the Geneve preflight so the
+    /// underlay exists by the time it is looked up). Returns `false` when a
+    /// blocking condition was set, `None`-ish errors are reported in `all_ok`.
+    fn do_wireguard(&self, spec: &MeshSpec, st: &mut MeshStatus, all_ok: &mut bool) -> bool {
+        let Some(w) = &spec.wireguard else {
+            set_condition(&mut st.conditions, ConditionType::WireguardModuleMissing, false, None, None);
+            set_condition(&mut st.conditions, ConditionType::WireguardConflict, false, None, None);
+            st.wireguard = None;
+            // Spec no longer manages WireGuard: remove a link we built earlier.
+            let prev = self.last_wg_dev.lock().unwrap().clone();
+            if let Some(prev) = prev
+                && let Ok(observed) = self.ops.observe(&spec.bridge(), None)
+            {
+                for a in wg::teardown(&observed, &prev) {
+                    match self.ops.apply(&a) {
+                        Ok(()) => {
+                            info!(action = a.kind(), dev = a.dev(), "mesh wireguard (no longer managed)");
+                            st.metrics.inc_action(a.kind());
+                        }
+                        Err(e) => {
+                            *all_ok = false;
+                            warn!(action = a.kind(), dev = a.dev(), "mesh wireguard teardown failed: {e:#}");
+                        }
+                    }
+                }
+                *self.last_wg_dev.lock().unwrap() = None;
+            }
+            return true;
+        };
+        let dev = spec.underlay.as_str();
+        *self.last_wg_dev.lock().unwrap() = Some(dev.to_owned());
+        let module_ok = self.ops.wireguard_module_present();
+        set_condition(&mut st.conditions, ConditionType::WireguardModuleMissing, !module_ok, Some("NoSysModule"),
+            (!module_ok).then(|| "/sys/module/wireguard does not exist; the .deb ships /etc/modules-load.d/xdebbie-mesh.conf".to_string()));
+        if !module_ok {
+            return false;
+        }
+        let observed = match self.ops.observe(&spec.bridge(), Some(dev)) {
+            Ok(o) => o,
+            Err(e) => {
+                warn!("mesh: observing WireGuard state failed: {e:#}");
+                *all_ok = false;
+                return true;
+            }
+        };
+        let conflict = match wg::classify(&observed, dev) {
+            wg::WgState::Foreign(m) => Some(m),
+            _ => None,
+        };
+        set_condition(&mut st.conditions, ConditionType::WireguardConflict, conflict.is_some(), Some("ForeignLink"), conflict.clone());
+        if conflict.is_some() {
+            return false;
+        }
+        let (key_path, pubkey) = match ensure_wg_key(&*self.ops, &self.state_dir) {
+            Ok(k) => k,
+            Err(e) => {
+                warn!("mesh: WireGuard key unavailable: {e:#}");
+                *all_ok = false;
+                return true;
+            }
+        };
+        let actions = wg::diff(wg::WgInput { spec, observed: &observed, key_path: &key_path, pubkey: &pubkey });
+        for a in &actions {
+            match self.ops.apply(a) {
+                Ok(()) => {
+                    // keys/endpoints are not logged
+                    info!(action = a.kind(), dev = a.dev(), "mesh wireguard");
+                    st.metrics.inc_action(a.kind());
+                }
+                Err(e) => {
+                    *all_ok = false;
+                    warn!(action = a.kind(), dev = a.dev(), "mesh wireguard action failed: {e:#}");
+                }
+            }
+        }
+        // Status from the post-apply view.
+        let observed = if actions.is_empty() { observed } else { self.ops.observe(&spec.bridge(), Some(dev)).unwrap_or(observed) };
+        let now = self.ops.now_unix();
+        let iface = observed.wg.clone().unwrap_or_default();
+        let peers = spec
+            .peers
+            .iter()
+            .filter_map(|p| {
+                let k = p.pubkey.as_ref()?;
+                let c = iface.peer(k);
+                Some(WgPeerStatus {
+                    box_id: p.box_id,
+                    pubkey: k.clone(),
+                    endpoint: c.and_then(|c| c.endpoint.clone()).or_else(|| p.endpoint.clone()),
+                    handshake_age_s: c.filter(|c| c.latest_handshake > 0).map(|c| now.saturating_sub(c.latest_handshake)),
+                    rx_bytes: c.map(|c| c.rx_bytes).unwrap_or(0),
+                    tx_bytes: c.map(|c| c.tx_bytes).unwrap_or(0),
+                })
+            })
+            .collect();
+        st.wireguard = Some(WireguardStatus {
+            device: dev.to_owned(),
+            pubkey,
+            listen_port: w.listen_port,
+            address: format!("{}/{}", spec.wg_address().unwrap_or(Ipv4Addr::UNSPECIFIED), w.prefix),
+            peers,
+        });
+        true
+    }
+
     fn do_reconcile(&self, d: &Desired, st: &mut MeshStatus) -> &'static str {
         let spec = &d.spec;
         let bridge = spec.bridge();
+        let wg_dev = spec.wireguard.as_ref().map(|_| spec.underlay.as_str());
+
+        // 2. wireguard underlay (0.5.0)
+        let mut wg_ok = true;
+        if !self.do_wireguard(spec, st, &mut wg_ok) {
+            set_condition(&mut st.conditions, ConditionType::Ready, false, Some("Blocked"), Some("a blocking WireGuard condition is set; kernel left unchanged".into()));
+            self.overlay.set(None);
+            return "error";
+        }
 
         // 3. preflight
         let links = match self.ops.list_links() {
@@ -460,7 +606,7 @@ impl MeshManager {
         self.overlay.set(Some((bridge.clone(), mtu)));
 
         // 5. observe
-        let observed = match self.ops.observe(&bridge) {
+        let observed = match self.ops.observe(&bridge, wg_dev) {
             Ok(o) => o,
             Err(e) => {
                 warn!("mesh: observing kernel state failed: {e:#}");
@@ -494,7 +640,7 @@ impl MeshManager {
 
         // 8. apply
         let mut failed: BTreeMap<u8, String> = BTreeMap::new();
-        let mut all_ok = true;
+        let mut all_ok = wg_ok;
         for a in &plan.actions {
             let peer = parse_tunnel_name(a.dev());
             match self.ops.apply(a) {
@@ -601,7 +747,7 @@ impl MeshManager {
         let observed_after = if plan.actions.is_empty() {
             observed
         } else {
-            self.ops.observe(&bridge).unwrap_or(observed)
+            self.ops.observe(&bridge, wg_dev).unwrap_or(observed)
         };
         if all_ok {
             st.observed_generation = st.generation;
@@ -754,8 +900,39 @@ fn merge_defaults(mut spec: MeshSpec, cfg: &MeshSpec) -> MeshSpec {
 
 fn env_for(ops: &dyn NetOps, spec: &MeshSpec) -> validate::Env {
     let local_addrs = ops.local_addrs().unwrap_or_default();
-    let underlay_mtu = ops.list_links().ok().and_then(|ls| ls.into_iter().find(|l| l.name == spec.underlay).map(|l| l.mtu));
+    let underlay_mtu = match &spec.wireguard {
+        Some(w) => Some(w.mtu as u32),
+        None => ops.list_links().ok().and_then(|ls| ls.into_iter().find(|l| l.name == spec.underlay).map(|l| l.mtu)),
+    };
     validate::Env { local_addrs, underlay_mtu }
+}
+
+/// Load or create the WireGuard private key (`<state_dir>/wg.key`, 0600).
+/// Returns (path, public key).
+fn ensure_wg_key(ops: &dyn NetOps, state_dir: &Path) -> Result<(PathBuf, String)> {
+    let path = state_dir.join(WG_KEY_FILE);
+    let private = match std::fs::read_to_string(&path) {
+        Ok(k) if !k.trim().is_empty() => k.trim().to_owned(),
+        Ok(_) | Err(_) if !path.exists() || std::fs::metadata(&path).map(|m| m.len() == 0).unwrap_or(false) => {
+            let k = ops.wg_genkey().context("wg genkey")?;
+            std::fs::create_dir_all(state_dir)?;
+            let mut tmp = tempfile::NamedTempFile::new_in(state_dir)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o600))?;
+            }
+            tmp.write_all(format!("{k}\n").as_bytes())?;
+            tmp.as_file().sync_all()?;
+            tmp.persist(&path)?;
+            info!("mesh: generated WireGuard key {}", path.display());
+            k
+        }
+        Ok(k) => k.trim().to_owned(),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
+    let public = ops.wg_pubkey(&private).context("wg pubkey")?;
+    Ok((path, public))
 }
 
 fn set_condition(conds: &mut Vec<Condition>, kind: ConditionType, status: bool, reason: Option<&str>, message: Option<String>) {
@@ -804,7 +981,7 @@ mod tests {
             enabled: true,
             underlay: "ul0".into(),
             allow_plain_underlay: true,
-            peers: (1..=n).map(|i| PeerSpec { box_id: i, remote: Ipv4Addr::new(10, 22, i, 1), probe: None }).collect(),
+            peers: (1..=n).map(|i| PeerSpec::new(i, Ipv4Addr::new(10, 22, i, 1))).collect(),
             ..Default::default()
         }
     }
@@ -981,7 +1158,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut c = cfg();
         c.enabled = true;
-        c.peers = vec![PeerSpec { box_id: 5, remote: Ipv4Addr::new(10, 22, 5, 1), probe: None }];
+        c.peers = vec![PeerSpec::new(5, Ipv4Addr::new(10, 22, 5, 1))];
         let m = MeshManager::new_for_test(f.clone(), dir.path().into(), Some(&c)).unwrap();
         m.reconcile_once(false).await;
         assert!(f.snapshot().links.contains_key("gnv-b5"));
@@ -1000,7 +1177,7 @@ mod tests {
         let f = fake();
         let dir = tempfile::tempdir().unwrap();
         let mut c = cfg();
-        c.peers = vec![PeerSpec { box_id: 0, remote: Ipv4Addr::new(10, 22, 0, 1), probe: None }];
+        c.peers = vec![PeerSpec::new(0, Ipv4Addr::new(10, 22, 0, 1))];
         let e = MeshManager::new(f, dir.path().into(), Some(&c)).err().unwrap().to_string();
         assert!(e.contains("peers[0].box"), "{e}");
     }
@@ -1028,5 +1205,173 @@ mod tests {
         assert_eq!(st.peers.iter().find(|p| p.box_id == 2).unwrap().state, PeerState::Down);
         assert_eq!(st.metrics.peers["2"].probe_failures_total, 3);
         assert_eq!(st.metrics.peers["2"].up, 0);
+    }
+
+    // ---------- WireGuard (0.5.0) ----------
+
+    const K1: &str = "EtEvrro2LlkElPgm+ge5ndqtzL2o9ehIWwyIFnKsBQU=";
+    const K2: &str = "2Mt9XkPn7iVObR5nCjQYhTe1rtVf6hVuvIG1cyL+zGM=";
+
+    fn wg_fake() -> Arc<FakeNetOps> {
+        let f = FakeNetOps::new();
+        f.add_bridge("br-int", 1500, "52:54:00:23:00:fe");
+        // a physical uplink; the wg link is created by the mesh
+        f.add_underlay("eth0", 1500, Ipv4Addr::new(192, 0, 2, 10));
+        Arc::new(f)
+    }
+    fn wg_spec() -> MeshSpec {
+        MeshSpec {
+            enabled: true,
+            underlay: "wg-flock".into(),
+            wireguard: Some(WireguardSpec::default()),
+            peers: vec![
+                PeerSpec { pubkey: Some(K1.into()), endpoint: Some("192.0.2.11:51820".into()), ..PeerSpec::new(1, Ipv4Addr::UNSPECIFIED) },
+                PeerSpec { pubkey: Some(K2.into()), ..PeerSpec::new(2, Ipv4Addr::UNSPECIFIED) },
+            ],
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn wireguard_underlay_is_built_then_restart_is_silent() {
+        let f = wg_fake();
+        let dir = tempfile::tempdir().unwrap();
+        let m = MeshManager::new_for_test(f.clone(), dir.path().into(), None).unwrap();
+        let (s, st) = m.put(wg_spec(), None).await.ok().unwrap();
+        assert_eq!(s.peers[0].remote, Ipv4Addr::new(10, 22, 1, 1), "remote derived");
+        assert_eq!(st.observed_generation, st.generation);
+        assert_eq!(st.mtu, 1370, "1420 − 50");
+        assert!(!ConditionType::ALL.iter().any(|c| c.is_blocking() && st.is(*c)), "{:?}", st.conditions);
+        assert_eq!(st.condition(ConditionType::Ready).unwrap().reason.as_deref(), Some("PeersNotUp"));
+        assert!(st.peers.iter().all(|p| p.state == PeerState::Pending && p.ifindex.is_some()));
+        let w = st.wireguard.as_ref().expect("wireguard status");
+        assert_eq!(w.device, "wg-flock");
+        assert_eq!(w.pubkey, kernel::fake_pubkey("PRIV1"));
+        assert_eq!(w.address, "10.22.0.1/16");
+        assert_eq!(w.peers.len(), 2);
+        assert_eq!(w.peers[0].handshake_age_s, None);
+        // key file persisted 0600
+        let kp = dir.path().join(WG_KEY_FILE);
+        assert_eq!(std::fs::read_to_string(&kp).unwrap().trim(), "PRIV1");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&kp).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        // kernel: wg link ours, 2 wg peers with /32 allowed-ips, geneve tunnels present
+        let snap = f.snapshot();
+        assert!(snap.links["wg-flock"].wg_owned("wg-flock"));
+        assert_eq!(snap.wg["wg-flock"].listen_port, 51820);
+        assert_eq!(snap.wg["wg-flock"].peer(K1).unwrap().allowed_ips, vec!["10.22.1.1/32"]);
+        assert!(snap.links.contains_key("gnv-b1") && snap.links.contains_key("gnv-b2"));
+        assert_eq!(snap.keys_generated, 1);
+
+        // handshake shows up in status
+        f.wg_handshake("wg-flock", K1, 7);
+        m.reconcile_once(false).await;
+        let (_, st) = m.get().await;
+        let w = st.wireguard.unwrap();
+        assert_eq!(w.peers[0].handshake_age_s, Some(7));
+        assert_eq!((w.peers[0].rx_bytes, w.peers[0].tx_bytes), (1000, 2000));
+
+        // restart: same key, zero kernel writes
+        f.clear_applied();
+        drop(m);
+        let m2 = MeshManager::new_for_test(f.clone(), dir.path().into(), None).unwrap();
+        m2.reconcile_once(false).await;
+        assert!(f.applied().is_empty(), "restart must not touch the kernel: {:?}", f.applied());
+        assert_eq!(f.snapshot().keys_generated, 1, "key must be reused");
+        let (_, st) = m2.get().await;
+        assert_eq!(st.wireguard.unwrap().pubkey, kernel::fake_pubkey("PRIV1"));
+    }
+
+    #[tokio::test]
+    async fn wireguard_peer_removal_and_teardown() {
+        let f = wg_fake();
+        let dir = tempfile::tempdir().unwrap();
+        let m = MeshManager::new_for_test(f.clone(), dir.path().into(), None).unwrap();
+        m.put(wg_spec(), None).await.ok().unwrap();
+        f.clear_applied();
+        let mut s = wg_spec();
+        s.peers.truncate(1);
+        m.put(s, Some(2)).await.ok().unwrap();
+        let kinds: Vec<&str> = f.applied().iter().map(|a| a.kind()).collect();
+        assert!(kinds.contains(&"wg_peer_del") && kinds.contains(&"delete_tunnel"), "{kinds:?}");
+        assert!(f.snapshot().wg["wg-flock"].peer(K2).is_none());
+        assert!(!f.snapshot().links.contains_key("gnv-b2"));
+
+        let (st, _) = m.delete().await.unwrap();
+        let snap = f.snapshot();
+        assert!(!snap.links.contains_key("wg-flock"), "wg link torn down");
+        assert!(!snap.links.contains_key("gnv-b1"));
+        assert!(snap.links.contains_key("eth0") && snap.links.contains_key("br-int"));
+        assert!(st.wireguard.is_none());
+        assert!(dir.path().join(WG_KEY_FILE).exists(), "identity survives teardown");
+    }
+
+    #[tokio::test]
+    async fn foreign_underlay_name_blocks_without_touching_it() {
+        let f = wg_fake();
+        f.add_underlay("wg-flock", 1420, Ipv4Addr::new(10, 22, 0, 1)); // a veth, not ours
+        let dir = tempfile::tempdir().unwrap();
+        let m = MeshManager::new_for_test(f.clone(), dir.path().into(), None).unwrap();
+        f.clear_applied();
+        let (_, st) = m.put(wg_spec(), None).await.ok().unwrap();
+        assert!(st.is(ConditionType::WireguardConflict));
+        assert!(!st.is(ConditionType::Ready));
+        assert!(f.applied().is_empty(), "{:?}", f.applied());
+        assert!(!dir.path().join(WG_KEY_FILE).exists(), "no key generated while blocked");
+
+        // module missing is blocking too
+        let f2 = wg_fake();
+        f2.state.lock().unwrap().wireguard_module = false;
+        let dir2 = tempfile::tempdir().unwrap();
+        let m2 = MeshManager::new_for_test(f2.clone(), dir2.path().into(), None).unwrap();
+        let (_, st) = m2.put(wg_spec(), None).await.ok().unwrap();
+        assert!(st.is(ConditionType::WireguardModuleMissing));
+        assert!(f2.applied().is_empty());
+    }
+
+    #[tokio::test]
+    async fn wireguard_peer_without_pubkey_is_rejected() {
+        let f = wg_fake();
+        let dir = tempfile::tempdir().unwrap();
+        let m = MeshManager::new_for_test(f.clone(), dir.path().into(), None).unwrap();
+        let mut s = wg_spec();
+        s.peers[1].pubkey = None;
+        match m.put(s, None).await {
+            Err(PutError::Validation(e)) => assert_eq!(e[0].field, "peers[1].pubkey"),
+            Err(PutError::Conflict { .. }) | Err(PutError::Internal(_)) => panic!("wrong error"),
+            Ok(_) => panic!("expected validation error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dropping_wireguard_from_spec_removes_our_link_only() {
+        let f = wg_fake();
+        let dir = tempfile::tempdir().unwrap();
+        let m = MeshManager::new_for_test(f.clone(), dir.path().into(), None).unwrap();
+        m.put(wg_spec(), None).await.ok().unwrap();
+        assert!(f.snapshot().links.contains_key("wg-flock"));
+        // switch to a plain underlay on eth0
+        let mut s = wg_spec();
+        s.wireguard = None;
+        s.underlay = "eth0".into();
+        s.allow_plain_underlay = true;
+        for p in &mut s.peers {
+            p.pubkey = None;
+            p.endpoint = None;
+            p.remote = Ipv4Addr::new(192, 0, 2, 10 + p.box_id);
+        }
+        f.clear_applied();
+        let (_, st) = m.put(s, None).await.ok().unwrap();
+        assert!(!f.snapshot().links.contains_key("wg-flock"), "old wg link removed");
+        assert!(f.applied().iter().any(|a| matches!(a, kernel::Action::DeleteLink { dev } if dev == "wg-flock")));
+        assert!(st.wireguard.is_none());
+        assert!(f.snapshot().links.contains_key("eth0"));
+        // and a second pass is silent
+        f.clear_applied();
+        m.reconcile_once(false).await;
+        assert!(f.applied().is_empty(), "{:?}", f.applied());
     }
 }

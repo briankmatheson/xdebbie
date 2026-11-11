@@ -80,15 +80,27 @@ enum MeshCmd {
     },
     /// Ask the daemon to reconcile now.
     Reconcile,
+    /// This box's WireGuard identity (pubkey, port, address) for enrolment
+    /// on other boxes, plus per-peer handshake state.
+    Wg,
 }
 
 #[derive(Subcommand)]
 enum MeshPeerCmd {
+    /// Add (or replace) a peer. With a managed WireGuard underlay REMOTE
+    /// may be omitted (derived as 10.22.<box>.1) and --pubkey is required.
     Add {
         r#box: u8,
-        remote: String,
+        /// Underlay address of the peer.
+        remote: Option<String>,
         #[arg(long)]
         probe: Option<String>,
+        /// Peer's WireGuard public key (see `xdctl mesh wg` on that box).
+        #[arg(long)]
+        pubkey: Option<String>,
+        /// Peer's WireGuard endpoint host:port.
+        #[arg(long)]
+        endpoint: Option<String>,
     },
     Rm {
         r#box: u8,
@@ -290,6 +302,27 @@ fn mesh_modify(api: &Api, f: impl Fn(&mut Value) -> Result<()>) -> Result<Value>
     bail!("mesh: generation changed twice while updating; try again")
 }
 
+fn print_wg_peers(w: &Value) {
+    let peers = w["peers"].as_array().cloned().unwrap_or_default();
+    if peers.is_empty() {
+        return;
+    }
+    println!();
+    println!("{:<5} {:<46} {:<24} {:>10} {:>12} {:>12}", "BOX", "PUBKEY", "ENDPOINT", "HANDSHAKE", "RX", "TX");
+    for p in &peers {
+        let hs = p["handshake_age_s"].as_u64().map(|s| format!("{s}s ago")).unwrap_or_else(|| "never".into());
+        println!(
+            "{:<5} {:<46} {:<24} {:>10} {:>12} {:>12}",
+            p["box"].to_string(),
+            p["pubkey"].as_str().unwrap_or("-"),
+            p["endpoint"].as_str().unwrap_or("-"),
+            hs,
+            p["rx_bytes"].to_string(),
+            p["tx_bytes"].to_string()
+        );
+    }
+}
+
 fn print_mesh(doc: &Value) {
     let st = &doc["status"];
     let spec = &doc["spec"];
@@ -333,6 +366,18 @@ fn print_mesh(doc: &Value) {
             p["fdb_entries"].to_string(),
             age
         );
+    }
+    if !st["wireguard"].is_null() {
+        let w = &st["wireguard"];
+        println!();
+        println!(
+            "WIREGUARD {} pubkey={} port={} address={}",
+            w["device"].as_str().unwrap_or("-"),
+            w["pubkey"].as_str().unwrap_or("-"),
+            w["listen_port"],
+            w["address"].as_str().unwrap_or("-")
+        );
+        print_wg_peers(w);
     }
     println!();
     println!("CONDITIONS");
@@ -392,13 +437,18 @@ fn main() -> Result<()> {
                 }
                 print_mesh(&v);
             }
-            MeshCmd::Peer(MeshPeerCmd::Add { r#box, remote, probe }) => {
+            MeshCmd::Peer(MeshPeerCmd::Add { r#box, remote, probe, pubkey, endpoint }) => {
                 let v = mesh_modify(&api, |spec| {
+                    if remote.is_none() && spec["wireguard"].is_null() {
+                        bail!("REMOTE is required unless the mesh manages WireGuard (spec.wireguard)");
+                    }
                     let peers = spec["peers"].as_array_mut().ok_or_else(|| anyhow::anyhow!("spec has no peers array"))?;
                     peers.retain(|p| p["box"].as_u64() != Some(r#box as u64));
-                    let mut p = serde_json::json!({ "box": r#box, "remote": remote });
-                    if let Some(pr) = &probe {
-                        p["probe"] = Value::String(pr.clone());
+                    let mut p = serde_json::json!({ "box": r#box });
+                    for (k, v) in [("remote", &remote), ("probe", &probe), ("pubkey", &pubkey), ("endpoint", &endpoint)] {
+                        if let Some(v) = v {
+                            p[k] = Value::String(v.clone());
+                        }
                     }
                     peers.push(p);
                     Ok(())
@@ -422,6 +472,29 @@ fn main() -> Result<()> {
                     return out(v);
                 }
                 print_mesh(&v);
+            }
+            MeshCmd::Wg => {
+                let v = api.call(Method::GET, "/mesh", None)?;
+                if cli.json {
+                    return out(v["status"]["wireguard"].clone());
+                }
+                let w = &v["status"]["wireguard"];
+                if w.is_null() {
+                    bail!("this mesh does not manage WireGuard (no spec.wireguard)");
+                }
+                println!("device   {}", w["device"].as_str().unwrap_or("-"));
+                println!("pubkey   {}", w["pubkey"].as_str().unwrap_or("-"));
+                println!("port     {}", w["listen_port"]);
+                println!("address  {}", w["address"].as_str().unwrap_or("-"));
+                println!();
+                println!("enrol on another box:");
+                println!(
+                    "  xdctl mesh peer add {} --pubkey {} --endpoint <this-host>:{}",
+                    v["spec"]["box"],
+                    w["pubkey"].as_str().unwrap_or("?"),
+                    w["listen_port"]
+                );
+                print_wg_peers(w);
             }
             MeshCmd::Delete { yes } => {
                 if !yes {

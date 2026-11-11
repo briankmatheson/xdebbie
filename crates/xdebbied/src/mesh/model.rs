@@ -20,6 +20,12 @@ pub const MIN_MTU: u16 = 1280;
 pub const OWNER_ALIAS: &str = "xdebbie-mesh/v1";
 /// nftables table the mesh owns.
 pub const NFT_TABLE: &str = "xdebbie_mesh";
+/// Default WireGuard listen port.
+pub const DEFAULT_WG_PORT: u16 = 51820;
+/// WireGuard MTU on a 1500-byte carrier (IPv4 20 + UDP 8 + WG 32 = 60; 1420 is the wg-quick default).
+pub const DEFAULT_WG_MTU: u16 = 1420;
+/// Private key file inside the state directory.
+pub const WG_KEY_FILE: &str = "wg.key";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -139,9 +145,72 @@ pub struct NetworkSpec {
 pub struct PeerSpec {
     #[serde(rename = "box")]
     pub box_id: u8,
+    /// Underlay address of the peer. Optional when the mesh manages
+    /// WireGuard: `normalize` fills in `10.22.<box>.1`.
+    #[serde(default = "unspecified")]
     pub remote: Ipv4Addr,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub probe: Option<Ipv4Addr>,
+    /// WireGuard public key (base64). Required when `wireguard` is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pubkey: Option<String>,
+    /// WireGuard endpoint `host:port`. Optional: a peer without one is
+    /// reached only after it initiates (NAT'd boxes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+}
+
+impl PeerSpec {
+    pub fn new(box_id: u8, remote: Ipv4Addr) -> Self {
+        Self { box_id, remote, probe: None, pubkey: None, endpoint: None }
+    }
+}
+
+fn unspecified() -> Ipv4Addr {
+    Ipv4Addr::UNSPECIFIED
+}
+
+/// Underlay address of a box when the mesh manages WireGuard: `10.22.<box>.1`.
+pub fn underlay_addr(box_id: u8) -> Ipv4Addr {
+    Ipv4Addr::new(10, 22, box_id, 1)
+}
+
+/// `[mesh.wireguard]` / `spec.wireguard`: when present the mesh owns the
+/// underlay interface named by `spec.underlay` and keeps its peers in sync.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WireguardSpec {
+    #[serde(default = "d_wg_port")]
+    pub listen_port: u16,
+    /// Address on the interface. Default `10.22.<box>.1`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<Ipv4Addr>,
+    #[serde(default = "d_wg_prefix")]
+    pub prefix: u8,
+    #[serde(default = "d_wg_mtu")]
+    pub mtu: u16,
+    /// `persistent-keepalive` seconds for every peer (0 = off).
+    #[serde(default = "d_wg_keepalive")]
+    pub keepalive: u16,
+}
+
+impl Default for WireguardSpec {
+    fn default() -> Self {
+        Self { listen_port: d_wg_port(), address: None, prefix: d_wg_prefix(), mtu: d_wg_mtu(), keepalive: d_wg_keepalive() }
+    }
+}
+
+fn d_wg_port() -> u16 {
+    DEFAULT_WG_PORT
+}
+fn d_wg_prefix() -> u8 {
+    16
+}
+fn d_wg_mtu() -> u16 {
+    DEFAULT_WG_MTU
+}
+fn d_wg_keepalive() -> u16 {
+    25
 }
 
 /// Desired state. `PUT /v1/mesh` replaces the whole thing.
@@ -169,6 +238,9 @@ pub struct MeshSpec {
     pub firewall: bool,
     #[serde(default)]
     pub probe: ProbeSpec,
+    /// Manage the WireGuard underlay too (0.5.0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wireguard: Option<WireguardSpec>,
     #[serde(default)]
     pub peers: Vec<PeerSpec>,
 }
@@ -189,12 +261,29 @@ impl Default for MeshSpec {
             fdb: FdbMode::Derived,
             firewall: true,
             probe: ProbeSpec::default(),
+            wireguard: None,
             peers: vec![],
         }
     }
 }
 
 impl MeshSpec {
+    /// Fill derivable fields: with managed WireGuard a peer's `remote`
+    /// defaults to `10.22.<box>.1`. Run before validation.
+    pub fn normalize(mut self) -> Self {
+        if self.wireguard.is_some() {
+            for p in &mut self.peers {
+                if p.remote.is_unspecified() {
+                    p.remote = underlay_addr(p.box_id);
+                }
+            }
+        }
+        self
+    }
+    /// Local WireGuard address (`wireguard.address` or `10.22.<box>.1`).
+    pub fn wg_address(&self) -> Option<Ipv4Addr> {
+        self.wireguard.as_ref().map(|w| w.address.unwrap_or_else(|| underlay_addr(self.box_id)))
+    }
     /// The single v1 network. Validation guarantees it exists; callers that
     /// run before validation get the default.
     pub fn network(&self) -> NetworkSpec {
@@ -322,6 +411,10 @@ pub enum ConditionType {
     BridgeStpEnabled,
     BridgeMacMismatch,
     NameConflict,
+    /// `/sys/module/wireguard` missing while `wireguard` is configured.
+    WireguardModuleMissing,
+    /// The underlay name exists but is not a WireGuard link we own.
+    WireguardConflict,
 }
 
 impl ConditionType {
@@ -332,8 +425,47 @@ impl ConditionType {
             ConditionType::GeneveModuleMissing
                 | ConditionType::UnderlayMissing
                 | ConditionType::BridgeMissing
+                | ConditionType::WireguardModuleMissing
+                | ConditionType::WireguardConflict
         )
     }
+    pub const ALL: [ConditionType; 10] = [
+        ConditionType::GeneveModuleMissing,
+        ConditionType::WireguardModuleMissing,
+        ConditionType::WireguardConflict,
+        ConditionType::UnderlayMissing,
+        ConditionType::BridgeMissing,
+        ConditionType::BridgeStpEnabled,
+        ConditionType::BridgeMacMismatch,
+        ConditionType::NameConflict,
+        ConditionType::Degraded,
+        ConditionType::Ready,
+    ];
+}
+
+/// Per-peer WireGuard view (from `wg show <dev> dump`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WgPeerStatus {
+    #[serde(rename = "box")]
+    pub box_id: u8,
+    pub pubkey: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    /// Seconds since the last handshake; `None` = never.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handshake_age_s: Option<u64>,
+    pub rx_bytes: u64,
+    pub tx_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WireguardStatus {
+    pub device: String,
+    /// This box's public key — what the other boxes put in their peer entry.
+    pub pubkey: String,
+    pub listen_port: u16,
+    pub address: String,
+    pub peers: Vec<WgPeerStatus>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -357,6 +489,8 @@ pub struct MeshStatus {
     pub conditions: Vec<Condition>,
     pub peers: Vec<PeerStatus>,
     pub vms_mtu_mismatch: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wireguard: Option<WireguardStatus>,
     #[serde(default)]
     pub metrics: super::metrics::Snapshot,
 }
@@ -405,6 +539,9 @@ pub struct MeshConfig {
     pub probe_down_after: u32,
     #[serde(default = "d_three")]
     pub probe_up_after: u32,
+    /// `[mesh.wireguard]`
+    #[serde(default)]
+    pub wireguard: Option<WireguardSpec>,
     #[serde(default)]
     pub peers: Vec<PeerSpec>,
 }
@@ -426,6 +563,7 @@ impl Default for MeshConfig {
             probe_timeout_ms: d_probe_timeout(),
             probe_down_after: d_three(),
             probe_up_after: d_three(),
+            wireguard: None,
             peers: vec![],
         }
     }
@@ -452,8 +590,10 @@ impl MeshConfig {
                 down_after: self.probe_down_after,
                 up_after: self.probe_up_after,
             },
+            wireguard: self.wireguard.clone(),
             peers: self.peers.clone(),
         }
+        .normalize()
     }
 }
 
@@ -538,13 +678,33 @@ probe = "10.23.1.1"
     #[test]
     fn probe_defaults() {
         let mut s = MeshSpec::default();
-        let p = PeerSpec {
-            box_id: 9,
-            remote: "10.22.9.1".parse().unwrap(),
-            probe: None,
-        };
+        let p = PeerSpec::new(9, "10.22.9.1".parse().unwrap());
         assert_eq!(s.probe_addr(&p), "10.23.9.1".parse::<Ipv4Addr>().unwrap());
         s.fdb = FdbMode::Learn;
         assert_eq!(s.probe_addr(&p), p.remote);
+    }
+
+    #[test]
+    fn wireguard_normalizes_remote_and_roundtrips() {
+        let j = r#"{"enabled":true,"box":0,"networks":[{"bridge":"br-int"}],"wireguard":{},
+                    "peers":[{"box":1,"pubkey":"k1"},{"box":2,"remote":"192.0.2.9","pubkey":"k2","endpoint":"gram:51820"}]}"#;
+        let s: MeshSpec = serde_json::from_str(j).unwrap();
+        assert!(s.peers[0].remote.is_unspecified());
+        let s = s.normalize();
+        assert_eq!(s.peers[0].remote, Ipv4Addr::new(10, 22, 1, 1));
+        assert_eq!(s.peers[1].remote, Ipv4Addr::new(192, 0, 2, 9));
+        let w = s.wireguard.as_ref().unwrap();
+        assert_eq!((w.listen_port, w.prefix, w.mtu, w.keepalive), (51820, 16, 1420, 25));
+        assert_eq!(s.wg_address(), Some(Ipv4Addr::new(10, 22, 0, 1)));
+        let back: MeshSpec = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back, s);
+        // without wireguard a missing remote stays unspecified (validation rejects it)
+        let s2: MeshSpec = serde_json::from_str(r#"{"peers":[{"box":1}]}"#).unwrap();
+        assert!(s2.normalize().peers[0].remote.is_unspecified());
+        // TOML shape
+        let t: MeshConfig = toml::from_str("box = 3\n[wireguard]\nlisten_port = 51821\n[[peers]]\nbox = 1\npubkey = \"k\"\n").unwrap();
+        let sp = t.to_spec();
+        assert_eq!(sp.wireguard.unwrap().listen_port, 51821);
+        assert_eq!(sp.peers[0].remote, Ipv4Addr::new(10, 22, 1, 1));
     }
 }

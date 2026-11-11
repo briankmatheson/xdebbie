@@ -139,7 +139,7 @@ mod tests {
             enabled: true,
             underlay: "ul0".into(),
             allow_plain_underlay: true,
-            peers: (1..=n).map(|i| PeerSpec { box_id: i, remote: Ipv4Addr::new(10, 22, i, 1), probe: None }).collect(),
+            peers: (1..=n).map(|i| PeerSpec::new(i, Ipv4Addr::new(10, 22, i, 1))).collect(),
             ..Default::default()
         }
     }
