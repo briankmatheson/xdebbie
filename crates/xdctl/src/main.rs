@@ -2,7 +2,8 @@
 //! xdctl — command-line client for xdebbied.
 
 use anyhow::{Context, Result, bail};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, CommandFactory};
+use clap_complete::{generate, Shell};
 use xdebbie_core::*;
 use reqwest::{Method, blocking::Client};
 use serde_json::Value;
@@ -59,6 +60,12 @@ enum Cmd {
     /// Overlay addressing and the built-in DHCP responder.
     #[command(subcommand)]
     Net(NetCmd),
+    /// Generate shell completion script.
+    Completion {
+        /// Shell to generate completion for (bash, zsh, fish, elvish, powershell)
+        #[arg(value_enum)]
+        shell: Shell,
+    },
 }
 
 #[derive(Subcommand)]
@@ -136,6 +143,9 @@ enum HostCmd {
         no_control_plane: bool,
         #[arg(long, default_value_t = 4.0)]
         cpu_overcommit: f64,
+        /// ABE API on this host (e.g. http://10.22.0.1:80) for `--storage abe` VMs.
+        #[arg(long)]
+        abe: Option<String>,
         #[arg(long, default_value_t = 4096)]
         reserved_memory_mib: u64,
         #[arg(long, default_value_t = 2)]
@@ -183,6 +193,10 @@ enum VmCmd {
         /// Pin an overlay IPv4 address (requires `[network]` on the server).
         #[arg(long)]
         ip: Option<std::net::Ipv4Addr>,
+        /// Where the disks live: local (host pool/LVM) or abe (NVMe/TCP
+        /// volumes from the host's ABE, attachable from any host).
+        #[arg(long, default_value = "local")]
+        storage: xdebbie_core::Storage,
         #[arg(long)]
         user_data: Option<std::path::PathBuf>,
         #[arg(long)]
@@ -669,11 +683,13 @@ fn main() -> Result<()> {
                 bridge,
                 no_control_plane,
                 cpu_overcommit,
+                abe,
                 reserved_memory_mib,
                 reserved_cpus,
                 labels,
             } => {
                 let h = Host {
+                    abe,
                     name: name.clone(),
                     uri,
                     failure_domain,
@@ -755,6 +771,7 @@ fn main() -> Result<()> {
                 data_disk_gib,
                 image,
                 ip,
+                storage,
                 user_data,
                 failure_domain,
                 group,
@@ -772,6 +789,7 @@ fn main() -> Result<()> {
                     image,
                     data_disk_gib,
                     ip,
+                    storage,
                     placement: Placement {
                         failure_domain,
                         anti_affinity_group: group,
@@ -822,6 +840,10 @@ fn main() -> Result<()> {
                 &format!("/vms/{}/migrate", api.resolve(&id)?),
                 Some(serde_json::json!({ "host": to })),
             )?)?,
+        },
+        Cmd::Completion { shell } => {
+            let mut cmd = Cli::command();
+            generate(shell, &mut cmd, "xdctl", &mut std::io::stdout());
         },
     }
     Ok(())

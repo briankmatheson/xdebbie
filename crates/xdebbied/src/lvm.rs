@@ -9,13 +9,16 @@ use anyhow::{Context, Result};
 use std::process::Command;
 use tracing::{info, warn};
 
-/// Smallest root disk we will provision, in GiB.
+/// Smallest root disk we will provision, in GiB, for K8s workloads.
 ///
 /// A thin snapshot inherits the size of its origin, so without an explicit
 /// extend a VM created from a 10 GiB base image gets a 10 GiB root -- which
 /// fills up fast once Kubernetes images land on it. Requests below this are
 /// rounded up; the guest's cloud-init growpart/resizefs picks up the extra
 /// space on first boot.
+///
+/// NOTE: This minimum is only enforced for images with "k8s" in the name.
+/// Plain base images (like base-debian-13) respect the requested size.
 pub const MIN_ROOT_DISK_GIB: u64 = 25;
 
 /// LVM manager for creating and managing VM disks
@@ -116,7 +119,15 @@ impl LvmManager {
     /// Path to the block device (e.g., "/dev/xdebbie-vg/w1-cp-2ptmn-root")
     pub fn create_root_disk(&self, vm_name: &str, base_image: &str, size_gib: u64) -> Result<String> {
         let lv_name = format!("{}-root", vm_name);
-        let size_gib = size_gib.max(MIN_ROOT_DISK_GIB);
+        
+        // Only enforce minimum for K8s images (they need space for container images)
+        // Plain base images (like base-debian-13) respect the requested size
+        let size_gib = if base_image.contains("k8s") {
+            size_gib.max(MIN_ROOT_DISK_GIB)
+        } else {
+            size_gib
+        };
+        
         // Handle both "debian-12" and "base-debian-12" image names
         let base_lv = if base_image.starts_with("base-") {
             base_image.to_string()
