@@ -140,3 +140,37 @@ e677c0c mesh: model, validation, kernel ops, planner, firewall, probe, manager
 c0fcb54 mesh: 3-host netns harness and M1–M13 acceptance tests (T7/T8)
 608177f mesh: packaging for 0.4.0-1 (T10)
 ```
+
+## 0.5.0 — managed WireGuard underlay (2026-11-11)
+
+The encryption layer moved into `xdebbied`: with `spec.wireguard` the mesh
+builds `wg-flock` itself (key in `/var/lib/xdebbie/wg.key`, address
+`10.22.<box>.1/16`, one WireGuard peer per mesh peer, `allowed-ips
+<remote>/32`), and `peers[].remote` is derived. Same ownership/diff
+discipline as the Geneve layer (`wg.rs` planner, fake kernel models the
+connected route from the address).
+
+- Unit tests: 86 (new: `wg show dump` + addr parsers against fixtures,
+  5 planner tests incl. idempotence and foreign-link safety, 5 manager tests:
+  build → silent restart with key reuse, peer removal + teardown keeps the
+  key, foreign name / missing module block without writes, pubkey required,
+  dropping `wireguard` from the spec removes only our link).
+- Harness M14 (unprivileged netns, `wg` dropped into `~/bin` from the
+  Debian package since the dev host lacks `wireguard-tools`): zero-peer
+  enable generates keys and builds `wg-flock`; enrolment by pubkey+endpoint
+  with derived remotes; peers Up, MTU 1370; nft ingress counters on the
+  carrier show **0** UDP/6081 and >0 UDP/51820 while VMs ping across
+  boxes; handshake age reported; h0 restart = zero actions, same ifindex,
+  same pubkey; `peer rm` drops the WireGuard peer and tunnel; `delete`
+  removes `wg-flock` but keeps `wg.key`. Full run: 14/14.
+- Found while writing M14: `geneve` is an nft keyword too (counter names);
+  `delete()` swapped in the config spec before tearing down, so the
+  WireGuard device was orphaned → the manager now remembers the last
+  managed device and tears down any *owned* link among current/last/config
+  names.
+- Package 0.5.0-1: `Depends` += `wireguard-tools`, modules-load.d adds
+  `wireguard`, generated config carries a commented `[mesh.wireguard]`.
+
+Two-box test (timesink ↔ gram) pending: install 0.5.0 on both, enable with
+`[mesh.wireguard]` on `virbr-int`/`virbr-xdebbie` (`fdb = "learn"`), exchange
+`xdctl mesh wg` pubkeys, record iperf3 here.
