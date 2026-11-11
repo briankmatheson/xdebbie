@@ -126,10 +126,8 @@ sudo systemctl restart xdebbied && xdctl mesh ls      # expect enabled=false
 
 ### Not done here
 
-- 11.3 two-box test (needs a second box; record iperf3 there).
-- T9 on real libvirt (new VM reporting MTU 1370 on the overlay NIC) — code
-  path is in place (`<mtu size=…/>` + network-config `mtu:`), needs the mesh
-  enabled on `virbr-int` with a real underlay.
+- 11.3 two-box test and T9 on real libvirt — done below under
+  "0.5.2 — two-box test".
 
 ## Commits
 
@@ -171,6 +169,65 @@ connected route from the address).
 - Package 0.5.0-1: `Depends` += `wireguard-tools`, modules-load.d adds
   `wireguard`, generated config carries a commented `[mesh.wireguard]`.
 
-Two-box test (timesink ↔ gram) pending: install 0.5.0 on both, enable with
-`[mesh.wireguard]` on `virbr-int`/`virbr-xdebbie` (`fdb = "learn"`), exchange
-`xdctl mesh wg` pubkeys, record iperf3 here.
+Two-box test: see "0.5.2 — two-box test" below.
+
+## 0.5.1 / 0.5.2 — getting the two boxes talking (2026-11-11)
+
+- 0.5.1: STP forced off on the mesh bridge every tick (`SetBridgeStpOff`),
+  bootstrap writes `stp='off'`, `xdctl` resets SIGPIPE.
+- 0.5.2: gram's reconcile failed every tick with
+  `wg set wg-flock private-key /var/lib/xdebbie/wg.key … fopen: Permission
+  denied` as root. Debian's AppArmor profile for `/usr/bin/wg` only allows
+  keys under `/etc/wireguard`. Fix: xdebbied reads the key and pipes it to
+  `wg set … private-key /dev/stdin` (pipes are not path-mediated); the .deb
+  also ships `/etc/apparmor.d/local/wg` + `apparmor_parser -r` in postinst.
+  Unit test with a stub `wg` asserts the key never appears on argv.
+- Host firewall: ufw default-deny needs **two** rules — `51820/udp` on the
+  carrier NIC *and* `6081/udp in on wg-flock` (decrypted Geneve hits INPUT a
+  second time). Symptom without the second rule: handshake fine, `gnv-b<N>`
+  TX climbing, far-side RX 0. Documented in `docs/mesh.md`.
+- One L2 means one DHCP: gram's bootstrap-generated libvirt network had its
+  own dnsmasq range (192.168.100.0/24). Redefined as `10.23.0.2/16`, no
+  `<dhcp>`, `stp='off'`; timesink's `dhcpd` on `virbr-int` is now the only
+  DHCP server on the segment. gram's VM took its lease from timesink's dhcpd
+  across the mesh, default route via timesink's NAT, and `apt install iperf3`
+  worked through it. Follow-up: leader-only built-in DHCP from the VM store
+  (IP allocated at schedule time, option 26 = mesh MTU) — see 0.6.0 plan.
+
+## 0.5.2 — two-box test (spec 11.3), 2026-11-11
+
+Setup: timesink (box 0, `virbr-int` 10.23.0.1/16, enp2s0 192.168.1.157, kernel
+6.12.115+deb13.1) ↔ gram (box 1, `virbr-xdebbie` 10.23.0.2/16, **wlo1 Wi-Fi**
+192.168.1.162, kernel 7.3.3+deb14). Underlay `wg-flock` 10.22.0.1 ↔ 10.22.1.1,
+Geneve VNI 23, bridge MTU 1370, `fdb = "learn"`. Both boxes `Ready true
+AllPeersUp`, `BridgeStpEnabled false`, peer RTT 2.5–5.7 ms (Wi-Fi).
+
+T9: new VMs created after the mesh came up got `vnet` MTU 1370 on both hosts
+(`vnet5` on timesink, `vnet0` on gram) while pre-mesh VM NICs stayed at 1500
+and are listed under "VM NICs with stale MTU". Inside the gram guest
+(`mesh-g1`, debian-12-base, cloud-init netplan `mtu:`), `enp1s0` reports
+`mtu 1370`.
+
+Endpoints: `abe-01` on timesink (10.23.0.136, pre-mesh VM, NIC set to 1370 by
+hand) ↔ `mesh-g1` on gram (10.23.0.142). `ping -M do -s 1342` (a full
+1370-byte frame) passes without fragmentation.
+
+```
+iperf3, 10 s each, VM ↔ VM through Geneve-in-WireGuard
+timesink → gram   TCP 1 stream   692 Mbit/s sender / 690 receiver   (1433 retr)
+gram → timesink   TCP 1 stream   701 Mbit/s sender / 699 receiver   ( 283 retr)
+timesink → gram   TCP 4 streams  718 Mbit/s sender / 711 receiver
+timesink → gram   UDP 200 Mbit/s 196 Mbit/s, jitter 0.072 ms, 1.3 % loss
+```
+
+Tunnel accounting matches: WireGuard tx 2.12 GB / rx 0.99 GB on timesink and
+the mirror on gram; `gnv-b1` rx 384 k pkts / `gnv-b0` rx 604 k pkts, zero
+errors/drops. The ~700 Mbit/s ceiling and the retransmits are gram's Wi-Fi
+link, not the overlay — the tunnel path (WireGuard + Geneve) ran at line rate
+of the weakest hop.
+
+Incidental: both LVM k8s base images on timesink (`debian-13-k8s-v1.36`,
+`k8s-working`) loop at GRUB "Booting `Debian GNU/Linux'" under xdebbie's
+BIOS/q35 domain — probably UEFI-only images; not a mesh issue. `debian-12-base`
+needs importing into `timesink-vg` (`lvcreate` + `qemu-img convert`, needs
+root) before a fresh timesink VM can be created from it.
