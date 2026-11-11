@@ -113,20 +113,15 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
         .iter()
         .any(|n| n.name == opts.network_name);
     
-    if !network_exists {
-        let parts: Vec<&str> = opts.network_subnet.split('/').collect();
-        let network_base = parts[0].rsplitn(2, '.').nth(1).unwrap_or("192.168.100");
-        let dhcp_start = format!("{}.100", network_base);
-        let dhcp_end = format!("{}.250", network_base);
-        
-        libvirt_setup::ensure_network(
-            &opts.libvirt_uri,
-            &opts.network_name,
-            &opts.network_subnet,
-            &dhcp_start,
-            &dhcp_end,
-        )?;
-    }
+    // No libvirt DHCP range: xdebbied's own responder serves the bridge
+    // (`[network]` in the generated config). Two DHCP servers on one bridge
+    // — worse, on one meshed L2 — is the thing we are avoiding.
+    let created_subnet = if !network_exists {
+        libvirt_setup::ensure_network(&opts.libvirt_uri, &opts.network_name, &opts.network_subnet, "", "")?;
+        Some(opts.network_subnet.clone())
+    } else {
+        None
+    };
 
     // Check if we need to create default pool
     let pool_exists = resources
@@ -154,7 +149,8 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
             opts.config_path.display()
         );
     } else {
-        let config_content = config_gen::generate_config(&resources, &opts.libvirt_uri);
+        let config_content =
+            config_gen::generate_config(&resources, &opts.libvirt_uri, created_subnet.as_deref());
         config_gen::write_config(&opts.config_path, &config_content)?;
     }
 

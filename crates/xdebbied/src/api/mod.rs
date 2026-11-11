@@ -27,6 +27,8 @@ pub struct App {
     pub cfg: Arc<Config>,
     pub token: Option<Arc<String>>,
     pub mesh: Arc<MeshManager>,
+    /// Present when `[network]` is configured (even with `dhcp = false`).
+    pub dhcp: Option<Arc<crate::dhcp::DhcpServer>>,
 }
 
 pub struct ApiErr(StatusCode, String);
@@ -69,6 +71,7 @@ pub fn router(app: App) -> Router {
         .route("/vms/{id}/stop", post(stop))
         .route("/vms/{id}/reboot", post(reboot))
         .route("/vms/{id}/migrate", post(migrate))
+        .route("/network", get(network))
         .with_state(app.clone())
         .merge(mesh::router(mesh::MeshApi { mesh: app.mesh.clone() }))
         .layer(middleware::from_fn_with_state(app.token.clone(), bearer_auth));
@@ -359,6 +362,14 @@ fn validate(s: &VmSpec) -> R<()> {
     Ok(())
 }
 
+/// `GET /v1/network`: overlay addressing config and DHCP responder status.
+async fn network(State(a): State<App>) -> R<Json<crate::dhcp::NetworkStatus>> {
+    match &a.dhcp {
+        Some(d) => Ok(Json(d.status())),
+        None => Err(nf("network (no [network] in xdebbied.toml)")),
+    }
+}
+
 /// Idempotent create. Same id + same spec = 200; same id + different spec = 409.
 async fn put_vm(
     State(a): State<App>,
@@ -366,6 +377,10 @@ async fn put_vm(
     Json(spec): Json<VmSpec>,
 ) -> R<(StatusCode, Json<Vm>)> {
     validate(&spec)?;
+    let net = a.cfg.network.clone();
+    if spec.ip.is_some() && net.is_none() {
+        return Err(bad("spec.ip requires [network] in xdebbied.toml"));
+    }
     a.store
         .update(|s| {
             if let Some(v) = s.vms.get(&id) {
@@ -383,6 +398,17 @@ async fn put_vm(
             {
                 return Err(conflict(format!("a vm named {} already exists", spec.name)));
             }
+            // Overlay address: bound to the record for the VM's whole life.
+            let ip = match &net {
+                Some(n) => {
+                    let in_use = crate::dhcp::NetworkConfig::in_use(s.vms.values());
+                    Some(n.allocate(spec.ip, &in_use).map_err(|e| conflict(e.to_string()))?)
+                }
+                None => None,
+            };
+            let addresses = ip
+                .map(|ip| vec![Address { kind: "InternalIP".into(), address: ip.to_string() }])
+                .unwrap_or_default();
             let now = Utc::now();
             let vm = Vm {
                 id,
@@ -390,7 +416,8 @@ async fn put_vm(
                 phase: VmPhase::Pending,
                 power: PowerIntent::On,
                 host: None,
-                addresses: vec![],
+                addresses,
+                ip,
                 message: None,
                 migrate_to: None,
                 reboot_generation: 0,

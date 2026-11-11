@@ -8,8 +8,21 @@ use tracing::info;
 use super::libvirt_setup::{get_hostname, LibvirtResources};
 
 /// Generate default configuration TOML from discovered resources
-pub fn generate_config(resources: &LibvirtResources, uri: &str) -> String {
+/// `created_subnet`: the subnet of the libvirt network bootstrap created
+/// itself (so it is known to have no dnsmasq DHCP). `None` when an existing
+/// network was adopted — then `[network]` is emitted commented out, because
+/// turning on a second DHCP server on a bridge that already has one is
+/// exactly the mistake we want operators to make on purpose, not by default.
+pub fn generate_config(resources: &LibvirtResources, uri: &str, created_subnet: Option<&str>) -> String {
     let hostname = get_hostname();
+    let (net_prefix, net_cidr, net_note) = match created_subnet {
+        Some(s) => ("", s.to_string(), "# Bootstrap created the libvirt network without a DHCP range; xdebbied\n# allocates each VM an address at creation and answers DHCP for it itself.".to_string()),
+        None => (
+            "# ",
+            "10.23.0.0/16".to_string(),
+            "# Commented out because bootstrap adopted an existing libvirt network, which\n# probably runs dnsmasq DHCP. Remove its <dhcp> range (virsh net-edit), set\n# `cidr` to the bridge's subnet, then uncomment.".to_string(),
+        ),
+    };
 
     // Select network and pool
     let network = resources
@@ -60,6 +73,25 @@ seed_command = ["cloud-localds", "--network-config={{net}}", "--vendor-data={{ve
 enable_discovery = true
 multicast_addr = "239.0.0.42:7442"
 
+# Overlay addressing + built-in DHCP (docs/network.md). The scheduler binds an
+# address to every VM at creation (`xdctl vm ls` shows it before first boot)
+# and the responder on the bridge answers only for those MACs. One subnet per
+# overlay: when boxes are meshed, give every box the same `cidr` and
+# `gateway`, disjoint `pool_start`/`pool_end`, and list the other boxes'
+# bridge addresses under `reserved`.
+{net_note}
+{net_prefix}[network]
+{net_prefix}cidr = "{net_cidr}"
+{net_prefix}# gateway = "<first host of cidr>"   # this bridge's address = default route
+{net_prefix}# dns = ["<gateway>"]
+{net_prefix}# pool_start = "<cidr + 16>"
+{net_prefix}# pool_end = "<last host>"
+{net_prefix}# reserved = []
+{net_prefix}# bridge = "{bridge}"              # default: mesh bridge, else first host's
+{net_prefix}# lease_secs = 86400
+{net_prefix}# domain = "vm.example"
+{net_prefix}# leader_only = false              # true once control planes share state
+
 # Geneve overlay mesh (off by default). One tunnel per peer is enslaved to the
 # overlay bridge; see docs/mesh.md. Enabling with zero peers only pins the
 # bridge MTU and installs the xdebbie_mesh nftables table. Manage peers at
@@ -109,6 +141,9 @@ control_plane_eligible = true
         uri = uri,
         bridge = network,
         pool = pool,
+        net_note = net_note,
+        net_prefix = net_prefix,
+        net_cidr = net_cidr,
     )
 }
 
@@ -157,7 +192,13 @@ mod tests {
             }],
         };
 
-        let config = generate_config(&resources, "qemu:///system");
+        let config = generate_config(&resources, "qemu:///system", Some("192.168.100.0/24"));
+        assert!(config.contains("\n[network]\ncidr = \"192.168.100.0/24\""), "{config}");
+        let adopted = generate_config(&resources, "qemu:///system", None);
+        assert!(adopted.contains("\n# [network]\n# cidr = "), "{adopted}");
+        // both must parse as config
+        let _: crate::config::Config = toml::from_str(&config).unwrap();
+        let _: crate::config::Config = toml::from_str(&adopted).unwrap();
         assert!(config.contains("listen = \"0.0.0.0:7443\""));
         assert!(config.contains("bridge = \"virbr0\""));
         assert!(config.contains("storage_pool = \"default\""));

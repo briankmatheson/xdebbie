@@ -331,6 +331,12 @@ impl<H: Hypervisor> Reconciler<H> {
             VmPhase::Stopped
         });
         if running && let Ok(mut a) = self.hv.addresses(h, vm).await {
+            // The allocated overlay address is authoritative and always
+            // listed first, whatever the guest agent / ARP table saw.
+            if let Some(ip) = vm.ip {
+                a.retain(|x| x.address != ip.to_string());
+                a.insert(0, Address { kind: "InternalIP".into(), address: ip.to_string() });
+            }
             a.push(Address {
                 kind: "Hostname".into(),
                 address: vm.spec.name.clone(),
@@ -456,6 +462,7 @@ mod tests {
                 memory_mib: 4096,
                 disk_gib: 20,
                 data_disk_gib: None,
+                ip: None,
                 image: "img".into(),
                 placement: Placement {
                     anti_affinity_group: Some("cp".into()),
@@ -477,6 +484,7 @@ mod tests {
                             power: PowerIntent::On,
                             host: None,
                             addresses: vec![],
+                            ip: None,
                             message: None,
                             migrate_to: None,
                             reboot_generation: 0,

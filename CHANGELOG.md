@@ -5,6 +5,38 @@ All notable changes to XDebbie will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-11-11
+
+### Added
+- **Overlay addressing + built-in DHCP responder** (`[network]`,
+  `docs/network.md`). The scheduler allocates each VM an IPv4 address in the
+  same store transaction that creates it (`vm.ip`, first `InternalIP`, shown
+  by `xdctl vm ls` before first boot; pin with `spec.ip` / `xdctl vm create
+  --ip`). A small DHCPv4 responder bound to the bridge (`SO_BINDTODEVICE`,
+  udp/67) answers *only* for MACs found in the VM store with exactly the
+  stored address — OFFER/ACK/NAK/INFORM, unknown MACs ignored — and hands out
+  mask, router, DNS, hostname, domain, lease, and **option 26 = the mesh MTU**
+  when the bridge is a mesh overlay. No lease database: the (MAC, IP) pair is
+  part of the VM record and lives as long as it does. `leader_only` gates
+  answering on the election for the day control planes share state.
+- Existing VMs are **adopted** on startup: a VM that already reported an
+  `InternalIP` in `cidr` keeps it, others are allocated.
+- `GET /v1/network`, `xdctl net show` (config, bound/serving/standby, counters)
+  and `xdctl net seen` (MACs heard and what they were told).
+- Responder rebinds by itself when the bridge is recreated (libvirt
+  `net-destroy`/`net-start`) or when udp/67 becomes free.
+- `tests/dhcp/run.sh`: unprivileged netns end-to-end with the real daemon and
+  busybox `udhcpc` (13 checks: allocation/pinning/conflicts, real client
+  bound with all options, stranger ignored, stale REQUEST → NAK, counters,
+  address reuse after delete, rebind after bridge recreate).
+
+### Changed
+- `xdebbied bootstrap` creates the libvirt network **without** a dnsmasq DHCP
+  range and writes an active `[network]`; when adopting a pre-existing
+  network the block is emitted commented out.
+- Reconcile keeps the allocated address first in `vm.addresses` whatever the
+  guest agent / ARP table reports.
+
 ## [0.5.2] - 2026-11-11
 
 ### Fixed

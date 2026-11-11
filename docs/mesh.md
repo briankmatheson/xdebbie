@@ -183,11 +183,13 @@ use.
 ### Joining bridges that already have DHCP
 
 Once two boxes are meshed their bridges are **one L2 segment**: every DHCP
-server on either bridge hears every VM's DISCOVER. Run exactly one DHCP server
-per overlay (or disjoint ranges in one subnet), and give each box's bridge a
-distinct address in that subnet (e.g. `10.23.0.1/16` on box 0, `10.23.0.2/16`
-on box 1). A freshly bootstrapped host's libvirt network ships with its own
-dnsmasq DHCP range — remove `<dhcp>` from it before enrolling that host.
+server on either bridge hears every VM's DISCOVER. Use xdebbie's own
+responder (`[network]`, see `docs/network.md`): it answers only for MACs in
+its own VM store, so boxes never contend, and it hands out the mesh MTU as
+DHCP option 26. Give each box's bridge a distinct address in the shared
+subnet (`10.23.0.1/16` on box 0, `10.23.0.2/16` on box 1, listed in each
+other's `reserved`) and disjoint pools. If a box still runs libvirt's
+dnsmasq range or `dhcpd` on the bridge, remove it before enrolling.
 
 ## Mesh-only mode
 

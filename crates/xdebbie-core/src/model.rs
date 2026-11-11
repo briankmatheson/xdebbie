@@ -131,6 +131,10 @@ pub struct VmSpec {
     /// Arbitrary owner labels (cluster name, machine name...).
     #[serde(default)]
     pub labels: BTreeMap<String, String>,
+    /// Requested overlay IPv4 address. When unset the scheduler allocates one
+    /// from `[network]` at creation; either way the result lands in `Vm::ip`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ip: Option<std::net::Ipv4Addr>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -194,6 +198,11 @@ pub struct Vm {
     pub host: Option<String>,
     #[serde(default)]
     pub addresses: Vec<Address>,
+    /// Overlay IPv4 address bound to this VM's MAC for its whole life. The
+    /// built-in DHCP responder answers `mac()` with exactly this address, so
+    /// the (MAC, IP) pair is part of the VM record rather than a lease.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ip: Option<std::net::Ipv4Addr>,
     #[serde(default)]
     pub message: Option<String>,
     /// Set when a migration has been requested.
@@ -221,6 +230,11 @@ impl Vm {
     pub fn mac(&self) -> String {
         let b = self.id.as_bytes();
         format!("52:54:00:{:02x}:{:02x}:{:02x}", b[0], b[1], b[2])
+    }
+    /// `mac()` as bytes, for comparing against DHCP `chaddr`.
+    pub fn mac_bytes(&self) -> [u8; 6] {
+        let b = self.id.as_bytes();
+        [0x52, 0x54, 0x00, b[0], b[1], b[2]]
     }
     /// Does this VM count against a host's capacity?
     pub fn consumes_capacity(&self) -> bool {

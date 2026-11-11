@@ -32,6 +32,7 @@ assets = [
     ["../../README.md", "usr/share/doc/xdebbie/", "644"],
     ["../../BOOTSTRAP.md", "usr/share/doc/xdebbie/", "644"],
     ["../../docs/mesh.md", "usr/share/doc/xdebbie/", "644"],
+    ["../../docs/network.md", "usr/share/doc/xdebbie/", "644"],
     ["assets/modules-load.d/xdebbie-mesh.conf", "etc/modules-load.d/", "644"],
     ["assets/apparmor.d/local/wg", "etc/apparmor.d/local/", "644"],
 ]

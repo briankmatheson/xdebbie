@@ -232,6 +232,7 @@ mod tests {
             memory_mib: mem_gib * 1024,
             disk_gib: 20,
             data_disk_gib: None,
+            ip: None,
             image: "debian-13".into(),
             placement: Placement {
                 anti_affinity_group: group.map(Into::into),
@@ -250,6 +251,7 @@ mod tests {
             power: PowerIntent::On,
             host: Some(host.into()),
             addresses: vec![],
+            ip: None,
             message: None,
             migrate_to: None,
             reboot_generation: 0,

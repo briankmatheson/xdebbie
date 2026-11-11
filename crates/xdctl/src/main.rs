@@ -56,6 +56,17 @@ enum Cmd {
     /// Geneve mesh between hypervisors.
     #[command(subcommand)]
     Mesh(MeshCmd),
+    /// Overlay addressing and the built-in DHCP responder.
+    #[command(subcommand)]
+    Net(NetCmd),
+}
+
+#[derive(Subcommand)]
+enum NetCmd {
+    /// Show `[network]` config and DHCP responder status.
+    Show,
+    /// MACs heard on the bridge and what they were told.
+    Seen,
 }
 
 #[derive(Subcommand)]
@@ -169,6 +180,9 @@ enum VmCmd {
         data_disk_gib: Option<u64>,
         #[arg(long)]
         image: String,
+        /// Pin an overlay IPv4 address (requires `[network]` on the server).
+        #[arg(long)]
+        ip: Option<std::net::Ipv4Addr>,
         #[arg(long)]
         user_data: Option<std::path::PathBuf>,
         #[arg(long)]
@@ -302,6 +316,63 @@ fn mesh_modify(api: &Api, f: impl Fn(&mut Value) -> Result<()>) -> Result<Value>
     bail!("mesh: generation changed twice while updating; try again")
 }
 
+fn print_net(v: &Value) {
+    let d = &v["dhcp"];
+    let s = |x: &Value| x.as_str().unwrap_or("-").to_string();
+    println!(
+        "cidr={} gateway={} pool={}-{} lease={}s dns={}{}",
+        s(&v["cidr"]),
+        s(&v["gateway"]),
+        s(&v["pool_start"]),
+        s(&v["pool_end"]),
+        v["lease_secs"],
+        v["dns"].as_array().map(|a| a.iter().map(s).collect::<Vec<_>>().join(",")).unwrap_or_default(),
+        v["domain"].as_str().map(|d| format!(" domain={d}")).unwrap_or_default()
+    );
+    if let Some(r) = v["reserved"].as_array().filter(|r| !r.is_empty()) {
+        println!("reserved={}", r.iter().map(s).collect::<Vec<_>>().join(","));
+    }
+    let state = if !d["enabled"].as_bool().unwrap_or(false) {
+        "disabled (allocate only)".to_string()
+    } else if !d["bound"].as_bool().unwrap_or(false) {
+        format!("NOT LISTENING: {}", s(&d["error"]))
+    } else if !d["active"].as_bool().unwrap_or(false) {
+        "standby (not the leader)".to_string()
+    } else {
+        "serving".to_string()
+    };
+    println!(
+        "dhcp: {state} bridge={} server_id={} mtu={} leader_only={}",
+        s(&d["bridge"]),
+        s(&d["server_id"]),
+        d["mtu"].as_u64().map(|m| m.to_string()).unwrap_or_else(|| "-".into()),
+        d["leader_only"]
+    );
+    let c = &d["counters"];
+    println!(
+        "counters: offers={} acks={} naks={} unknown_mac={} standby={} other_server={} parse_errors={} send_errors={}",
+        c["offers"], c["acks"], c["naks"], c["ignored_unknown"], c["ignored_standby"], c["ignored_other"], c["parse_errors"], c["send_errors"]
+    );
+}
+
+fn print_seen(v: &Value) {
+    let Some(seen) = v["dhcp"]["seen"].as_array() else { return };
+    println!("{:<18} {:<16} {:<24} {:<22} {:<20} LAST SEEN", "MAC", "IP", "VM", "CLIENT HOSTNAME", "LAST");
+    let mut rows: Vec<&Value> = seen.iter().collect();
+    rows.sort_by(|a, b| b["last_seen"].as_str().cmp(&a["last_seen"].as_str()));
+    for r in rows {
+        println!(
+            "{:<18} {:<16} {:<24} {:<22} {:<20} {}",
+            r["mac"].as_str().unwrap_or("-"),
+            r["ip"].as_str().unwrap_or("-"),
+            r["name"].as_str().unwrap_or("-"),
+            r["client_hostname"].as_str().unwrap_or("-"),
+            r["last"].as_str().unwrap_or("-"),
+            r["last_seen"].as_str().unwrap_or("-")
+        );
+    }
+}
+
 fn print_wg_peers(w: &Value) {
     let peers = w["peers"].as_array().cloned().unwrap_or_default();
     if peers.is_empty() {
@@ -416,6 +487,16 @@ fn main() -> Result<()> {
         Ok(())
     };
     match cli.cmd {
+        Cmd::Net(n) => {
+            let v = api.call(Method::GET, "/network", None)?;
+            if cli.json {
+                return out(v);
+            }
+            match n {
+                NetCmd::Show => print_net(&v),
+                NetCmd::Seen => print_seen(&v),
+            }
+        }
         Cmd::Mesh(m) => match m {
             MeshCmd::Ls => {
                 let v = api.call(Method::GET, "/mesh", None)?;
@@ -642,12 +723,14 @@ fn main() -> Result<()> {
                     "ID", "NAME", "PHASE", "HOST", "IP", "AGE"
                 );
                 for v in vms {
-                    let ip = v
-                        .addresses
-                        .iter()
-                        .find(|a| a.kind == "InternalIP")
-                        .map(|a| a.address.as_str())
-                        .unwrap_or("-");
+                    // Allocated overlay address first; else whatever was observed.
+                    let ip = v.ip.map(|i| i.to_string()).unwrap_or_else(|| {
+                        v.addresses
+                            .iter()
+                            .find(|a| a.kind == "InternalIP")
+                            .map(|a| a.address.clone())
+                            .unwrap_or_else(|| "-".into())
+                    });
                     let age = format_age(v.created);
                     println!(
                         "{:<36} {:<24} {:<13} {:<10} {:<15} {:<10} {}",
@@ -671,6 +754,7 @@ fn main() -> Result<()> {
                 disk_gib,
                 data_disk_gib,
                 image,
+                ip,
                 user_data,
                 failure_domain,
                 group,
@@ -687,6 +771,7 @@ fn main() -> Result<()> {
                     disk_gib,
                     image,
                     data_disk_gib,
+                    ip,
                     placement: Placement {
                         failure_domain,
                         anti_affinity_group: group,

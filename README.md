@@ -105,14 +105,14 @@ See [DISCOVERY.md](DISCOVERY.md) for complete details.
 ./scripts/build-deb.sh
 
 # Copy to each node
-scp target/debian/xdebbied_0.5.2-1_amd64.deb node1:/tmp/
-scp target/debian/xdebbied_0.5.2-1_amd64.deb node2:/tmp/
-scp target/debian/xdebbied_0.5.2-1_amd64.deb node3:/tmp/
+scp target/debian/xdebbied_0.6.0-1_amd64.deb node1:/tmp/
+scp target/debian/xdebbied_0.6.0-1_amd64.deb node2:/tmp/
+scp target/debian/xdebbied_0.6.0-1_amd64.deb node3:/tmp/
 
 # Install on each node
-ssh node1 sudo dpkg -i /tmp/xdebbied_0.5.2-1_amd64.deb
-ssh node2 sudo dpkg -i /tmp/xdebbied_0.5.2-1_amd64.deb
-ssh node3 sudo dpkg -i /tmp/xdebbied_0.5.2-1_amd64.deb
+ssh node1 sudo dpkg -i /tmp/xdebbied_0.6.0-1_amd64.deb
+ssh node2 sudo dpkg -i /tmp/xdebbied_0.6.0-1_amd64.deb
+ssh node3 sudo dpkg -i /tmp/xdebbied_0.6.0-1_amd64.deb
 ```
 
 **That's it!** Each node will:
@@ -196,10 +196,11 @@ See [BOOTSTRAP.md](BOOTSTRAP.md) for detailed bootstrap documentation and
 - [REST API](docs/api.md) — HTTP API reference
 - [Operations](docs/operations.md) — Drain, upgrades, backup, security, limits
 - [Geneve mesh](docs/mesh.md) — Overlay bridge stitching between hosts, `/v1/mesh`, `xdctl mesh`
+- [Overlay DHCP](docs/network.md) — `[network]`: addresses allocated at VM creation, DHCP answered from the VM store, `/v1/network`, `xdctl net`
 
 ## Status
 
-**v0.5.2** — Geneve overlay mesh with a managed WireGuard underlay, LVM thin provisioning, clean VM naming.
+**v0.6.0** — Geneve overlay mesh with a managed WireGuard underlay, built-in overlay DHCP (addresses bound to VM records), LVM thin provisioning, clean VM naming.
 
 The scheduler and reconciler are covered by unit tests against a fake
 hypervisor. LVM thin provisioning has been tested in production for instant

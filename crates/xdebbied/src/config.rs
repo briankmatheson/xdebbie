@@ -57,6 +57,10 @@ pub struct Config {
     /// Geneve mesh between hypervisors (`[mesh]`). Off unless `enabled = true`.
     #[serde(default)]
     pub mesh: Option<crate::mesh::MeshConfig>,
+    /// Overlay addressing + built-in DHCP (`[network]`). Absent = VMs get no
+    /// address from xdebbie and some other DHCP server must exist.
+    #[serde(default)]
+    pub network: Option<crate::dhcp::NetworkConfig>,
 }
 
 fn d_discovery() -> bool {
@@ -149,7 +153,21 @@ const DEFAULT_PORT: u16 = 7443;
 
 impl Config {
     pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
-        Ok(toml::from_str(&std::fs::read_to_string(path)?)?)
+        let cfg: Self = toml::from_str(&std::fs::read_to_string(path)?)?;
+        if let Some(n) = &cfg.network {
+            n.validate().map_err(|e| anyhow::anyhow!("[network]: {e}"))?;
+        }
+        Ok(cfg)
+    }
+
+    /// Bridge the DHCP responder listens on: explicit, else the mesh bridge,
+    /// else the first configured host's bridge.
+    pub fn dhcp_bridge(&self) -> Option<String> {
+        let n = self.network.as_ref()?;
+        n.bridge
+            .clone()
+            .or_else(|| self.mesh.as_ref().map(|m| m.bridge.clone()))
+            .or_else(|| self.hosts.first().map(|h| h.bridge.clone()))
     }
 
     /// Resolve the effective listen address.

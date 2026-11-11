@@ -4,6 +4,7 @@
 mod api;
 mod bootstrap;
 mod config;
+mod dhcp;
 mod discovery;
 mod election;
 mod libvirt;
@@ -218,6 +219,24 @@ async fn main() -> anyhow::Result<()> {
         })
         .await?;
 
+    // Give VMs that predate `[network]` an overlay address; new ones get
+    // theirs at creation.
+    if let Some(net) = cfg.network.clone() {
+        let adopted = store.update(move |s| net.adopt(&mut s.vms)).await?;
+        for (id, ip) in adopted {
+            info!(vm = %id, %ip, "network: adopted overlay address");
+        }
+    }
+
+    // Give VMs that predate `[network]` an overlay address; new ones get
+    // theirs at creation.
+    if let Some(net) = cfg.network.clone() {
+        let adopted = store.update(move |s| net.adopt(&mut s.vms)).await?;
+        for (id, ip) in adopted {
+            info!(vm = %id, %ip, "network: adopted overlay address");
+        }
+    }
+
     let token = load_token(&cfg)?;
 
     // Resolve listen address once: explicit config > default-route IP > loopback.
@@ -239,6 +258,9 @@ async fn main() -> anyhow::Result<()> {
         ..Default::default()
     };
 
+    // `leader` mirrors the election result for consumers that cannot await
+    // (the DHCP gate). Standalone = always leader.
+    let leader = Arc::new(std::sync::atomic::AtomicBool::new(true));
     if let Ok(discovery_engine) = discovery::DiscoveryEngine::new(discovery_cfg) {
         let discovery_arc = Arc::new(discovery_engine);
         info!("Starting discovery engine (node_id: {})", discovery_arc.node_id());
@@ -246,6 +268,15 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(async move {
             if let Err(e) = discovery_clone.run().await {
                 tracing::error!("Discovery engine failed: {}", e);
+            }
+        });
+        let election = discovery_arc.election();
+        let leader = leader.clone();
+        tokio::spawn(async move {
+            loop {
+                let is = election.read().await.is_leader();
+                leader.store(is, std::sync::atomic::Ordering::Relaxed);
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             }
         });
     } else {
@@ -261,11 +292,36 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(rec.run());
     tokio::spawn(mesh.clone().run());
 
+    let dhcp = match (cfg.network.clone(), cfg.dhcp_bridge()) {
+        (Some(net), Some(bridge)) => {
+            let overlay = mesh.overlay.clone();
+            let srv = Arc::new(dhcp::DhcpServer::new(
+                net.clone(),
+                bridge,
+                store.clone(),
+                Arc::new(move |b: &str| overlay.mtu_for(b)),
+                dhcp::Gate { leader, leader_only: net.leader_only },
+            ));
+            if net.dhcp {
+                tokio::spawn(srv.clone().run());
+            } else {
+                info!("network: dhcp = false, allocating addresses only");
+            }
+            Some(srv)
+        }
+        (Some(_), None) => {
+            tracing::warn!("[network] set but no bridge known (set network.bridge); allocating addresses only");
+            None
+        }
+        _ => None,
+    };
+
     let app = api::router(api::App {
         store,
         cfg: cfg.clone(),
         token,
         mesh,
+        dhcp,
     });
     serve(&cfg, listen, app).await
 }

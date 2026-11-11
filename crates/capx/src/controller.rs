@@ -360,6 +360,7 @@ async fn apply_machine(
             disk_gib: fm.spec.disk_gib,
             image: fm.spec.image.clone(),
             data_disk_gib: None, // TODO: expose in XDebbie8sMachine CRD
+            ip: None,            // allocated by xdebbied from [network]
             placement: Placement {
                 failure_domain: machine
                     .data
