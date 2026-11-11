@@ -5,6 +5,20 @@ All notable changes to XDebbie will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] - 2026-11-11
+
+### Fixed
+- **WireGuard key unreadable under AppArmor.** Debian's `wireguard-tools` ships
+  an AppArmor profile for `/usr/bin/wg` that only permits key files under
+  `/etc/wireguard`, so `wg set <dev> private-key /var/lib/xdebbie/wg.key`
+  failed every tick with `fopen: Permission denied` (even as root) and the
+  underlay never came up. xdebbied now reads the key itself and feeds it to
+  `wg set … private-key /dev/stdin` over a pipe, which AppArmor does not
+  path-mediate; the file path is kept only as a fallback.
+- The .deb also ships `/etc/apparmor.d/local/wg` (conffile) allowing
+  `/var/lib/xdebbie/wg.key r,` and reloads the `wg` profile in postinst so
+  manual `wg set … private-key /var/lib/xdebbie/wg.key` works for operators.
+
 ## [0.5.1] - 2026-11-11
 
 ### Changed

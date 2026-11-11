@@ -37,6 +37,12 @@ case "$1" in
 EOF
                 apparmor_parser -r /etc/apparmor.d/usr.lib.libvirt.virt-aa-helper 2>/dev/null || true
             fi
+            # wireguard-tools ships a profile for /usr/bin/wg that only allows
+            # keys under /etc/wireguard; our local/wg override (shipped as a
+            # conffile) also allows /var/lib/xdebbie/wg.key. Reload it.
+            if [ -f /etc/apparmor.d/wg ]; then
+                apparmor_parser -r /etc/apparmor.d/wg 2>/dev/null || true
+            fi
         fi
         
         # Run bootstrap on first install

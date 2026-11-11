@@ -1,0 +1,5 @@
+# Installed by xdebbie. Debian's /etc/apparmor.d/wg profile only lets `wg`
+# read keys under /etc/wireguard; xdebbied keeps its WireGuard identity in
+# /var/lib/xdebbie. xdebbied normally feeds the key to `wg` over a pipe, but
+# allow the file too so manual `wg set ... private-key` works for operators.
+/var/lib/xdebbie/wg.key r,

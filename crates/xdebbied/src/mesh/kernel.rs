@@ -652,8 +652,20 @@ impl NetOps for IpCliNetOps {
                 self.ip(&["link", "add", dev, "type", "wireguard"])?;
             }
             Action::WgSetIface { dev, key_path, listen_port } => {
-                let kp = key_path.to_string_lossy().into_owned();
-                run(&self.wg, &["set", dev, "private-key", &kp, "listen-port", &listen_port.to_string()], None)?;
+                // Debian ships an AppArmor profile for /usr/bin/wg that only
+                // lets it read keys under /etc/wireguard, so `wg` cannot open
+                // our key in /var/lib/xdebbie even as root ("fopen: Permission
+                // denied"). We read the key ourselves and hand it over on a
+                // pipe, which AppArmor does not path-mediate. The file path is
+                // kept as a fallback (the .deb also ships a local/wg override).
+                let port = listen_port.to_string();
+                let key = std::fs::read_to_string(key_path).map_err(|e| anyhow!("{}: {e}", key_path.display()))?;
+                let key = format!("{}\n", key.trim());
+                if let Err(stdin_err) = run(&self.wg, &["set", dev, "private-key", "/dev/stdin", "listen-port", &port], Some(&key)) {
+                    let kp = key_path.to_string_lossy().into_owned();
+                    run(&self.wg, &["set", dev, "private-key", &kp, "listen-port", &port], None)
+                        .map_err(|path_err| anyhow!("{stdin_err}; fallback {path_err}"))?;
+                }
             }
             Action::WgPeerSet { dev, pubkey, endpoint, allowed_ips, keepalive } => {
                 let ka = keepalive.to_string();
@@ -1087,6 +1099,33 @@ mod tests {
 
     fn fx(name: &str) -> String {
         std::fs::read_to_string(format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
+    }
+
+    /// The real `wg` on Debian runs under an AppArmor profile that cannot read
+    /// /var/lib/xdebbie/wg.key, so the private key must travel over stdin
+    /// (`private-key /dev/stdin`), never as a path on the command line.
+    #[test]
+    #[cfg(unix)]
+    fn wg_set_iface_feeds_key_over_stdin() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join("wg.key");
+        std::fs::write(&key_path, "SECRETKEY=\n").unwrap();
+        let log = dir.path().join("wg.log");
+        let stub = dir.path().join("wg");
+        std::fs::write(
+            &stub,
+            format!("#!/bin/sh\necho \"argv: $*\" >> {0}\necho \"stdin: $(cat)\" >> {0}\n", log.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let ops = IpCliNetOps { wg: stub.to_string_lossy().into_owned(), ..IpCliNetOps::default() };
+        ops.apply(&Action::WgSetIface { dev: "wg-flock".into(), key_path: key_path.clone(), listen_port: 51820 }).unwrap();
+
+        let got = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(got, "argv: set wg-flock private-key /dev/stdin listen-port 51820\nstdin: SECRETKEY=\n");
+        assert!(!got.contains(&key_path.to_string_lossy().into_owned()), "key path must not be passed to wg: {got}");
     }
 
     #[test]

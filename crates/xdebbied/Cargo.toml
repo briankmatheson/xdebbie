@@ -33,8 +33,9 @@ assets = [
     ["../../BOOTSTRAP.md", "usr/share/doc/xdebbie/", "644"],
     ["../../docs/mesh.md", "usr/share/doc/xdebbie/", "644"],
     ["assets/modules-load.d/xdebbie-mesh.conf", "etc/modules-load.d/", "644"],
+    ["assets/apparmor.d/local/wg", "etc/apparmor.d/local/", "644"],
 ]
-conf-files = ["/etc/modules-load.d/xdebbie-mesh.conf"]
+conf-files = ["/etc/modules-load.d/xdebbie-mesh.conf", "/etc/apparmor.d/local/wg"]
 maintainer-scripts = "debian/"
 systemd-units = { unit-name = "xdebbied", enable = true }
 
