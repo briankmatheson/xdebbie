@@ -1,8 +1,10 @@
 # Dockerfile for CAPX (Cluster API Provider for XDebbie)
 # Multi-stage build for minimal final image
 
-# Stage 1: Build
-FROM rust:latest AS builder
+# Stage 1: Build. Pin the builder to the same Debian release as the
+# runtime: the binary links the builder's glibc/OpenSSL and must find the
+# same (or newer) ones at run time.
+FROM rust:1-trixie AS builder
 
 WORKDIR /build
 
@@ -14,13 +16,13 @@ COPY crates ./crates
 RUN cargo build --release --package capx
 
 # Stage 2: Runtime
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
-# Install runtime dependencies
+# Install runtime dependencies (reqwest uses native-tls -> libssl)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         ca-certificates \
-        libssl3 \
+        libssl3t64 \
         && \
     rm -rf /var/lib/apt/lists/*
 

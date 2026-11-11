@@ -356,8 +356,18 @@ pub fn ensure_storage_pool(uri: &str, name: &str, path: &str) -> Result<()> {
     Ok(())
 }
 
-/// Get hostname
+/// This host's fully qualified name. Hosts are named by FQDN everywhere
+/// (`[[hosts]].name`, placement pins, `xdctl host ls`), so ask the resolver
+/// instead of trusting whichever form /etc/hostname happens to hold.
 pub fn get_hostname() -> String {
+    if let Ok(out) = Command::new("hostname").arg("-f").output() {
+        if out.status.success() {
+            let fqdn = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !fqdn.is_empty() {
+                return fqdn;
+            }
+        }
+    }
     hostname::get()
         .ok()
         .and_then(|h| h.into_string().ok())
