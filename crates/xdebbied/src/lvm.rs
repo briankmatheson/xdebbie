@@ -369,6 +369,37 @@ impl LvmManager {
         format!("/dev/{}/{}", self.vg_name, lv_name)
     }
 
+    /// Free space, in GiB, available for new VM disks: the thin pool's
+    /// unallocated data space if thin provisioning is configured, otherwise
+    /// the VG's free extents. This is what the scheduler should use for
+    /// `disk_free_gib` when disks come from LVM rather than a libvirt pool.
+    pub fn free_gib(&self) -> Result<u64> {
+        if let Some(ref pool) = self.thin_pool {
+            let output = Command::new("/usr/sbin/lvs")
+                .args(&[
+                    "--noheadings",
+                    "--units", "b",
+                    "--nosuffix",
+                    "-o", "lv_size,data_percent",
+                    &format!("{}/{}", self.vg_name, pool),
+                ])
+                .output()
+                .context("querying thin pool usage")?;
+            if !output.status.success() {
+                anyhow::bail!(
+                    "lvs {}/{}: {}",
+                    self.vg_name,
+                    pool,
+                    String::from_utf8_lossy(&output.stderr).trim()
+                );
+            }
+            let text = String::from_utf8_lossy(&output.stdout);
+            return parse_thin_free_gib(&text);
+        }
+        let stats = self.get_stats()?;
+        Ok(stats.free_gib.floor() as u64)
+    }
+
     /// Get LVM statistics for monitoring
     pub fn get_stats(&self) -> Result<LvmStats> {
         let output = Command::new("/usr/sbin/vgs")
@@ -406,6 +437,25 @@ impl LvmManager {
     }
 }
 
+/// Parse `lvs -o lv_size,data_percent --units b --nosuffix` output for a
+/// thin pool into free GiB. data_percent is "12.34" (locale-independent in
+/// lvs); an empty data_percent means the pool is inactive -- treat as 0 free
+/// rather than guessing.
+pub fn parse_thin_free_gib(text: &str) -> Result<u64> {
+    let mut parts = text.split_whitespace();
+    let size: f64 = parts
+        .next()
+        .context("lvs: missing lv_size")?
+        .parse()
+        .context("lvs: bad lv_size")?;
+    let pct: f64 = match parts.next() {
+        Some(p) => p.parse().context("lvs: bad data_percent")?,
+        None => return Ok(0),
+    };
+    let free = size * (1.0 - pct / 100.0);
+    Ok((free / (1024.0 * 1024.0 * 1024.0)).floor().max(0.0) as u64)
+}
+
 /// LVM statistics
 #[derive(Debug, Clone)]
 pub struct LvmStats {
@@ -418,6 +468,17 @@ pub struct LvmStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn thin_free_from_lvs_output() {
+        // 200 GiB pool, 5% used -> 190 GiB free
+        let gib = 1024f64 * 1024.0 * 1024.0;
+        let text = format!("  {} 5.00\n", (200.0 * gib) as u64);
+        assert_eq!(parse_thin_free_gib(&text).unwrap(), 190);
+        // inactive pool reports no data_percent
+        assert_eq!(parse_thin_free_gib("  214748364800\n").unwrap(), 0);
+        assert!(parse_thin_free_gib("").is_err());
+    }
 
     #[test]
     fn test_lv_path() {

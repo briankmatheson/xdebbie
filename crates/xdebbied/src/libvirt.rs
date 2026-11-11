@@ -574,17 +574,77 @@ pub fn parse_domifaddr(text: &str) -> Vec<Address> {
         .collect()
 }
 
+/// Does this libvirt URI point at the machine xdebbied is running on?
+/// `qemu:///system`, localhost, or a host that is one of our own names or
+/// addresses. Used to decide whether host-local resources (the LVM thin
+/// pool) describe this host.
+pub fn uri_is_local(uri: &str) -> bool {
+    let Some(rest) = uri.split("://").nth(1) else { return true };
+    let authority = rest.split('/').next().unwrap_or("");
+    let host = authority
+        .rsplit('@')
+        .next()
+        .unwrap_or("")
+        .trim_start_matches('[')
+        .split(']')
+        .next()
+        .unwrap_or("")
+        .split(':')
+        .next()
+        .unwrap_or("");
+    if host.is_empty() || host == "localhost" || host.starts_with("127.") || host == "::1" {
+        return true;
+    }
+    let mut names: Vec<String> = Vec::new();
+    if let Ok(h) = hostname::get() {
+        let h = h.to_string_lossy().to_string();
+        names.push(h.split('.').next().unwrap_or(&h).to_string());
+        names.push(h);
+    }
+    if let Ok(out) = std::process::Command::new("hostname").arg("-f").output() {
+        names.push(String::from_utf8_lossy(&out.stdout).trim().to_string());
+    }
+    if let Ok(out) = std::process::Command::new("ip").args(["-o", "addr", "show"]).output() {
+        for l in String::from_utf8_lossy(&out.stdout).lines() {
+            let mut f = l.split_whitespace();
+            if f.any(|w| w == "inet" || w == "inet6") {
+                if let Some(a) = f.next().and_then(|a| a.split('/').next()) {
+                    names.push(a.to_string());
+                }
+            }
+        }
+    }
+    names.iter().any(|n| n == host)
+}
+
 impl Hypervisor for Virsh {
     async fn inventory(&self, host: &Host) -> Result<Capacity> {
         let (cpus, memory_mib) = parse_nodeinfo(&self.run(&host.uri, &["nodeinfo"]).await?)?;
         let _ = self
             .run(&host.uri, &["pool-refresh", &host.storage_pool])
             .await;
-        let disk_free_gib = parse_pool_available(
+        let pool_free_gib = parse_pool_available(
             &self
                 .run(&host.uri, &["pool-info", "--bytes", &host.storage_pool])
                 .await?,
         )?;
+        // With LVM configured, root disks are carved from the local thin pool
+        // (see ensure_disk), not the libvirt pool -- so for *this* host the
+        // thin pool's free space is the number the scheduler must see. Other
+        // hosts keep the libvirt-pool figure; their LVM is not visible here.
+        let disk_free_gib = match (&self.lvm, uri_is_local(&host.uri)) {
+            (Some(lvm), true) => match lvm.free_gib() {
+                Ok(g) => {
+                    tracing::debug!(host = %host.name, lvm_free_gib = g, pool_free_gib, "using LVM free space for capacity");
+                    g
+                }
+                Err(e) => {
+                    tracing::warn!(host = %host.name, error = %e, "LVM free space unavailable; falling back to libvirt pool");
+                    pool_free_gib
+                }
+            },
+            _ => pool_free_gib,
+        };
         Ok(Capacity {
             cpus,
             memory_mib,
@@ -806,6 +866,26 @@ impl Hypervisor for Virsh {
                 .await;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod locality_tests {
+    use super::uri_is_local;
+
+    #[test]
+    fn local_forms() {
+        assert!(uri_is_local("qemu:///system"));
+        assert!(uri_is_local("qemu+tls://localhost/system"));
+        assert!(uri_is_local("qemu+tcp://127.0.0.1:16509/system"));
+        let short = hostname::get().unwrap().to_string_lossy().to_string();
+        assert!(uri_is_local(&format!("qemu+ssh://root@{}/system", short)));
+    }
+
+    #[test]
+    fn remote_forms() {
+        assert!(!uri_is_local("qemu+tls://203.0.113.9/system"));
+        assert!(!uri_is_local("qemu+ssh://root@not-this-host.invalid/system"));
     }
 }
 
