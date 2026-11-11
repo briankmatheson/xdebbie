@@ -501,6 +501,8 @@ pub fn domain_xml(host: &Host, vm: &Vm, volume_group: Option<&str>, overlay_mtu:
     <channel type='unix'><target type='virtio' name='org.qemu.guest_agent.0'/></channel>
     <serial type='pty'><target port='0'/></serial>
     <console type='pty'><target type='serial' port='0'/></console>
+    <graphics type='vnc' port='-1' autoport='yes' listen='127.0.0.1'/>
+    <video><model type='virtio' vram='16384'/></video>
     <rng model='virtio'><backend model='random'>/dev/urandom</backend></rng>
     <memballoon model='virtio'/>
   </devices>
