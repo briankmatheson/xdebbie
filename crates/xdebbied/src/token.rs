@@ -205,27 +205,49 @@ fn previous_path(token_file: &Path) -> PathBuf {
 }
 
 /// Atomic write, mode 0600.
+/// One secret on its own line.
 fn write_secret(path: &Path, value: &str) -> Result<()> {
+    write_private(path, &format!("{value}\n"))
+}
+
+/// Mode of every file that holds the token: the daemon and bootstrap run
+/// as root and replace files by rename, so nothing needs write permission.
+pub const SECRET_MODE: u32 = 0o400;
+
+/// Write `content` to `path` atomically as root:root 0400: a temp file in
+/// the same directory gets the mode before any byte lands, then replaces
+/// `path` by rename. Used for the token files and `xdebbie_env`.
+pub fn write_private(path: &Path, content: &str) -> Result<()> {
     use std::io::Write;
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     let mut f = tempfile::Builder::new()
-        .prefix(".token")
+        .prefix(".xdebbie")
         .tempfile_in(dir)
-        .context("temp file for token")?;
+        .with_context(|| format!("temp file next to {}", path.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        f.as_file()
-            .set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        f.as_file().set_permissions(std::fs::Permissions::from_mode(SECRET_MODE))?;
+        // Only root can chown; when bootstrap runs as root this pins
+        // root:root regardless of who owned the previous file.
+        if nix_is_root() {
+            std::os::unix::fs::fchown(f.as_file(), Some(0), Some(0))
+                .with_context(|| format!("chown root:root {}", path.display()))?;
+        }
     }
-    writeln!(f, "{value}")?;
+    f.write_all(content.as_bytes())?;
     f.as_file().sync_all()?;
     f.persist(path)
-        .with_context(|| format!("writing {}", path.display()))?;
+        .with_context(|| format!("replacing {}", path.display()))?;
     Ok(())
 }
 
-/// Replace the `export XDEBBIE_TOKEN=` line, leaving everything else alone.
+#[cfg(unix)]
+fn nix_is_root() -> bool {
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    unsafe { libc::geteuid() == 0 }
+}
+
 fn rewrite_env_token(env: &Path, token: &str) -> Result<()> {
     let text = std::fs::read_to_string(env)?;
     let mut found = false;
@@ -244,8 +266,7 @@ fn rewrite_env_token(env: &Path, token: &str) -> Result<()> {
     if !found {
         return Ok(());
     }
-    std::fs::write(env, out)?;
-    Ok(())
+    write_private(env, &out)
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
@@ -484,6 +505,13 @@ mod tests {
         let envtext = std::fs::read_to_string(&env).unwrap();
         assert!(envtext.contains(&format!("export XDEBBIE_TOKEN='{second}'")));
         assert!(envtext.contains("export XDEBBIE_URL=http://x:7443"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for f in [&env, &tf, &tf.with_extension("previous")] {
+                assert_eq!(std::fs::metadata(f).unwrap().permissions().mode() & 0o777, SECRET_MODE, "{}", f.display());
+            }
+        }
 
         // A restart resumes the overlap.
         let t2 = Tokens::load(&tf).unwrap();

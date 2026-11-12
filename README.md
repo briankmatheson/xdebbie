@@ -163,7 +163,9 @@ Without LVM configuration, xdebbie falls back to qcow2 overlays (slower but work
 ### Use the CLI
 
 ```bash
-# Source the environment (on any node)
+# Source the environment (on any node). It holds the API token, so it is
+# root:root 0400: use a root shell, or keep your own 0400 copy under $HOME.
+sudo -s
 source /etc/xdebbie/xdebbie_env
 
 # List nodes (should show all 3)

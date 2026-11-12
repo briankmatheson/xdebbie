@@ -10,6 +10,11 @@ case "$1" in
         # Set permissions (root owned for libvirt access)
         chmod 755 /etc/xdebbie
         chmod 755 /var/lib/xdebbie
+        # Files holding the API token are root:root 0400 (older releases
+        # left xdebbie_env world-readable).
+        for f in /etc/xdebbie/token /etc/xdebbie/token.previous /etc/xdebbie/xdebbie_env; do
+            [ -e "$f" ] && chown root:root "$f" && chmod 0400 "$f" || true
+        done
         
         # Geneve kernel module for the optional overlay mesh (also listed in
         # /etc/modules-load.d/xdebbie-mesh.conf for boot). Harmless if unused.
@@ -69,7 +74,7 @@ EOF
         echo "  export XDEBBIE_TOKEN=\$(sudo cat /etc/xdebbie/token)"
         echo "  xdctl host ls"
         echo ""
-        echo "Or source system-wide environment:"
+        echo "Or, from a root shell (the file is root:root 0400):"
         echo "  source /etc/xdebbie/xdebbie_env"
         echo ""
         ;;

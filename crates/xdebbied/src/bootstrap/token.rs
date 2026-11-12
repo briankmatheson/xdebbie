@@ -20,20 +20,9 @@ pub fn write_token(path: &Path, token: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).context("creating token directory")?;
     }
-
-    std::fs::write(path, format!("{}\n", token))
+    crate::token::write_private(path, &format!("{token}\n"))
         .with_context(|| format!("writing token to {}", path.display()))?;
-
-    // Set permissions to 0600 (owner read/write only)
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(path)?.permissions();
-        perms.set_mode(0o600);
-        std::fs::set_permissions(path, perms)?;
-    }
-
-    info!("Token written to {} with mode 0600", path.display());
+    info!("Token written to {} (root:root 0400)", path.display());
     Ok(())
 }
 
@@ -63,11 +52,12 @@ export XDEBBIE_TOKEN='{}'
         token
     );
 
-    std::fs::write(path, content)
+    // Holds the token: same protection as the token file.
+    crate::token::write_private(path, &content)
         .with_context(|| format!("writing environment file to {}", path.display()))?;
 
-    info!("Environment file written to {}", path.display());
-    info!("Source with: source {}", path.display());
+    info!("Environment file written to {} (root:root 0400)", path.display());
+    info!("Source with: sudo -s; source {}", path.display());
     Ok(())
 }
 

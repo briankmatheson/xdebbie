@@ -136,13 +136,17 @@ control_plane_eligible = true
 
 ### Token: `/etc/xdebbie/token`
 
-64-character hexadecimal token (32 random bytes), mode 0600:
+64-character hexadecimal token (32 random bytes), root:root mode 0400:
 
 ```
 a1b2c3d4e5f6...
 ```
 
 ### Environment: `/etc/xdebbie/xdebbie_env`
+
+Root:root mode 0400, like the token it contains. Source it from a root
+shell (`sudo -s`), or copy it to `~/.xdebbie_env` (mode 0400) for an
+unprivileged account that is allowed to drive the cluster.
 
 ```bash
 # xdebbie environment variables
@@ -250,8 +254,8 @@ sudo apt-get install -y libvirt-daemon-system libvirt-clients qemu-kvm qemu-util
 6. Generate Token
    ├─ If token exists and not --force → reuse (--force: back up, regenerate, warn)
    ├─ Generate 32 random bytes → hex encode
-   ├─ Write to /etc/xdebbie/token with mode 0600
-   └─ Write /etc/xdebbie/xdebbie_env with URL and token
+   ├─ Write to /etc/xdebbie/token (root:root 0400, atomic rename)
+   └─ Write /etc/xdebbie/xdebbie_env with URL and token (same)
 ```
 
 ## Resource Discovery
@@ -269,7 +273,9 @@ This allows bootstrap to work on systems with existing libvirt setups (e.g., `de
 ### Token Security
 
 - Token is 32 random bytes (256 bits of entropy)
-- Stored with mode 0600 (owner read/write only)
+- Token file, `token.previous` (during a rotation) and `xdebbie_env` are
+  root:root 0400, written to a temp file with that mode and renamed into
+  place, so the secret is never world-readable even for an instant
 - Never logged or displayed except in environment file
 - Bearer token authentication for all API requests
 
@@ -306,8 +312,9 @@ Once bootstrapped, xdebbied can serve as the infrastructure provider for CAPQ (C
    sudo xdebbied serve
    ```
 
-3. **Configure environment** for xdctl:
+3. **Configure environment** for xdctl (root shell; the file is 0400):
    ```bash
+   sudo -s
    source /etc/xdebbie/xdebbie_env
    ```
 
@@ -353,7 +360,8 @@ ls -la /etc/xdebbie/
 ls -la /var/lib/xdebbie/
 ```
 
-Token should be mode 0600. If running as non-root, ensure user owns files.
+`token`, `token.previous` and `xdebbie_env` should be root:root 0400
+(the package's postinst fixes older installs). `xdebbied.toml` is 0644.
 
 ## Comparison with Manual Setup
 

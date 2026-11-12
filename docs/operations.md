@@ -52,7 +52,9 @@ not stop running VMs; it only makes xdebbied forget them.
 - xdebbied holds an SSH key that can drive libvirt on every host, which is
   root-equivalent there. Treat the xdebbied box accordingly.
 - The API is protected by one bearer token, shared by every box in a
-  cluster. Run it with TLS (`tls_cert`, `tls_key`) whenever it listens off
+  cluster. On disk it lives in `/etc/xdebbie/token` and `xdebbie_env`, both
+  root:root 0400 (written atomically with that mode); source the env file
+  from a root shell or keep a private copy. Run it with TLS (`tls_cert`, `tls_key`) whenever it listens off
   loopback; xdebbied warns if you do not.
 - Rotate it with `xdctl token rotate`. The leader mints a new token, keeps
   accepting the old one, and pushes the pair to every peer; once each peer

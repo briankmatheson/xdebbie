@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.12.0] - 2026-11-12
 
+### Security
+- `/etc/xdebbie/xdebbie_env` was written 0644 by bootstrap and by token
+  rotation — the API token, world-readable. It, `token` and
+  `token.previous` are now root:root 0400, written to a temp file that
+  already has that mode and renamed into place. The package postinst
+  fixes existing files on upgrade. Source the env file from a root shell.
+
 ### Changed
 - xdctl verbs: every `ls` (`host`, `vm`, `volume`, `mesh`, `net`) also
   answers to `list`, `show` and `get`; `net show` is now `net ls`. The
