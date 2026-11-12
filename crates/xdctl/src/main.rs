@@ -772,7 +772,7 @@ fn main() -> Result<()> {
                 }
                 let vms: Vec<Vm> = serde_json::from_value(v)?;
                 println!(
-                    "{:<36} {:<24} {:<13} {:<10} {:<15} {:<10} MESSAGE",
+                    "{:<36} {:<20} {:<13} {:<25} {:<15} {:<10} MESSAGE",
                     "ID", "NAME", "PHASE", "HOST", "IP", "AGE"
                 );
                 for v in vms {
@@ -786,7 +786,7 @@ fn main() -> Result<()> {
                     });
                     let age = format_age(v.created);
                     println!(
-                        "{:<36} {:<24} {:<13} {:<10} {:<15} {:<10} {}",
+                        "{:<36} {:<20.20} {:<13} {:<25} {:<15} {:<10} {}",
                         v.id,
                         v.spec.name,
                         format!("{:?}", v.phase),
