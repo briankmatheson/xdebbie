@@ -3,13 +3,19 @@
 //! in the reconciler. Every write is idempotent so controllers can retry.
 //! (One exception: creating/deleting a standalone volume talks to ABE
 //! inline, because the caller needs the id ABE assigns.)
+//!
+//! Only the elected leader answers cluster routes (hosts, VMs, volumes,
+//! scheduling); a follower forwards them to the leader verbatim and relays
+//! the reply (`forward_to_leader`). `/v1/leader`, `/v1/network` and
+//! `/v1/mesh*` describe the box you asked, so they are served locally.
 
 use std::{collections::BTreeMap, sync::Arc};
 
 use axum::{
     Json, Router,
-    extract::{Path, Query, Request, State},
-    http::{StatusCode, header},
+    body::Body,
+    extract::{OriginalUri, Path, Query, Request, State},
+    http::{HeaderName, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -19,9 +25,15 @@ use xdebbie_core::*;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::{abe, config::Config, mesh::MeshManager, store::Store};
+use crate::{abe, config::Config, leader::Leadership, mesh::MeshManager, store::Store};
 
 pub mod mesh;
+
+/// Set on requests a follower forwards; a second hop means leadership moved
+/// mid-request, so the receiver answers 503 instead of bouncing it on.
+const FORWARDED_BY: HeaderName = HeaderName::from_static("x-xdebbie-forwarded-by");
+/// Largest request body a follower will relay.
+const FORWARD_BODY_LIMIT: usize = 16 << 20;
 
 #[derive(Clone)]
 pub struct App {
@@ -33,6 +45,10 @@ pub struct App {
     pub dhcp: Option<Arc<crate::dhcp::DhcpServer>>,
     /// For standalone volumes (`/v1/volumes`).
     pub abe: abe::Client,
+    /// Who decides; followers forward cluster routes to the leader.
+    pub leadership: Leadership,
+    /// Client used to forward requests to the leader.
+    pub http: reqwest::Client,
 }
 
 pub struct ApiErr(StatusCode, String);
@@ -58,6 +74,7 @@ fn conflict(m: impl Into<String>) -> ApiErr {
 }
 
 pub fn router(app: App) -> Router {
+    // Cluster state: answered by the leader only.
     let v1 = Router::new()
         .route("/hosts", get(list_hosts))
         .route(
@@ -79,6 +96,9 @@ pub fn router(app: App) -> Router {
         .route("/volumes/{id}", get(get_volume).delete(delete_volume))
         .route("/volumes/{id}/attach", post(attach_volume))
         .route("/volumes/{id}/detach", post(detach_volume))
+        .layer(middleware::from_fn_with_state(app.clone(), forward_to_leader))
+        // This box: served wherever you ask.
+        .route("/leader", get(leader_status))
         .route("/network", get(network))
         .with_state(app.clone())
         .merge(mesh::router(mesh::MeshApi { mesh: app.mesh.clone() }))
@@ -110,6 +130,77 @@ pub async fn bearer_auth(State(token): State<Option<Arc<String>>>, req: Request,
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+// ---------- leader ----------
+
+async fn leader_status(State(a): State<App>) -> Json<LeaderStatus> {
+    Json(a.leadership.status().await)
+}
+
+/// Followers relay cluster routes to the leader; the leader (or a standalone
+/// box) handles them itself.
+async fn forward_to_leader(State(a): State<App>, req: Request, next: Next) -> Response {
+    if a.leadership.is_leader().await {
+        return next.run(req).await;
+    }
+    if let Some(from) = req.headers().get(&FORWARDED_BY) {
+        let from = from.to_str().unwrap_or("?");
+        return ApiErr(
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!("{from} forwarded this request here but leadership has moved; retry"),
+        )
+        .into_response();
+    }
+    let Some(leader) = a.leadership.leader().await else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [(header::RETRY_AFTER, "2")],
+            Json(ApiError { error: "no leader elected yet; retry".into() }),
+        )
+            .into_response();
+    };
+    let me = a.leadership.status().await.this.hostname;
+    match forward(&a.http, &leader.api_url, &me, req).await {
+        Ok(r) => r,
+        Err(e) => ApiErr(
+            StatusCode::BAD_GATEWAY,
+            format!("forwarding to leader {} ({}): {e:#}", leader.hostname, leader.api_url),
+        )
+        .into_response(),
+    }
+}
+
+async fn forward(http: &reqwest::Client, base: &str, me: &str, req: Request) -> anyhow::Result<Response> {
+    let (parts, body) = req.into_parts();
+    // Inside `nest("/v1")` the request URI is stripped; the original one
+    // is what the leader must see.
+    let uri = parts
+        .extensions
+        .get::<OriginalUri>()
+        .map(|o| o.0.clone())
+        .unwrap_or_else(|| parts.uri.clone());
+    let pq = uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
+    let url = format!("{}{pq}", base.trim_end_matches('/'));
+    let body = axum::body::to_bytes(body, FORWARD_BODY_LIMIT).await?;
+
+    let mut out = http.request(parts.method.clone(), &url).header(&FORWARDED_BY, me);
+    for (k, v) in &parts.headers {
+        if matches!(*k, header::HOST | header::CONTENT_LENGTH | header::CONNECTION | header::TRANSFER_ENCODING) {
+            continue;
+        }
+        out = out.header(k.as_str(), v.as_bytes());
+    }
+    let resp = out.body(body).send().await?;
+
+    let mut r = Response::builder().status(resp.status().as_u16());
+    for (k, v) in resp.headers() {
+        if matches!(*k, header::CONTENT_LENGTH | header::CONNECTION | header::TRANSFER_ENCODING) {
+            continue;
+        }
+        r = r.header(k.as_str(), v.as_bytes());
+    }
+    Ok(r.body(Body::from(resp.bytes().await?))?)
 }
 
 // ---------- hosts ----------
@@ -725,4 +816,109 @@ async fn detach_volume(State(a): State<App>, Path(id): Path<String>) -> R<(Statu
         Ok(())
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{net::Ipv4Addr, time::Duration};
+
+    use tokio::sync::RwLock;
+
+    use super::*;
+    use crate::{
+        discovery::peer::{PeerInfo, PeerTable},
+        election::state::ElectionStateMachine,
+        leader::Leadership,
+        mesh::{FakeNetOps, MeshManager},
+    };
+
+    /// Serve a router on an ephemeral port; returns its base URL.
+    async fn spawn(leadership: Leadership, store: Store) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let f = FakeNetOps::new();
+        f.add_bridge("br-int", 1500, "52:54:00:23:00:fe");
+        f.add_underlay("ul0", 1420, Ipv4Addr::new(10, 22, 0, 1));
+        let mesh = MeshManager::new_for_test(Arc::new(f), dir.path().into(), None).unwrap();
+        let app = App {
+            store,
+            cfg: Arc::new(toml::from_str("state_file = 'unused'").unwrap()),
+            token: Some(Arc::new("secret".into())),
+            mesh,
+            dhcp: None,
+            abe: abe::Client::new(),
+            leadership,
+            http: reqwest::Client::new(),
+        };
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", l.local_addr().unwrap());
+        tokio::spawn(async move {
+            axum::serve(l, router(app)).await.unwrap();
+            drop(dir);
+        });
+        url
+    }
+
+    #[tokio::test]
+    async fn follower_forwards_cluster_routes_to_the_leader() {
+        let dir = tempfile::tempdir().unwrap();
+        let leader_store = Store::open(dir.path().join("leader.json")).unwrap();
+        let follower_store = Store::open(dir.path().join("follower.json")).unwrap();
+
+        // Leader: standalone is enough, it answers for itself.
+        let leader_id = Uuid::new_v4();
+        let leader_url = spawn(Leadership::standalone("leader", "http://unused"), leader_store.clone()).await;
+
+        // Follower: election says `leader_id` leads and the peer table knows its URL.
+        let me = Uuid::new_v4();
+        let election = Arc::new(RwLock::new(ElectionStateMachine::new(me, Duration::from_secs(10), Duration::from_secs(5))));
+        election.write().await.activate();
+        election.write().await.received_leader_heartbeat(leader_id, 1e9);
+        let peers = Arc::new(RwLock::new(PeerTable::new()));
+        peers.write().await.insert(PeerInfo::new(leader_id, "leader".into(), leader_url.clone(), 1e9));
+        let me_ref = LeaderRef { node_id: Some(me), hostname: "follower".into(), api_url: "http://unused".into() };
+        let follower_url = spawn(Leadership::for_test(me_ref, election.clone(), peers), follower_store.clone()).await;
+
+        let c = reqwest::Client::new();
+        let auth = |r: reqwest::RequestBuilder| r.bearer_auth("secret");
+
+        // /v1/leader is answered locally and points at the leader.
+        let st: LeaderStatus = auth(c.get(format!("{follower_url}/v1/leader"))).send().await.unwrap().json().await.unwrap();
+        assert_eq!(st.state, "follower");
+        assert_eq!(st.leader.unwrap().api_url, leader_url);
+
+        // A write through the follower lands in the leader's store only.
+        let host = serde_json::json!({"name": "h1", "uri": "test:///", "failureDomain": "r1"});
+        let r = auth(c.put(format!("{follower_url}/v1/hosts/h1"))).json(&host).send().await.unwrap();
+        assert!(r.status().is_success(), "{}", r.text().await.unwrap());
+        assert!(leader_store.read().await.hosts.contains_key("h1"));
+        assert!(follower_store.read().await.hosts.is_empty());
+
+        // Reads through the follower see the leader's data.
+        let hosts: Vec<Host> = auth(c.get(format!("{follower_url}/v1/hosts"))).send().await.unwrap().json().await.unwrap();
+        assert_eq!(hosts.len(), 1);
+
+        // Status codes and bodies come back verbatim.
+        let r = auth(c.get(format!("{follower_url}/v1/hosts/nope"))).send().await.unwrap();
+        assert_eq!(r.status(), StatusCode::NOT_FOUND);
+        assert_eq!(r.json::<ApiError>().await.unwrap().error, "host not found");
+
+        // Auth is checked before forwarding.
+        let r = c.get(format!("{follower_url}/v1/hosts")).send().await.unwrap();
+        assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+
+        // A request that was already forwarded is not bounced again.
+        let r = auth(c.get(format!("{follower_url}/v1/hosts"))).header(FORWARDED_BY.as_str(), "other").send().await.unwrap();
+        assert_eq!(r.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        // No leader known: 503 with Retry-After.
+        election.write().await.start_election();
+        let r = auth(c.get(format!("{follower_url}/v1/hosts"))).send().await.unwrap();
+        assert_eq!(r.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(r.headers().get(header::RETRY_AFTER).unwrap(), "2");
+
+        // Once this box leads it answers from its own store.
+        election.write().await.become_leader();
+        let hosts: Vec<Host> = auth(c.get(format!("{follower_url}/v1/hosts"))).send().await.unwrap().json().await.unwrap();
+        assert!(hosts.is_empty());
+    }
 }

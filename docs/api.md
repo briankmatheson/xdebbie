@@ -4,6 +4,18 @@ Base URL `https://<xdebbied>:7443`. With `token_file` configured, every `/v1`
 call needs `Authorization: Bearer <token>`. Bodies are JSON with camelCase
 keys. Errors are `{"error": "..."}`.
 
+Any box in a cluster answers. Hosts, VMs, volumes, failure domains and
+`/v1/schedule` are decided by the elected leader; a follower forwards them
+there and relays the reply (503 with `Retry-After` during an election, 502
+if the leader is unreachable). `/v1/leader`, `/v1/network`, `/v1/mesh*` and
+`/healthz` describe the box you asked. See [autodiscovery.md](autodiscovery.md).
+
+## Leader
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/v1/leader` | `{this, state, is_leader, leader, peers}`; `leader` is `null` during an election. `xdctl` calls this first and talks to `leader.api_url` |
+
 ## Hosts
 
 | Method | Path | Notes |

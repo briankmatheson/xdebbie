@@ -27,6 +27,8 @@ pub struct Reconciler<H> {
     pub cfg: Arc<Config>,
     /// Lets the mesh name VMs (not `vnetN`) in `vms_mtu_mismatch`.
     pub mesh: Option<Arc<crate::mesh::MeshManager>>,
+    /// Only the leader schedules and drives hypervisors; followers idle.
+    pub leadership: crate::leader::Leadership,
 }
 
 #[derive(Debug, Default)]
@@ -126,8 +128,21 @@ impl<H: Hypervisor> Reconciler<H> {
     pub async fn run(self) {
         let mut t = tokio::time::interval(Duration::from_secs(self.cfg.reconcile_interval_secs));
         t.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut leading = None;
         loop {
             t.tick().await;
+            let lead = self.leadership.is_leader().await;
+            if leading != Some(lead) {
+                if lead {
+                    info!("leader: reconciler active");
+                } else {
+                    info!("follower: reconciler idle, the leader decides");
+                }
+                leading = Some(lead);
+            }
+            if !lead {
+                continue;
+            }
             if let Err(e) = self.tick().await {
                 warn!(error = %e, "reconcile tick failed");
             }
@@ -493,6 +508,10 @@ mod tests {
     use xdebbie_core::{Capacity, Placement, VmSpec};
     use std::{collections::BTreeMap, sync::Mutex};
 
+    fn test_leader() -> crate::leader::Leadership {
+        crate::leader::Leadership::standalone("test", "http://127.0.0.1:7443")
+    }
+
     #[derive(Default)]
     struct Fake {
         doms: Mutex<BTreeMap<(String, String), DomState>>,
@@ -637,6 +656,7 @@ mod tests {
             hv: Arc::new(Fake::default()),
             cfg: Arc::new(cfg()),
             mesh: None,
+            leadership: test_leader(),
         };
         let mut ids = vec![];
         for i in 0..2 {
@@ -752,7 +772,7 @@ mod tests {
         store.update(|s| { s.hosts.insert("a".into(), h); }).await.unwrap();
         let fake = Arc::new(Fake::default());
         *fake.fail_populate_once.lock().unwrap() = true;
-        let r = Reconciler { store: store.clone(), hv: fake.clone(), cfg: Arc::new(cfg()), mesh: None };
+        let r = Reconciler { store: store.clone(), hv: fake.clone(), cfg: Arc::new(cfg()), mesh: None, leadership: test_leader() };
         let v = vm(VmSpec {
             name: "abe-vm".into(),
             vcpus: 1,
@@ -799,7 +819,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path().join("s.json")).unwrap();
         store.update(|s| { s.hosts.insert("a".into(), host("a", "r1")); }).await.unwrap();
-        let r = Reconciler { store: store.clone(), hv: Arc::new(Fake::default()), cfg: Arc::new(cfg()), mesh: None };
+        let r = Reconciler { store: store.clone(), hv: Arc::new(Fake::default()), cfg: Arc::new(cfg()), mesh: None, leadership: test_leader() };
         let v = vm(VmSpec {
             name: "abe-vm".into(), vcpus: 1, memory_mib: 512, disk_gib: 8, data_disk_gib: None, ip: None,
             storage: Storage::Abe, image: "img".into(), placement: Default::default(),
@@ -820,7 +840,7 @@ mod tests {
         let store = Store::open(dir.path().join("s.json")).unwrap();
         store.update(|s| { s.hosts.insert("a".into(), host("a", "r1")); }).await.unwrap();
         let fake = Arc::new(Fake::default());
-        let r = Reconciler { store: store.clone(), hv: fake.clone(), cfg: Arc::new(cfg()), mesh: None };
+        let r = Reconciler { store: store.clone(), hv: fake.clone(), cfg: Arc::new(cfg()), mesh: None, leadership: test_leader() };
         let mk = |name: &str| vm(VmSpec {
             name: name.into(), vcpus: 1, memory_mib: 512, disk_gib: 8, data_disk_gib: None, ip: None,
             storage: Storage::Local, image: "img".into(), placement: Default::default(),

@@ -16,6 +16,12 @@ pub struct Config {
     /// wins.
     #[serde(default)]
     pub listen: Option<SocketAddr>,
+    /// URL peers and clients use to reach this box's API, e.g.
+    /// `https://node0.example.net:7443`. Default: scheme + the listen
+    /// address, with an unspecified IP (0.0.0.0) replaced by the
+    /// default-route interface address.
+    #[serde(default)]
+    pub advertise_url: Option<String>,
     #[serde(default = "d_state")]
     pub state_file: PathBuf,
     /// File holding the API bearer token. Unset = no auth (lab use only).
@@ -218,6 +224,21 @@ impl Config {
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), DEFAULT_PORT)
     }
 
+    /// Where other boxes and xdctl reach this API (announced in discovery
+    /// and `GET /v1/leader`).
+    pub fn advertise_url(&self, listen: SocketAddr) -> String {
+        if let Some(u) = &self.advertise_url {
+            return u.trim_end_matches('/').to_string();
+        }
+        let scheme = if self.tls_cert.is_some() { "https" } else { "http" };
+        let ip = if listen.ip().is_unspecified() {
+            default_route_ip().map(IpAddr::V4).unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST))
+        } else {
+            listen.ip()
+        };
+        format!("{scheme}://{}", SocketAddr::new(ip, listen.port()))
+    }
+
     /// Directory holding `state.json`, `mesh.json`, ...
     pub fn state_dir(&self) -> PathBuf {
         self.state_file
@@ -225,5 +246,26 @@ impl Config {
             .filter(|p| !p.as_os_str().is_empty())
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("."))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn advertise_url_follows_listen_unless_set() {
+        let c: Config = toml::from_str("state_file = 'x'").unwrap();
+        assert_eq!(c.advertise_url("10.0.0.5:7443".parse().unwrap()), "http://10.0.0.5:7443");
+
+        let c: Config = toml::from_str("state_file = 'x'\ntls_cert = 'c'\ntls_key = 'k'").unwrap();
+        assert_eq!(c.advertise_url("10.0.0.5:7443".parse().unwrap()), "https://10.0.0.5:7443");
+
+        let c: Config = toml::from_str("state_file = 'x'\nadvertise_url = 'https://node0.example.net:7443/'").unwrap();
+        assert_eq!(c.advertise_url("0.0.0.0:7443".parse().unwrap()), "https://node0.example.net:7443");
+
+        // 0.0.0.0 is never advertised.
+        let c: Config = toml::from_str("state_file = 'x'").unwrap();
+        assert!(!c.advertise_url("0.0.0.0:7443".parse().unwrap()).contains("0.0.0.0"));
     }
 }

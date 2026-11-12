@@ -69,9 +69,14 @@ virsh = "virsh"
 # NoCloud seed ISO generation command
 seed_command = ["cloud-localds", "--network-config={{net}}", "--vendor-data={{vendor}}", "{{out}}", "{{user}}", "{{meta}}"]
 
-# Multicast discovery settings
+# Multicast discovery and leader election (docs/autodiscovery.md). The
+# elected leader runs the reconciler and answers every cluster request;
+# followers forward to it. No peers = this box leads.
 enable_discovery = true
 multicast_addr = "239.0.0.42:7442"
+# URL peers and xdctl use to reach this box; default is the listen address
+# (0.0.0.0 replaced by the default-route interface IP).
+# advertise_url = "https://{hostname}:7443"
 
 # Overlay addressing + built-in DHCP (docs/network.md). The scheduler binds an
 # address to every VM at creation (`xdctl vm ls` shows it before first boot)

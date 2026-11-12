@@ -1,215 +1,109 @@
-# 🎯 Autodiscovery & Leader Election - Quick Summary
+# Discovery, election and the leader
 
-## What We're Building
+Several xdebbied boxes on one LAN find each other over multicast, elect one
+leader, and that leader makes every decision: it runs the scheduler and the
+reconciler, and it owns the answer to every `/v1` cluster request. The
+others are followers. A client can talk to any box; followers forward to
+the leader. `xdctl` goes one step further and moves itself to the leader
+before doing anything.
 
-Transform xdebbied from **single-node** to **self-organizing cluster**:
+A box with discovery disabled (`enable_discovery = false`), or that cannot
+open the multicast socket, is its own leader. Nothing else changes.
 
-```
-Before (Manual):                    After (Automatic):
-┌──────────┐                       ┌──────────┐  ┌──────────┐  ┌──────────┐
-│  node1   │                       │  node1   │  │  node2   │  │  node3   │
-│  Alone   │                       │  LEADER  │◄─┤  BACKUP  │◄─┤  BACKUP  │
-│  :7443   │                       │  :7443   │  │  :7443   │  │  :7443   │
-└──────────┘                       └──────────┘  └──────────┘  └──────────┘
-                                         │              │              │
-  Manual registration              Multicast 239.0.0.42:7442 (automatic!)
-  in config file                        │              │              │
-                                        └──────────────┴──────────────┘
-                                              Auto-discovery
-```
+## What the leader does
 
-## Key Features
+| Concern | Leader | Follower |
+|---|---|---|
+| Reconciler (`inventory → schedule → step VMs`) | runs every `reconcile_interval_secs` | idle (`follower: reconciler idle, the leader decides` in the log) |
+| `/v1/hosts`, `/v1/vms`, `/v1/volumes`, `/v1/failure-domains`, `/v1/schedule` | answers from its store | forwards to the leader verbatim, relays status, headers and body |
+| `/v1/leader`, `/v1/network`, `/v1/mesh*`, `/healthz` | local | local (they describe the box you asked) |
+| DHCP responder | answers | answers unless `[network] leader_only = true` |
 
-### 1. Multicast Discovery
-- **No configuration needed** - nodes find each other automatically
-- Announce capacity every 5 seconds on 239.0.0.42:7442
-- Share CPU, memory, disk, current load
-- Detect peer failures (15s timeout)
+Forwarding adds one header, `X-Xdebbie-Forwarded-By: <hostname>`. A request
+that already carries it is never forwarded again: if leadership moved
+between the two hops the second box answers `503` and the client retries.
+While an election is running a follower answers `503` with
+`Retry-After: 2`. If the leader cannot be reached the follower answers
+`502` naming it. Bearer auth is checked on the box you asked, then the
+`Authorization` header travels with the request, so every box in a cluster
+must share one token.
 
-### 2. Leader Election
-- **Bully algorithm** - highest score wins
-- Score based on: uptime + capacity + load
-- Election completes in <10 seconds
-- Deterministic tie-breaking (UUID comparison)
+## `GET /v1/leader`
 
-### 3. High Availability
-- **Hot standby backups** - ready to take over instantly
-- Leader sends heartbeats every 1 second
-- Failover within 15 seconds if leader dies
-- No split-brain (detection and recovery)
-
-### 4. Coordinated Scheduling
-- **Leader runs active scheduler**
-- Backups maintain shadow state
-- API requests on backups → proxy to leader
-- State eventually consistent across cluster
-
-## Message Protocol
-
-### ANNOUNCE (every 5s, all nodes)
 ```json
-{
-  "type": "announce",
-  "node": {
-    "id": "uuid-v4",
-    "name": "node1",
-    "listen_addr": "http://10.0.0.5:7443"
-  },
-  "capacity": {"cpus": 32, "memory_mib": 65536, "disk_gib": 500},
-  "allocation": {"used_cpus": 8, "used_memory_mib": 16384, "vm_count": 4},
-  "role": "leader|backup|standby",
-  "election_score": 95
-}
+{"this":   {"node_id": "bef8ad05-…", "hostname": "node0.example.net", "api_url": "http://10.23.0.1:7443"},
+ "state":  "follower",
+ "is_leader": false,
+ "leader": {"node_id": "609980bd-…", "hostname": "node1.example.net", "api_url": "http://10.23.0.2:7443"},
+ "peers":  2}
 ```
 
-### HEARTBEAT (every 1s, leader only)
-```json
-{
-  "type": "heartbeat",
-  "leader_id": "uuid-v4",
-  "lease_expires_at": "2026-11-08T19:55:00Z",
-  "cluster_state": {"total_nodes": 3, "total_vms": 12}
-}
+`state` is `standalone`, `follower`, `election` or `leader`; `leader` is
+`null` during an election. `api_url` is what the box advertises (below).
+
+## `xdctl`
+
+`xdctl` takes `XDEBBIE_URL` as a list of seeds (comma-separated), asks the
+first one that answers `/v1/leader` who leads, and talks to that URL for the
+rest of the command. An election in progress is waited out for up to 20 s
+(`waiting for a leader election at …` on stderr). A daemon that predates
+`/v1/leader` is used as-is.
+
+```
+$ xdctl leader
+asked   node0.example.net (http://10.23.0.1:7443)  [follower, 2 peers]
+leader  node1.example.net (http://10.23.0.2:7443)
 ```
 
-### ELECTION_PROPOSE (during election)
-```json
-{
-  "type": "election_propose",
-  "candidate_id": "uuid-v4",
-  "election_score": 95
-}
-```
+## Advertised URL
 
-## Election Algorithm
+Peers and clients reach a box at the URL it announces: `advertise_url` from
+`xdebbied.toml` if set (use the FQDN: `https://node0.example.net:7443`),
+otherwise the scheme plus the listen address, with an unspecified IP
+(`0.0.0.0`) replaced by the default-route interface address.
 
-**Leader Failure** → All nodes enter ELECTING state → Calculate scores → Propose → Vote → Decide
+## Protocol
 
-**Score Calculation**:
-```rust
-score = uptime (max 40)
-      + capacity (max 30)
-      + free_resources (max 20)
-      + was_leader_bonus (10)
-      + uuid_tiebreaker (0-9)
-```
+UDP multicast on `239.0.0.42:7442` (`multicast_addr`), TTL 1, JSON messages
+with a `type` tag. The socket is bound with `SO_REUSEADDR`/`SO_REUSEPORT`
+so a replacement daemon can join while the old one is still running.
 
-**Winner**: Highest score becomes leader, others become backups
+| Message | When | Carries |
+|---|---|---|
+| `ANNOUNCE` | every 5 s | `node_id`, `hostname`, `api_url`, capacity, score |
+| `HEARTBEAT` | every 1 s | `node_id`, score, `is_leader` |
+| `ELECTION_PROPOSE` | a follower has not heard a leader for 5 s | `node_id`, score |
+| `ELECTION_VOTE` | reply to a proposal with a higher score than our own | `voted_for` |
 
-## Implementation Phases
+`node_id` is a fresh UUID per process. Peers unseen for 15 s are dropped.
 
-| Phase | Duration | What Gets Built |
-|-------|----------|-----------------|
-| **1. Discovery** | 2-3 days | Multicast send/receive, peer tracking |
-| **2. Election** | 3-4 days | Leader election, heartbeats, failover |
-| **3. Coordination** | 2-3 days | Scheduler on leader, API proxying |
-| **4. Polish** | 2-3 days | Fault tolerance, testing, docs |
+## Election
 
-**Total**: ~10-12 days
+Bully, by score. A follower that misses leader heartbeats for 5 s proposes
+itself; boxes with a lower score vote for it; a majority of the peers it
+knows about makes it leader, and so does a 10 s election timeout with no
+better proposal. A leader that hears a heartbeat from a higher-scored
+leader steps down; a follower that hears a lower-scored leader starts an
+election. A lone box therefore leads about 15 s after start.
 
-## Configuration
+Score = uptime (0–1000) + capacity (0–1000) + free resources (0–1000) +
+incumbent bonus (500) + UUID tiebreak (0–1). Longer-running, larger, less
+loaded boxes win; the incumbent keeps its job unless clearly beaten.
 
-**Auto-generated by bootstrap**:
-```toml
-[discovery]
-enabled = true
-multicast_addr = "239.0.0.42:7442"
-announce_interval_secs = 5
+## Network requirements
 
-[election]
-enabled = true
-heartbeat_interval_secs = 1
-election_timeout_secs = 5
-```
+- One L2 segment (TTL 1), with multicast allowed. `xdebbied bootstrap`
+  adds the `ufw` rule for the discovery port from local networks; if you
+  change `multicast_addr` afterwards, re-run it or add the rule yourself,
+  or the box never sees a peer and leads alone.
+- `7443/tcp` reachable between boxes and from clients at the advertised
+  URL.
 
-## New API Endpoints
+## Known gap: the store is per box
 
-```bash
-# Get cluster status
-GET /cluster/status
-
-# Get peer list
-GET /cluster/peers
-
-# Trigger election (admin)
-POST /cluster/election/trigger
-```
-
-## Benefits
-
-✅ **Zero configuration** - Just start nodes, they find each other
-✅ **High availability** - Automatic failover in 15 seconds
-✅ **Load balancing** - Scheduler considers all nodes
-✅ **Fault tolerant** - Survives leader crashes
-✅ **Scalable** - Support 3-100 nodes
-✅ **Simple** - Lightweight protocol, minimal overhead
-
-## Usage Example
-
-```bash
-# Terminal 1: Start node1 (becomes leader)
-xdebbied serve --bootstrap
-
-# Terminal 2: Start node2 (becomes backup)
-xdebbied serve --bootstrap
-
-# Terminal 3: Start node3 (becomes backup)
-xdebbied serve --bootstrap
-
-# Terminal 4: Check cluster
-curl http://localhost:7443/cluster/status
-# {
-#   "state": "stable",
-#   "leader": {"name": "node1"},
-#   "nodes": [
-#     {"name": "node1", "role": "leader"},
-#     {"name": "node2", "role": "backup"},
-#     {"name": "node3", "role": "backup"}
-#   ]
-# }
-
-# Kill leader
-pkill -f node1
-
-# Wait 15s for election
-sleep 15
-
-# Check new leader
-curl http://localhost:7443/cluster/status
-# node2 or node3 is now leader!
-```
-
-## Network Requirements
-
-- **Multicast enabled** - Most local networks support this
-- **Same subnet** - For default TTL=1 (configurable)
-- **Ports open** - 7442/udp (multicast), 7443/tcp (API)
-
-## Risk Mitigation
-
-| Risk | Mitigation |
-|------|------------|
-| Multicast not working | Fall back to manual peer list |
-| Split-brain | Detect multiple leaders, force re-election |
-| Network partition | Quorum checks, fence writes |
-| Performance | <1% CPU overhead, rate limiting |
-
-## Success Metrics
-
-- ✓ Election completes in <10 seconds
-- ✓ Failover completes in <15 seconds
-- ✓ No split-brain in testing
-- ✓ Works with 3-100 nodes
-- ✓ <1% CPU overhead
-- ✓ <500KB memory overhead
-
-## Ready to Start?
-
-**Phase 1** begins with:
-1. Create discovery module structure
-2. Implement multicast socket
-3. Define message types
-4. Send/receive announcements
-5. Track peers
-
-Let's build this! 🚀
+Each box keeps its own `state.json`. Everything goes through the leader, so
+the leader's store is the truth and the followers' copies stop moving while
+they follow. On failover the new leader starts from its own, older store.
+Replicating the leader's state to followers is the next step; until then
+treat a leader change as a reason to re-check `xdctl host ls` and
+`xdctl vm ls`.

@@ -5,6 +5,39 @@ All notable changes to XDebbie will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-11-12
+
+### Changed
+- **The elected leader decides.** Only the leader runs the reconciler
+  (scheduler, VM steps, volume attach); followers log `follower: reconciler
+  idle, the leader decides` and wait. Cluster routes (`/v1/hosts`, `/v1/vms`,
+  `/v1/volumes`, `/v1/failure-domains`, `/v1/schedule`) asked of a follower
+  are forwarded to the leader verbatim and the reply relayed
+  (`X-Xdebbie-Forwarded-By` marks the hop; a second hop answers 503). During
+  an election followers answer 503 with `Retry-After: 2`; an unreachable
+  leader is a 502 naming it. `/v1/leader`, `/v1/network`, `/v1/mesh*` and
+  `/healthz` stay local. Standalone (discovery disabled or no multicast
+  socket) is unchanged: the box is its own leader.
+- `xdctl` talks to the leader: it asks `/v1/leader` on the configured URL
+  (now accepts a comma-separated seed list) and uses `leader.api_url` for
+  the command; an election in progress is waited out for up to 20 s. Older
+  daemons without `/v1/leader` are used as-is.
+- The DHCP gate reads the same leadership as everything else.
+- Discovery binds the multicast socket with `SO_REUSEADDR`/`SO_REUSEPORT`
+  and on the port of `multicast_addr` (it was hard-wired to 7442).
+
+### Added
+- `GET /v1/leader`: `{this, state, is_leader, leader, peers}` and
+  `xdctl leader`.
+- `advertise_url` in `xdebbied.toml`: the URL peers and clients use for this
+  box. Default derives from the listen address; `0.0.0.0` is replaced by
+  the default-route interface IP instead of being announced as-is.
+- `LeaderStatus`/`LeaderRef` in `xdebbie-core`.
+
+### Removed
+- Unused discovery leftovers (`PeerInfo.capacity`, `PeerTable::remove`,
+  `highest_score`, `DiscoveryMessage::sequence`, `ElectionStateMachine::score`).
+
 ## [0.9.0] - 2026-11-11
 
 ### Added

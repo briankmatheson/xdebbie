@@ -33,6 +33,8 @@ fn format_age(created: DateTime<Utc>) -> String {
 #[derive(Parser)]
 #[command(version, about = "XDebbie CLI - Self-Forming Cloud Orchestration")]
 struct Cli {
+    /// Any xdebbied in the cluster (comma-separated to try several). xdctl
+    /// asks it who the leader is and talks to the leader from then on.
     #[arg(long, env = "XDEBBIE_URL", default_value = "http://127.0.0.1:7443")]
     url: String,
     #[arg(long, env = "XDEBBIE_TOKEN", hide_env_values = true)]
@@ -54,6 +56,8 @@ enum Cmd {
     Vm(VmCmd),
     /// List failure domains.
     Fd,
+    /// Which xdebbied decides for the cluster.
+    Leader,
     /// Geneve mesh between hypervisors.
     #[command(subcommand)]
     Mesh(MeshCmd),
@@ -275,12 +279,58 @@ fn kv(s: &str) -> Result<(String, String), String> {
         .ok_or_else(|| "expected key=value".into())
 }
 
+/// How long `xdctl` waits for an election to settle before giving up.
+const LEADER_WAIT_SECS: u32 = 20;
+
 struct Api {
     c: Client,
     url: String,
     token: Option<String>,
 }
 impl Api {
+    /// Move to the elected leader. `seeds` is what the user configured; the
+    /// first one that answers `/v1/leader` tells us where to go. A daemon
+    /// too old to have that route is used as-is. An election in progress
+    /// (daemon just started, or a failover) is waited out for a few seconds.
+    fn find_leader(&mut self, seeds: &str) -> Result<LeaderStatus> {
+        let mut waited = 0;
+        loop {
+            let mut errs = vec![];
+            let mut retry = false;
+            for seed in seeds.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                self.url = seed.to_string();
+                match self.call_raw(Method::GET, "/leader", None, None) {
+                    Ok((code, _)) if code == reqwest::StatusCode::NOT_FOUND => {
+                        let this = LeaderRef { node_id: None, hostname: "(pre-0.10 daemon)".into(), api_url: seed.into() };
+                        return Ok(LeaderStatus { this: this.clone(), state: "unknown".into(), is_leader: true, leader: Some(this), peers: 0 });
+                    }
+                    Ok((code, v)) if code.is_success() => {
+                        let st: LeaderStatus = serde_json::from_value(v).context("parsing /v1/leader")?;
+                        if let Some(l) = &st.leader {
+                            self.url = l.api_url.clone();
+                            return Ok(st);
+                        }
+                        errs.push(format!("{seed}: no leader elected yet (state: {})", st.state));
+                        if waited == 0 {
+                            eprintln!("waiting for a leader election at {seed}...");
+                        }
+                        if waited < LEADER_WAIT_SECS {
+                            waited += 1;
+                            retry = true;
+                            break;
+                        }
+                    }
+                    Ok((code, v)) => errs.push(format!("{seed}: {code}: {}", api_error_text(&v))),
+                    Err(e) => errs.push(format!("{seed}: {e:#}")),
+                }
+            }
+            if !retry {
+                bail!("no leader reachable:\n  {}", errs.join("\n  "));
+            }
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+    }
+
     fn call(&self, m: Method, path: &str, body: Option<Value>) -> Result<Value> {
         let (code, v) = self.call_raw(m, path, body, None)?;
         if !code.is_success() {
@@ -528,11 +578,16 @@ fn main() -> Result<()> {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
     let cli = Cli::parse();
-    let api = Api {
+    if let Cmd::Completion { shell } = cli.cmd {
+        generate(shell, &mut Cli::command(), "xdctl", &mut std::io::stdout());
+        return Ok(());
+    }
+    let mut api = Api {
         c: Client::new(),
         url: cli.url.clone(),
         token: cli.token.clone(),
     };
+    let asked = api.find_leader(&cli.url)?;
     let out = |v: Value| -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&v)?);
         Ok(())
@@ -657,6 +712,18 @@ fn main() -> Result<()> {
                 println!("reconcile requested");
             }
         },
+        Cmd::Leader => {
+            if cli.json {
+                return out(serde_json::to_value(&asked)?);
+            }
+            let who = |r: &LeaderRef| format!("{} ({})", r.hostname, r.api_url);
+            println!("asked   {}  [{}, {} peer{}]", who(&asked.this), asked.state, asked.peers, if asked.peers == 1 { "" } else { "s" });
+            match &asked.leader {
+                Some(l) if asked.is_leader => println!("leader  {}  (same box)", who(l)),
+                Some(l) => println!("leader  {}", who(l)),
+                None => println!("leader  none yet"),
+            }
+        }
         Cmd::Fd => {
             let v = api.call(Method::GET, "/failure-domains", None)?;
             if cli.json {
@@ -925,10 +992,7 @@ fn main() -> Result<()> {
                 None,
             )?)?,
         },
-        Cmd::Completion { shell } => {
-            let mut cmd = Cli::command();
-            generate(shell, &mut cmd, "xdctl", &mut std::io::stdout());
-        },
+        Cmd::Completion { .. } => unreachable!("handled before contacting xdebbied"),
     }
     Ok(())
 }

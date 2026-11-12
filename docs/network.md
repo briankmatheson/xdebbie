@@ -130,5 +130,6 @@ network probably still runs dnsmasq.
 - No DNS. `dns` just names resolvers for the guests.
 - No floating gateway. With one L2 across boxes, VMs route via one box's
   NAT; a leader-held gateway VIP is the natural follow-up.
-- No replication of the VM store between control planes — `leader_only`
-  is ready for it, the data is not there yet.
+- No replication of the VM store between control planes. Every request
+  already goes through the leader (docs/autodiscovery.md), so the
+  leader's store is the truth; a new leader starts from its own copy.

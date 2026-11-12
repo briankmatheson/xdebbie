@@ -78,10 +78,6 @@ impl ElectionStateMachine {
         self.current_leader
     }
 
-    pub fn score(&self) -> f64 {
-        self.score
-    }
-
     pub fn next_sequence(&mut self) -> u64 {
         self.sequence += 1;
         self.sequence

@@ -24,7 +24,8 @@ const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct DiscoveryConfig {
     pub multicast_addr: String,
-    pub bind_addr: String,
+    /// Where to receive; defaults to every interface on the multicast port.
+    pub bind_addr: Option<String>,
     pub hostname: String,
     pub api_url: String,
     pub enable_discovery: bool,
@@ -34,7 +35,7 @@ impl Default for DiscoveryConfig {
     fn default() -> Self {
         Self {
             multicast_addr: DEFAULT_MULTICAST_ADDR.to_string(),
-            bind_addr: "0.0.0.0:7442".to_string(),
+            bind_addr: None,
             hostname: hostname::get()
                 .ok()
                 .and_then(|h| h.into_string().ok())
@@ -58,7 +59,14 @@ pub struct DiscoveryEngine {
 impl DiscoveryEngine {
     pub fn new(config: DiscoveryConfig) -> Result<Self> {
         let node_id = Uuid::new_v4();
-        let socket = MulticastSocket::new(&config.multicast_addr, &config.bind_addr)?;
+        let bind_addr = match &config.bind_addr {
+            Some(b) => b.clone(),
+            None => {
+                let port = config.multicast_addr.rsplit(':').next().unwrap_or("7442");
+                format!("0.0.0.0:{port}")
+            }
+        };
+        let socket = MulticastSocket::new(&config.multicast_addr, &bind_addr)?;
         let peers = Arc::new(RwLock::new(PeerTable::new()));
         let election = Arc::new(RwLock::new(ElectionStateMachine::new(
             node_id,
@@ -202,7 +210,7 @@ impl DiscoveryEngine {
                 node_id,
                 hostname,
                 api_url,
-                capacity,
+                capacity: _,
                 score,
                 sequence,
             } => {
@@ -210,7 +218,7 @@ impl DiscoveryEngine {
                 if let Some(peer) = peers.get_mut(&node_id) {
                     peer.update_heartbeat(score, false, sequence);
                 } else {
-                    let peer = PeerInfo::new(node_id, hostname, api_url, capacity, score);
+                    let peer = PeerInfo::new(node_id, hostname, api_url, score);
                     info!("Discovered new peer: {} ({})", peer.hostname, peer.node_id);
                     peers.insert(peer);
                 }

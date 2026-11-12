@@ -6,13 +6,9 @@ mod api;
 mod bootstrap;
 mod config;
 mod dhcp;
-// Peer discovery and leader election (docs/autodiscovery.md) announce and
-// score, but nothing acts on the elected leader yet; the accessors for that
-// half are unused until it is wired up.
-#[allow(dead_code)]
 mod discovery;
-#[allow(dead_code)]
 mod election;
+mod leader;
 mod libvirt;
 mod lvm;
 mod mesh;
@@ -251,52 +247,47 @@ async fn main() -> anyhow::Result<()> {
     // Resolve listen address once: explicit config > default-route IP > loopback.
     let listen = cfg.effective_listen();
 
-    // Start discovery engine if enabled
+    // Discovery and election (docs/autodiscovery.md). The leader runs the
+    // reconciler and answers cluster routes; followers forward to it.
+    // No discovery (disabled, or no multicast) means this box decides.
+    let hostname = leader::local_hostname();
+    let api_url = cfg.advertise_url(listen);
     let discovery_cfg = discovery::DiscoveryConfig {
         enable_discovery: cfg.enable_discovery,
         multicast_addr: cfg.multicast_addr.clone(),
-        api_url: format!(
-            "{}://{}",
-            if cfg.tls_cert.is_some() { "https" } else { "http" },
-            listen
-        ),
-        hostname: hostname::get()
-            .ok()
-            .and_then(|h| h.into_string().ok())
-            .unwrap_or_else(|| "unknown".to_string()),
+        api_url: api_url.clone(),
+        hostname: hostname.clone(),
         ..Default::default()
     };
-
-    // `leader` mirrors the election result for consumers that cannot await
-    // (the DHCP gate). Standalone = always leader.
-    let leader = Arc::new(std::sync::atomic::AtomicBool::new(true));
-    if let Ok(discovery_engine) = discovery::DiscoveryEngine::new(discovery_cfg) {
-        let discovery_arc = Arc::new(discovery_engine);
-        info!("Starting discovery engine (node_id: {})", discovery_arc.node_id());
-        let discovery_clone = discovery_arc.clone();
-        tokio::spawn(async move {
-            if let Err(e) = discovery_clone.run().await {
-                tracing::error!("Discovery engine failed: {}", e);
-            }
-        });
-        let election = discovery_arc.election();
-        let leader = leader.clone();
-        tokio::spawn(async move {
-            loop {
-                let is = election.read().await.is_leader();
-                leader.store(is, std::sync::atomic::Ordering::Relaxed);
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            }
-        });
+    let leadership = if !cfg.enable_discovery {
+        info!("discovery disabled; this box is its own leader");
+        leader::Leadership::standalone(&hostname, &api_url)
     } else {
-        tracing::warn!("Failed to start discovery engine, running in standalone mode");
-    }
+        match discovery::DiscoveryEngine::new(discovery_cfg) {
+            Ok(engine) => {
+                let engine = Arc::new(engine);
+                info!(node_id = %engine.node_id(), "starting discovery engine");
+                let leadership = leader::Leadership::elected(&engine, &hostname, &api_url);
+                tokio::spawn(async move {
+                    if let Err(e) = engine.run().await {
+                        tracing::error!(error = %e, "discovery engine failed");
+                    }
+                });
+                leadership
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "discovery engine failed to start; this box is its own leader");
+                leader::Leadership::standalone(&hostname, &api_url)
+            }
+        }
+    };
 
     let rec = reconcile::Reconciler {
         store: store.clone(),
         hv,
         cfg: cfg.clone(),
         mesh: Some(mesh.clone()),
+        leadership: leadership.clone(),
     };
     tokio::spawn(rec.run());
     tokio::spawn(mesh.clone().run());
@@ -309,7 +300,7 @@ async fn main() -> anyhow::Result<()> {
                 bridge,
                 store.clone(),
                 Arc::new(move |b: &str| overlay.mtu_for(b)),
-                dhcp::Gate { leader, leader_only: net.leader_only },
+                dhcp::Gate { leader: leadership.flag(), leader_only: net.leader_only },
             ));
             if net.dhcp {
                 tokio::spawn(srv.clone().run());
@@ -332,6 +323,11 @@ async fn main() -> anyhow::Result<()> {
         mesh,
         dhcp,
         abe: abe::Client::new(),
+        leadership,
+        http: reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(300))
+            .build()
+            .expect("reqwest client"),
     });
     serve(&cfg, listen, app).await
 }

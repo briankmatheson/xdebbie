@@ -22,7 +22,16 @@ impl MulticastSocket {
 
         let bind_addr: SocketAddr = bind_addr.parse().context("Invalid bind address")?;
 
-        let socket = UdpSocket::bind(bind_addr).context("Failed to bind UDP socket")?;
+        // Share the port: a replacement daemon (or a second one on the same
+        // box, as in testing) must be able to join while the old one runs.
+        let socket = {
+            use socket2::{Domain, Protocol, Socket, Type};
+            let s = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP)).context("Failed to create UDP socket")?;
+            s.set_reuse_address(true).context("SO_REUSEADDR")?;
+            s.set_reuse_port(true).context("SO_REUSEPORT")?;
+            s.bind(&bind_addr.into()).context("Failed to bind UDP socket")?;
+            UdpSocket::from(s)
+        };
 
         // Join multicast group
         if let IpAddr::V4(multicast_ip) = multicast_addr.ip() {

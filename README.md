@@ -68,6 +68,11 @@ XDebbie nodes use **multicast UDP (239.0.0.42:7442)** to automatically discover 
 3. **ELECTION**: Bully algorithm elects highest-scored node as leader
 4. **FAILOVER**: New leader elected within 15s if current leader fails
 
+The leader decides: it runs the scheduler and reconciler and answers every
+cluster request. Followers forward `/v1` calls to it, and `xdctl` asks
+`/v1/leader` first and talks to the leader directly. One box with no peers
+(or `enable_discovery = false`) is its own leader.
+
 **Score Calculation** (0-3501 points):
 - Uptime (0-1000): Longer-running nodes preferred
 - Capacity (0-1000): Larger nodes preferred  
@@ -75,7 +80,7 @@ XDebbie nodes use **multicast UDP (239.0.0.42:7442)** to automatically discover 
 - Incumbent bonus (+500): Reduces leadership churn
 - UUID tiebreaker (0-1): Deterministic when scores equal
 
-See [DISCOVERY.md](DISCOVERY.md) for complete details.
+See [docs/autodiscovery.md](docs/autodiscovery.md) for complete details.
 
 ### Scheduling & Operations
 
@@ -181,16 +186,17 @@ xdctl vm ls
 sudo journalctl -u xdebbied -f | grep -i discovery
 
 # Check who's the leader
-sudo journalctl -u xdebbied | grep "becoming leader"
+xdctl leader
 ```
 
 See [BOOTSTRAP.md](BOOTSTRAP.md) for detailed bootstrap documentation and
-[DISCOVERY.md](DISCOVERY.md) for discovery/election internals.
+[docs/autodiscovery.md](docs/autodiscovery.md) for discovery, election and
+what the leader does.
 
 ## Documentation
 
 - **[BOOTSTRAP.md](BOOTSTRAP.md)** — Self-bootstrapping on stock Debian 13
-- **[DISCOVERY.md](DISCOVERY.md)** — Auto-discovery and leader election
+- **[docs/autodiscovery.md](docs/autodiscovery.md)** — Discovery, election and the leader
 - [Architecture](docs/architecture.md) — State, reconcile loop, scheduler
 - [Cluster API contract](docs/capi-contract.md) — What CAPI asks, how CAPX answers
 - [REST API](docs/api.md) — HTTP API reference

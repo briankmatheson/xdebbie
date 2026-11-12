@@ -454,6 +454,29 @@ pub struct ApiError {
     pub error: String,
 }
 
+/// `GET /v1/leader`: who decides for this cluster. Clients talk to
+/// `leader.api_url`; followers forward `/v1` writes and reads there anyway.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LeaderStatus {
+    /// The box that answered.
+    pub this: LeaderRef,
+    /// `standalone` (no discovery), `follower`, `election`, `leader`.
+    pub state: String,
+    pub is_leader: bool,
+    /// `None` while an election is running.
+    pub leader: Option<LeaderRef>,
+    /// Peers this box currently sees (excluding itself).
+    pub peers: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LeaderRef {
+    /// Election identity; `None` when running standalone.
+    pub node_id: Option<Uuid>,
+    pub hostname: String,
+    pub api_url: String,
+}
+
 #[cfg(test)]
 mod disk_tests {
     use super::*;
