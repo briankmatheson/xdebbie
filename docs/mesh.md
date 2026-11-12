@@ -112,7 +112,7 @@ Validation errors are returned field-by-field, e.g.
 
 ```
 xdctl mesh ls                         # peers table + conditions
-xdctl mesh get                        # full {spec,status} JSON
+xdctl mesh describe                   # full {spec,status} JSON
 xdctl mesh apply -f mesh.json         # PUT (bare spec or {spec,status} doc)
 xdctl mesh peer add 2 10.22.2.1       # read-modify-write with If-Match (plain underlay)
 xdctl mesh peer add 2 --pubkey K --endpoint h2:51820   # managed WireGuard: remote derived

@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.12.0] - 2026-11-12
 
 ### Changed
+- xdctl verbs: every `ls` (`host`, `vm`, `volume`, `mesh`, `net`) also
+  answers to `list`, `show` and `get`; `net show` is now `net ls`. The
+  long form of one object is `describe`: `vm describe <name|id>`,
+  `volume describe <id>`, `host describe <name>` (new), `mesh describe`
+  (the full `{spec, status}` JSON, formerly `mesh get`). `vm get <id>` and
+  `volume get <id>` no longer exist — `get` lists now.
 - **The mesh is on by default.** A config with no `[mesh]` section now
   meshes on the first host's bridge with a managed WireGuard underlay
   (`wg-flock`, 10.22.`<box>`.1/16, port 51820) and zero peers: the bridge

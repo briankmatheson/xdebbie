@@ -89,8 +89,11 @@ enum TokenCmd {
 
 #[derive(Subcommand)]
 enum VolumeCmd {
+    /// List.
+    #[command(visible_aliases = ["list", "show", "get"])]
     Ls,
-    Get {
+    /// Full record of one volume (JSON).
+    Describe {
         id: String,
     },
     /// Create a blank volume on a host's ABE.
@@ -121,8 +124,9 @@ enum VolumeCmd {
 
 #[derive(Subcommand)]
 enum NetCmd {
-    /// Show `[network]` config and DHCP responder status.
-    Show,
+    /// `[network]` config and DHCP responder status.
+    #[command(visible_aliases = ["list", "show", "get"])]
+    Ls,
     /// MACs heard on the bridge and what they were told.
     Seen,
 }
@@ -130,9 +134,10 @@ enum NetCmd {
 #[derive(Subcommand)]
 enum MeshCmd {
     /// Peers table and conditions.
+    #[command(visible_aliases = ["list", "show", "get"])]
     Ls,
-    /// Raw GET /v1/mesh (same as `ls --json`).
-    Get,
+    /// Full {spec, status} document (JSON; same as `ls --json`).
+    Describe,
     /// PUT /v1/mesh from a JSON file (`-` for stdin).
     Apply {
         #[arg(short, long)]
@@ -178,7 +183,13 @@ enum MeshPeerCmd {
 
 #[derive(Subcommand)]
 enum HostCmd {
+    /// List.
+    #[command(visible_aliases = ["list", "show", "get"])]
     Ls,
+    /// Full record of one host (JSON).
+    Describe {
+        name: String,
+    },
     /// Register or update a host.
     Add {
         name: String,
@@ -222,11 +233,14 @@ enum HostCmd {
 
 #[derive(Subcommand)]
 enum VmCmd {
+    /// List.
+    #[command(visible_aliases = ["list", "show", "get"])]
     Ls {
         #[arg(short = 'l', long)]
         selector: Option<String>,
     },
-    Get {
+    /// Full record of one VM (JSON); accepts a name or id.
+    Describe {
         id: String,
     },
     Create {
@@ -611,7 +625,7 @@ fn main() -> Result<()> {
                 return out(v);
             }
             match n {
-                NetCmd::Show => print_net(&v),
+                NetCmd::Ls => print_net(&v),
                 NetCmd::Seen => print_seen(&v),
             }
         }
@@ -623,7 +637,7 @@ fn main() -> Result<()> {
                 }
                 print_mesh(&v);
             }
-            MeshCmd::Get => return out(api.call(Method::GET, "/mesh", None)?),
+            MeshCmd::Describe => return out(api.call(Method::GET, "/mesh", None)?),
             MeshCmd::Apply { file } => {
                 let text = if file == "-" {
                     let mut s = String::new();
@@ -789,6 +803,7 @@ fn main() -> Result<()> {
             }
         }
         Cmd::Host(h) => match h {
+            HostCmd::Describe { name } => out(api.call(Method::GET, &format!("/hosts/{name}"), None)?)?,
             HostCmd::Ls => {
                 let v = api.call(Method::GET, "/hosts", None)?;
                 if cli.json {
@@ -912,7 +927,7 @@ fn main() -> Result<()> {
                     );
                 }
             }
-            VmCmd::Get { id } => {
+            VmCmd::Describe { id } => {
                 out(api.call(Method::GET, &format!("/vms/{}", api.resolve(&id)?), None)?)?
             }
             VmCmd::Create {
@@ -1020,7 +1035,7 @@ fn main() -> Result<()> {
                     );
                 }
             }
-            VolumeCmd::Get { id } => out(api.call(Method::GET, &format!("/volumes/{id}"), None)?)?,
+            VolumeCmd::Describe { id } => out(api.call(Method::GET, &format!("/volumes/{id}"), None)?)?,
             VolumeCmd::Create { name, gib, host } => out(api.call(
                 Method::POST,
                 "/volumes",

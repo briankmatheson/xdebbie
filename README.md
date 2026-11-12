@@ -175,8 +175,10 @@ xdctl vm create web1 --image debian-13 --cpus 2 --memory-mib 4096
 # Create a VM with data disk (e.g., for databases)
 xdctl vm create db1 --image debian-13 --cpus 4 --memory-mib 8192 --data-disk-gib 100
 
-# List VMs
+# List VMs; `ls` is also `list`, `show`, `get`. `describe` prints one object in full.
 xdctl vm ls
+xdctl vm describe db1
+xdctl net ls
 ```
 
 ### Check Discovery

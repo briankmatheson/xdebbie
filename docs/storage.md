@@ -117,7 +117,7 @@ sudo systemctl restart xdebbied
 ```
 
 Then `xdctl vm create demo --image debian-13 --disk-gib 10 --storage abe`.
-`xdctl vm get demo --json | jq .disks` shows the volumes; `nvme list` on the
+`xdctl vm describe demo | jq .disks` shows the volumes; `nvme list` on the
 host shows them attached; `curl -s http://10.22.0.1/volumes` shows them on
 the exporter.
 

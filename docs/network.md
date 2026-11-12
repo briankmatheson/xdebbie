@@ -86,14 +86,14 @@ clear message.
 ## Operating it
 
 ```
-xdctl net show      # config, whether the responder is bound/serving, counters
+xdctl net ls        # config, whether the responder is bound/serving, counters
 xdctl net seen      # MACs heard on the bridge and what they were told
 xdctl vm create web --image debian-12-base --ip 10.23.0.5 ...
 ```
 
 `GET /v1/network` returns the same as JSON.
 
-`xdctl net show` states:
+`xdctl net ls` states:
 
 - `serving` — bound on the bridge, answering.
 - `standby (not the leader)` — `leader_only` and we lost the election.
