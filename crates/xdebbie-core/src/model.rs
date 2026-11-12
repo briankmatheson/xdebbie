@@ -244,6 +244,9 @@ pub struct VolumePerf {
     pub write_mib_s: f64,
     pub write_iops: f64,
     pub write_lat_ms: f64,
+    /// mean completion latency of one 4k random write, iodepth 1 (abe >= 0.3.4)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lat_4k_us: Option<f64>,
 }
 
 /// A standalone ABE volume with its own lifecycle: created and deleted

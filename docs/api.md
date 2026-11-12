@@ -78,7 +78,8 @@ Volume:
 ```json
 {"id": "7c0a…(32 hex)", "name": "pvc-1b2c", "server": "http://10.22.0.1:80",
  "traddr": "10.22.0.1", "port": "44002", "bytes": 5368709120,
- "perf": {"bs": "4M", "seconds": 5, "write_mib_s": 940.0, "write_iops": 235.0, "write_lat_ms": 33.0},
+ "perf": {"bs": "4M", "seconds": 5, "write_mib_s": 940.0, "write_iops": 235.0, "write_lat_ms": 33.0,
+          "lat_4k_us": 187.5},
  "attachTo": "<vm uuid>", "attached": {"vm": "<vm uuid>", "host": "timesink", "target": "vdc"},
  "message": null}
 ```
