@@ -236,17 +236,17 @@ impl Disk {
 /// Length of the virtio-blk serial a guest can see (`VIRTIO_BLK_ID_BYTES`).
 pub const VIRTIO_SERIAL_LEN: usize = 20;
 
-/// fio numbers ABE measured when it made the volume (`perf` in its reply).
+/// fio numbers ABE measured when it made the volume (`perf` in its reply,
+/// abe >= 0.3.5): random direct writes at `bs` with `iodepth` in flight
+/// for `seconds`; `write_lat_us` is the mean completion latency.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct VolumePerf {
     pub bs: String,
+    pub iodepth: u32,
     pub seconds: f64,
     pub write_mib_s: f64,
     pub write_iops: f64,
-    pub write_lat_ms: f64,
-    /// mean completion latency of one 4k random write, iodepth 1 (abe >= 0.3.4)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub lat_4k_us: Option<f64>,
+    pub write_lat_us: f64,
 }
 
 /// A standalone ABE volume with its own lifecycle: created and deleted
