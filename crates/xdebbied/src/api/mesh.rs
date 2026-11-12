@@ -131,7 +131,7 @@ mod tests {
         f.add_bridge("br-int", 1500, "52:54:00:23:00:fe");
         f.add_underlay("ul0", 1420, Ipv4Addr::new(10, 22, 0, 1));
         let dir = tempfile::tempdir().unwrap();
-        let cfg = MeshConfig { underlay: "ul0".into(), allow_plain_underlay: true, ..Default::default() };
+        let cfg = MeshConfig { enabled: false, underlay: "ul0".into(), allow_plain_underlay: true, ..Default::default() };
         let mesh = MeshManager::new_for_test(f.clone(), dir.path().into(), Some(&cfg)).unwrap();
         let app = Router::new().nest("/v1", router(MeshApi { mesh }));
         (app, f, dir)

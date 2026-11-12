@@ -5,6 +5,25 @@ All notable changes to XDebbie will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-11-12
+
+### Changed
+- **The mesh is on by default.** A config with no `[mesh]` section now
+  meshes on the first host's bridge with a managed WireGuard underlay
+  (`wg-flock`, 10.22.`<box>`.1/16, port 51820) and zero peers: the bridge
+  MTU is pinned, the `xdebbie_mesh` nftables table installed and the
+  WireGuard link keyed, so the box is ready to be enrolled from another one
+  without editing anything. Inside `[mesh]`, `enabled` defaults to true,
+  `bridge` defaults to the first `[[hosts]]` bridge, and `[mesh.wireguard]`
+  is assumed unless `allow_plain_underlay = true` (you bring the underlay).
+  `enabled = false` opts out. `PUT /v1/mesh` without `enabled` also means
+  enabled now. Bootstrap writes the `[mesh]` section out live instead of
+  commented, and its ufw rules follow the effective mesh (WireGuard and
+  Geneve ports open on a default config).
+- Why: the regeneration bug fixed in 0.11.2 showed that a dropped `[mesh]`
+  silently took a box out of the mesh. The default should be the thing the
+  rest of the system assumes.
+
 ## [0.11.2] - 2026-11-12
 
 ### Fixed

@@ -97,36 +97,39 @@ multicast_addr = "239.0.0.42:7442"
 {net_prefix}# domain = "vm.example"
 {net_prefix}# leader_only = false              # true once control planes share state
 
-# Geneve overlay mesh (off by default). One tunnel per peer is enslaved to the
-# overlay bridge; see docs/mesh.md. Enabling with zero peers only pins the
-# bridge MTU and installs the xdebbie_mesh nftables table. Manage peers at
-# runtime with `xdctl mesh ...` (API state overrides this section).
-# [mesh]
-# enabled = false
-# box = 0                      # this host's box id (0-253), unique per host
-# bridge = "{bridge}"
-# vni = 23
-# dstport = 6081
-# underlay = "wg-flock"        # interface peers are reached through
-# allow_plain_underlay = false # true to permit a non-WireGuard underlay
-# mtu = "auto"                 # or an integer >= 1280 (underlay mtu - 50)
-# fdb = "derived"              # "derived" (static 52:54:00:23:<box>:xx) or "learn"
-# firewall = true              # drop UDP dstport arriving on non-underlay ifaces
-#
-# Let xdebbied build the WireGuard underlay itself (recommended): it creates
-# `underlay` as a WireGuard link addressed 10.22.<box>.1/16, keyed from
-# /var/lib/xdebbie/wg.key, and keeps one WireGuard peer per mesh peer.
-# `xdctl mesh wg` prints this box's public key for enrolment elsewhere.
-# [mesh.wireguard]
-# listen_port = 51820
-# mtu = 1420
-# keepalive = 25
-#
+# Geneve overlay mesh (on by default; docs/mesh.md). One tunnel per peer is
+# enslaved to the overlay bridge. With zero peers this pins the bridge MTU,
+# installs the xdebbie_mesh nftables table and brings up the WireGuard
+# underlay so another box can enrol this one. Manage peers at runtime with
+# `xdctl mesh ...` (API state overrides this section). Removing the whole
+# section leaves the mesh on with these same defaults; `enabled = false`
+# turns it off.
+[mesh]
+enabled = true
+box = 0                        # this host's box id (0-253), unique per host
+bridge = "{bridge}"
+vni = 23
+dstport = 6081
+underlay = "wg-flock"          # interface peers are reached through
+allow_plain_underlay = false   # true = you bring the underlay; WireGuard then unmanaged
+mtu = "auto"                   # or an integer >= 1280 (underlay mtu - 50)
+fdb = "derived"                # "derived" (static 52:54:00:23:<box>:xx) or "learn"
+firewall = true                # drop UDP dstport arriving on non-underlay ifaces
+
+# xdebbied builds the WireGuard underlay itself: `underlay` is a WireGuard
+# link addressed 10.22.<box>.1/16, keyed from /var/lib/xdebbie/wg.key, with
+# one WireGuard peer per mesh peer. `xdctl mesh wg` prints this box's public
+# key for enrolment elsewhere.
+[mesh.wireguard]
+listen_port = 51820
+mtu = 1420
+keepalive = 25
+
 # [[mesh.peers]]
 # box = 1
 # pubkey = "<peer's public key from `xdctl mesh wg`>"
 # endpoint = "gram.example:51820"
-# # remote = "10.22.1.1"       # derived when [mesh.wireguard] is set
+# # remote = "10.22.1.1"       # derived from box when WireGuard is managed
 # # probe = "10.23.1.1"        # defaults to 10.23.<box>.1 (derived) / remote (learn)
 
 # Configured hosts
@@ -304,8 +307,11 @@ mod tests {
         let adopted = generate_config(&resources, "qemu:///system", None);
         assert!(adopted.contains("\n# [network]\n# cidr = "), "{adopted}");
         // both must parse as config
-        let _: crate::config::Config = toml::from_str(&config).unwrap();
+        let parsed: crate::config::Config = toml::from_str(&config).unwrap();
         let _: crate::config::Config = toml::from_str(&adopted).unwrap();
+        // the generated [mesh] is live, on the discovered bridge, with managed WireGuard
+        let mesh = parsed.mesh_config().to_spec();
+        assert!(mesh.enabled && mesh.bridge() == "virbr0" && mesh.wireguard.is_some(), "{config}");
         assert!(config.contains("listen = \"0.0.0.0:7443\""));
         assert!(config.contains("bridge = \"virbr0\""));
         assert!(config.contains("storage_pool = \"default\""));

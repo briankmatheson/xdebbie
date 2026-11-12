@@ -975,8 +975,12 @@ mod tests {
         f.add_underlay("ul0", 1420, Ipv4Addr::new(10, 22, 0, 1));
         Arc::new(f)
     }
+    /// An opted-out `[mesh]` (the daemon default is on): what DELETE falls back to.
     fn cfg() -> MeshConfig {
-        MeshConfig { underlay: "ul0".into(), allow_plain_underlay: true, ..Default::default() }
+        MeshConfig { enabled: false, underlay: "ul0".into(), allow_plain_underlay: true, ..Default::default() }
+    }
+    fn off() -> MeshConfig {
+        MeshConfig { enabled: false, ..Default::default() }
     }
     fn spec(n: u8) -> MeshSpec {
         MeshSpec {
@@ -1235,6 +1239,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn no_section_means_meshed_with_a_managed_underlay_and_no_peers() {
+        // A config without `[mesh]` hands the manager `MeshConfig::default()`
+        // (via Config::mesh_config): on, zero peers, WireGuard managed. The
+        // box must come up ready to be enrolled: underlay link + key, MTU pinned.
+        let f = wg_fake();
+        let dir = tempfile::tempdir().unwrap();
+        let m = MeshManager::new_for_test(f.clone(), dir.path().into(), Some(&MeshConfig::default())).unwrap();
+        m.reconcile_once(false).await;
+        let (s, st) = m.get().await;
+        assert!(s.enabled && s.peers.is_empty() && s.wireguard.is_some());
+        assert_eq!(st.source, Some(Source::Config));
+        assert_eq!(st.mtu, 1370);
+        let w = st.wireguard.as_ref().expect("managed underlay");
+        assert_eq!((w.device.as_str(), w.address.as_str()), ("wg-flock", "10.22.0.1/16"));
+        assert!(f.snapshot().links.contains_key("wg-flock"));
+        assert!(dir.path().join(WG_KEY_FILE).exists());
+        assert!(!ConditionType::ALL.iter().any(|c| c.is_blocking() && st.is(*c)), "{:?}", st.conditions);
+    }
+
+    #[tokio::test]
     async fn wireguard_underlay_is_built_then_restart_is_silent() {
         let f = wg_fake();
         let dir = tempfile::tempdir().unwrap();
@@ -1291,7 +1315,7 @@ mod tests {
     async fn wireguard_peer_removal_and_teardown() {
         let f = wg_fake();
         let dir = tempfile::tempdir().unwrap();
-        let m = MeshManager::new_for_test(f.clone(), dir.path().into(), None).unwrap();
+        let m = MeshManager::new_for_test(f.clone(), dir.path().into(), Some(&off())).unwrap();
         m.put(wg_spec(), None).await.ok().unwrap();
         f.clear_applied();
         let mut s = wg_spec();

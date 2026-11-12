@@ -4,9 +4,11 @@
 segment using Geneve tunnels, so VMs on different boxes talk as if they
 shared a switch. Since 0.5.0 it can also build the **WireGuard underlay**
 those tunnels ride on, so inter-box VM traffic is always encrypted. The mesh
-is **off by default**; enabling it with zero peers only pins the bridge MTU,
-installs a small nftables table and (with `wireguard`) creates the
-WireGuard link.
+is **on by default** (since 0.12.0): a daemon with no `[mesh]` section
+meshes on the first host's bridge with a managed WireGuard underlay and zero
+peers — which only pins the bridge MTU, installs a small nftables table and
+creates the WireGuard link, so the box is ready to be enrolled from another
+one. `enabled = false` turns it off.
 
 Design reference: *Aviary in a Box Design Specification* §6.8 and the
 *XDebbie Geneve Mesh — Implementation Spec* v1.0.
@@ -66,19 +68,20 @@ name exists but isn't a WireGuard link we own) are blocking.
 Two sources, API wins:
 
 1. `[mesh]` in `xdebbied.toml` — validated at startup; an invalid section
-   stops the daemon.
+   stops the daemon. No section = the defaults below with `bridge` taken
+   from the first `[[hosts]]` entry.
 2. `PUT /v1/mesh` (what `xdctl mesh` uses) — stored in `mesh.json`, survives
    restarts, and shadows the TOML section until `DELETE /v1/mesh`.
 
 ```toml
 [mesh]
-enabled = true
+enabled = true               # default
 box = 0                      # 0–253, unique per host
-bridge = "virbr-int"
+bridge = "virbr-int"         # default: the first [[hosts]] bridge
 vni = 23
 dstport = 6081
 underlay = "wg-flock"        # interface peers are reached through
-allow_plain_underlay = false # true: tolerate a non-WireGuard underlay
+allow_plain_underlay = false # true: you bring the underlay; WireGuard is then not managed
 mtu = "auto"                 # or e.g. 1370
 fdb = "derived"              # or "learn" when VM MACs are not derivable
 firewall = true
@@ -87,7 +90,7 @@ probe_timeout_ms = 800
 probe_down_after = 3
 probe_up_after = 3
 
-[mesh.wireguard]             # optional: let xdebbied build the underlay
+[mesh.wireguard]             # the managed underlay; these are the defaults
 listen_port = 51820
 # address = "10.22.0.1"      # default 10.22.<box>.1
 prefix = 16

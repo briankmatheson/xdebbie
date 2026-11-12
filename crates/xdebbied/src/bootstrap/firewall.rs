@@ -44,13 +44,16 @@ pub struct FirewallSpec {
 
 impl FirewallSpec {
     pub fn from_config(cfg: &Config) -> Self {
-        let mesh = cfg.mesh.as_ref().filter(|m| m.enabled);
+        // The effective mesh (on by default, managed WireGuard unless the
+        // operator brings an underlay), not just what the file spells out.
+        let mesh = cfg.mesh_config().to_spec();
+        let mesh = mesh.enabled.then_some(mesh);
         Self {
             api_port: cfg.effective_listen().port(),
             local_nets: local_ipv4_prefixes(),
             dhcp_bridge: cfg.network.as_ref().and_then(|_| cfg.dhcp_bridge()),
-            wireguard_port: mesh.and_then(|m| m.wireguard.as_ref()).map(|w| w.listen_port),
-            geneve: mesh.map(|m| (m.underlay.clone(), m.dstport)),
+            wireguard_port: mesh.as_ref().and_then(|m| m.wireguard.as_ref()).map(|w| w.listen_port),
+            geneve: mesh.as_ref().map(|m| (m.underlay.clone(), m.dstport)),
             discovery_port: if cfg.enable_discovery {
                 cfg.multicast_addr.rsplit_once(':').and_then(|(_, p)| p.parse().ok())
             } else {

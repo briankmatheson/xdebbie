@@ -205,7 +205,8 @@ fn d_wg_keepalive() -> u16 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MeshSpec {
-    #[serde(default)]
+    /// Default true: a box meshes unless told not to.
+    #[serde(default = "d_true")]
     pub enabled: bool,
     #[serde(rename = "box", default)]
     pub box_id: u8,
@@ -236,7 +237,7 @@ pub struct MeshSpec {
 impl Default for MeshSpec {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             box_id: 0,
             networks: vec![NetworkSpec {
                 bridge: d_bridge(),
@@ -501,15 +502,22 @@ pub struct MeshStatus {
 
 /// `[mesh]` in xdebbied.toml. Flat shape (bridge/vni at top level) as in
 /// the spec; converted to a `MeshSpec` with `to_spec`.
+///
+/// The mesh is on by default: a config with no `[mesh]` section at all is
+/// this struct's `Default` with `bridge` resolved to the first host's bridge
+/// (`Config::mesh_config`). Unless `allow_plain_underlay = true` the
+/// WireGuard underlay is managed too, with `[mesh.wireguard]` defaults.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MeshConfig {
-    #[serde(default)]
+    #[serde(default = "d_true")]
     pub enabled: bool,
     #[serde(rename = "box", default)]
     pub box_id: u8,
-    #[serde(default = "d_bridge")]
-    pub bridge: String,
+    /// Overlay bridge. Default: the first `[[hosts]]` bridge (see
+    /// `Config::mesh_config`), else `br-int`.
+    #[serde(default)]
+    pub bridge: Option<String>,
     #[serde(default = "d_vni")]
     pub vni: u32,
     #[serde(default = "d_dstport")]
@@ -542,9 +550,9 @@ pub struct MeshConfig {
 impl Default for MeshConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             box_id: 0,
-            bridge: d_bridge(),
+            bridge: None,
             vni: d_vni(),
             dstport: d_dstport(),
             underlay: d_underlay(),
@@ -563,12 +571,17 @@ impl Default for MeshConfig {
 }
 
 impl MeshConfig {
+    /// The overlay bridge this section names, or the built-in fallback.
+    pub fn bridge(&self) -> String {
+        self.bridge.clone().unwrap_or_else(d_bridge)
+    }
+
     pub fn to_spec(&self) -> MeshSpec {
         MeshSpec {
             enabled: self.enabled,
             box_id: self.box_id,
             networks: vec![NetworkSpec {
-                bridge: self.bridge.clone(),
+                bridge: self.bridge(),
                 vni: self.vni,
             }],
             dstport: self.dstport,
@@ -583,7 +596,8 @@ impl MeshConfig {
                 down_after: self.probe_down_after,
                 up_after: self.probe_up_after,
             },
-            wireguard: self.wireguard.clone(),
+            // Managed WireGuard underlay unless the operator brings their own.
+            wireguard: self.wireguard.clone().or_else(|| (!self.allow_plain_underlay).then(WireguardSpec::default)),
             peers: self.peers.clone(),
         }
         .normalize()

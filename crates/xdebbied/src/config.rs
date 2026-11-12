@@ -68,7 +68,9 @@ pub struct Config {
     /// Thin pool name for thin provisioning (optional)
     #[serde(default)]
     pub thin_pool: Option<String>,
-    /// Geneve mesh between hypervisors (`[mesh]`). Off unless `enabled = true`.
+    /// Geneve mesh between hypervisors (`[mesh]`). On by default; absent
+    /// means "mesh on the first host's bridge with a managed WireGuard
+    /// underlay" (`mesh_config`). Set `enabled = false` to opt out.
     #[serde(default)]
     pub mesh: Option<crate::mesh::MeshConfig>,
     /// Overlay addressing + built-in DHCP (`[network]`). Absent = VMs get no
@@ -183,14 +185,23 @@ impl Config {
         Ok(cfg)
     }
 
-    /// Bridge the DHCP responder listens on: explicit, else the mesh bridge,
-    /// else the first configured host's bridge.
+    /// The effective `[mesh]` section: what was written, with an unset
+    /// `bridge` resolved to the first configured host's bridge; or, with no
+    /// section at all, the defaults (enabled, managed WireGuard) on that
+    /// same bridge.
+    pub fn mesh_config(&self) -> crate::mesh::MeshConfig {
+        let mut m = self.mesh.clone().unwrap_or_default();
+        if m.bridge.is_none() {
+            m.bridge = self.hosts.first().map(|h| h.bridge.clone());
+        }
+        m
+    }
+
+    /// Bridge the DHCP responder listens on: explicit, else the mesh bridge
+    /// (which itself defaults to the first configured host's bridge).
     pub fn dhcp_bridge(&self) -> Option<String> {
         let n = self.network.as_ref()?;
-        n.bridge
-            .clone()
-            .or_else(|| self.mesh.as_ref().map(|m| m.bridge.clone()))
-            .or_else(|| self.hosts.first().map(|h| h.bridge.clone()))
+        n.bridge.clone().or_else(|| Some(self.mesh_config().bridge()))
     }
 
     /// Resolve the effective listen address.
@@ -252,6 +263,34 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mesh_is_on_by_default_on_the_first_hosts_bridge() {
+        let base = r#"
+[[hosts]]
+name = "a.example"
+uri = "qemu:///system"
+bridge = "virbr-xdebbie"
+storage_pool = "boot"
+"#;
+        let cfg: Config = toml::from_str(base).unwrap();
+        let m = cfg.mesh_config();
+        let s = m.to_spec();
+        assert!(s.enabled);
+        assert_eq!(s.bridge(), "virbr-xdebbie");
+        assert_eq!(s.underlay, "wg-flock");
+        assert!(s.wireguard.is_some(), "WireGuard underlay is managed by default");
+        assert_eq!(cfg.dhcp_bridge(), None, "no [network] => no responder");
+
+        let cfg: Config = toml::from_str(&format!("{base}\n[mesh]\nenabled = false\n")).unwrap();
+        assert!(!cfg.mesh_config().to_spec().enabled);
+
+        // bringing your own underlay switches managed WireGuard off
+        let cfg: Config = toml::from_str(&format!("{base}\n[mesh]\nunderlay = \"ul0\"\nallow_plain_underlay = true\n")).unwrap();
+        let s = cfg.mesh_config().to_spec();
+        assert!(s.enabled && s.wireguard.is_none());
+        assert_eq!(s.bridge(), "virbr-xdebbie");
+    }
 
     #[test]
     fn advertise_url_follows_listen_unless_set() {

@@ -44,7 +44,7 @@ No configuration, no coordination service, no shared storage. Just `dpkg -i` and
 ✅ **Placement Engine** — Spread/pack policies with anti-affinity  
 ✅ **Live Migration** — Move VMs between hosts without shared storage  
 ✅ **Cluster API** — Full v1beta2 infrastructure provider  
-✅ **Encrypted Mesh** — Optional L2 overlay between hosts: Geneve over a WireGuard underlay the daemon manages, off by default (`xdctl mesh`)  
+✅ **Encrypted Mesh** — L2 overlay between hosts: Geneve over a WireGuard underlay the daemon manages, on by default with zero peers (`xdctl mesh`)  
 ✅ **Single Binary** — 9 MB daemon + 6 MB CLI tool  
 ✅ **Debian Package** — Systemd service with proper dependencies  
 

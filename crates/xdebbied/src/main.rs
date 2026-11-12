@@ -129,7 +129,7 @@ async fn main() -> anyhow::Result<()> {
     let mesh = mesh::MeshManager::new(
         Arc::new(mesh::IpCliNetOps::default()),
         cfg.state_dir(),
-        cfg.mesh.as_ref(),
+        Some(&cfg.mesh_config()),
     )
     .context("mesh configuration")
     .unwrap_or_else(|e| fatal_config(e));
