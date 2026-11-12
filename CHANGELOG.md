@@ -5,6 +5,15 @@ All notable changes to XDebbie will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.1] - 2026-11-12
+
+### Fixed
+- xdebbied exited at startup (`missing field iodepth`) on a state file
+  holding a volume created by 0.9.1 or older, whose `perf` had the earlier
+  shape. `perf` is an annotation: one that does not parse is now read as
+  `null` instead of making the whole state file unreadable. `Store::open`
+  errors name the file.
+
 ## [0.11.0] - 2026-11-12
 
 ### Added

@@ -249,6 +249,16 @@ pub struct VolumePerf {
     pub write_lat_us: f64,
 }
 
+/// Deserialize `Option<T>`, yielding `None` for anything that is not a `T`.
+fn lenient<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let v = Option::<serde_json::Value>::deserialize(d)?;
+    Ok(v.and_then(|v| serde_json::from_value(v).ok()))
+}
+
 /// A standalone ABE volume with its own lifecycle: created and deleted
 /// through the API, hot-plugged into a VM as a virtio disk on request
 /// (`attachTo` is the wish, `attached` is what the reconciler did). This is
@@ -267,7 +277,9 @@ pub struct Volume {
     pub traddr: String,
     pub port: String,
     pub bytes: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Lenient on read: a `perf` written by another abe/xdebbie version
+    /// becomes `None` rather than making the whole state file unreadable.
+    #[serde(default, deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     pub perf: Option<VolumePerf>,
     /// Desired: the VM this volume should be plugged into.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -609,5 +621,35 @@ mod disk_tests {
 
         spec.labels.insert(PROTECTED_LABEL.into(), "".into());
         assert!(!spec.is_protected());
+    }
+}
+
+#[cfg(test)]
+mod volume_tests {
+    use super::*;
+
+    #[test]
+    fn perf_from_another_version_reads_as_none() {
+        // Written by xdebbie 0.9.1 (abe 0.3.4): no `iodepth`, `write_lat_ms`.
+        let old = serde_json::json!({
+            "id": "00a108b720bd4d3ab4113ebbfeee1f64", "name": "pvc-1", "server": "http://10.22.0.1:80",
+            "traddr": "10.22.0.1", "port": "44001", "bytes": 5368709120u64,
+            "created": "2026-11-12T01:00:00Z", "updated": "2026-11-12T01:00:00Z",
+            "perf": {"bs": "4M", "seconds": 5.0, "write_mib_s": 1022.0, "write_iops": 255.0, "write_lat_ms": 31.0, "lat_4k_us": 187.0}
+        });
+        let v: Volume = serde_json::from_value(old).expect("old perf must not break the volume");
+        assert_eq!(v.perf, None);
+
+        let new = serde_json::json!({
+            "id": "x", "name": "pvc-2", "server": "s", "traddr": "t", "port": "p", "bytes": 1,
+            "created": "2026-11-12T01:00:00Z", "updated": "2026-11-12T01:00:00Z",
+            "perf": {"bs": "4k", "iodepth": 1, "seconds": 5.0, "write_mib_s": 19.5, "write_iops": 5000.0, "write_lat_us": 187.5}
+        });
+        let v: Volume = serde_json::from_value(new).unwrap();
+        assert_eq!(v.perf.as_ref().map(|p| p.iodepth), Some(1));
+
+        let none = serde_json::json!({"id": "x", "name": "pvc-3", "server": "s", "traddr": "t", "port": "p", "bytes": 1,
+            "created": "2026-11-12T01:00:00Z", "updated": "2026-11-12T01:00:00Z"});
+        assert_eq!(serde_json::from_value::<Volume>(none).unwrap().perf, None);
     }
 }
