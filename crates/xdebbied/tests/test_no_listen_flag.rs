@@ -8,7 +8,7 @@
 mod tests {
     use std::fs;
     use std::path::Path;
-    use tempfile::TempDir;
+    
 
     /// Test that bootstrap code doesn't write deprecated --listen flag
     #[test]

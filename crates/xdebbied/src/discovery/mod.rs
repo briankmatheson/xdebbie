@@ -10,5 +10,3 @@ pub mod multicast;
 pub mod peer;
 
 pub use engine::{DiscoveryConfig, DiscoveryEngine};
-pub use messages::{DiscoveryMessage, NodeCapacity};
-pub use peer::{PeerInfo, PeerTable};

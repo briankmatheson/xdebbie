@@ -658,11 +658,10 @@ pub fn uri_is_local(uri: &str) -> bool {
     if let Ok(out) = std::process::Command::new("ip").args(["-o", "addr", "show"]).output() {
         for l in String::from_utf8_lossy(&out.stdout).lines() {
             let mut f = l.split_whitespace();
-            if f.any(|w| w == "inet" || w == "inet6") {
-                if let Some(a) = f.next().and_then(|a| a.split('/').next()) {
+            if f.any(|w| w == "inet" || w == "inet6")
+                && let Some(a) = f.next().and_then(|a| a.split('/').next()) {
                     names.push(a.to_string());
                 }
-            }
         }
     }
     names.iter().any(|n| n == host)
@@ -754,15 +753,14 @@ impl Hypervisor for Virsh {
                 populated: role == DiskRole::Data,
             });
         }
-        for i in 0..disks.len() {
-            let d = disks[i].clone();
-            self.nvme.connect(&d).await?;
-            let dev = self.nvme.wait_dev(&d, std::time::Duration::from_secs(15)).await?;
+        for d in disks.iter_mut() {
+            self.nvme.connect(d).await?;
+            let dev = self.nvme.wait_dev(d, std::time::Duration::from_secs(15)).await?;
             if !d.populated {
                 let (src, fmt) = self.base_image(host, &vm.spec.image).await?;
                 tracing::info!(vm = %vm.spec.name, %src, %dev, "abe: filling root disk from base image");
                 self.nvme.populate(&src, fmt, &dev).await?;
-                disks[i].populated = true;
+                d.populated = true;
             }
         }
         Ok(())

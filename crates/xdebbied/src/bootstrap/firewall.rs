@@ -181,7 +181,7 @@ fn remove_legacy_chain() {
 /// Apply `spec` and make sure ufw is enabled. Idempotent.
 pub fn configure_firewall(spec: &FirewallSpec) -> Result<()> {
     info!("Configuring firewall (ufw)...");
-    if !Command::new("ufw").arg("--version").output().map_or(false, |o| o.status.success()) {
+    if !Command::new("ufw").arg("--version").output().is_ok_and(|o| o.status.success()) {
         warn!("ufw not installed; firewall not configured (apt install ufw)");
         return Ok(());
     }

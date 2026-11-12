@@ -1007,7 +1007,7 @@ mod tests {
         assert!(dir.path().join("mesh.json").exists());
         assert!(f.snapshot().nft_table.is_some());
         let n = f.applied().len();
-        assert!(n >= 3 * 6 + 51 + 1, "{n}");
+        assert!(n > 3 * 6 + 51, "{n}");
 
         // Second pass: no kernel writes.
         f.clear_applied();

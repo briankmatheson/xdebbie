@@ -35,16 +35,6 @@ pub struct Export {
     pub perf: Option<xdebbie_core::VolumePerf>,
 }
 
-/// One entry of `GET /volumes`.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-pub struct Volume {
-    pub id: String,
-    pub bytes: u64,
-    pub port: Option<String>,
-    #[serde(default)]
-    pub traddr: String,
-}
-
 #[derive(Clone)]
 pub struct Client {
     http: reqwest::Client,
@@ -89,18 +79,6 @@ impl Client {
         Ok(e)
     }
 
-    /// (Re-)export an existing volume. Idempotent on the ABE side.
-    pub async fn export(&self, base: &str, id: &str) -> Result<Export> {
-        let url = Self::url(base, &format!("/id/{id}"));
-        let r = self.http.get(&url).send().await.with_context(|| format!("GET {url}"))?;
-        let st = r.status();
-        let body = r.text().await.unwrap_or_default();
-        if !st.is_success() {
-            bail!("abe {base}: export {id} returned {st}: {body}");
-        }
-        serde_json::from_str(&body).with_context(|| format!("abe reply: {body}"))
-    }
-
     /// Unexport and remove. A volume that is already gone is not an error.
     pub async fn delete(&self, base: &str, id: &str) -> Result<()> {
         let url = Self::url(base, &format!("/id/{id}"));
@@ -111,17 +89,6 @@ impl Client {
         }
         let body = r.text().await.unwrap_or_default();
         bail!("abe {base}: delete {id} returned {st}: {body}")
-    }
-
-    pub async fn volumes(&self, base: &str) -> Result<Vec<Volume>> {
-        let url = Self::url(base, "/volumes");
-        let r = self.http.get(&url).send().await.with_context(|| format!("GET {url}"))?;
-        let st = r.status();
-        let body = r.text().await.unwrap_or_default();
-        if !st.is_success() {
-            bail!("abe {base}: /volumes returned {st}: {body}");
-        }
-        serde_json::from_str(&body).with_context(|| format!("abe reply: {body}"))
     }
 }
 

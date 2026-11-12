@@ -29,29 +29,23 @@ pub const WG_KEY_FILE: &str = "wg.key";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum FdbMode {
+    #[default]
     Derived,
     Learn,
 }
 
-impl Default for FdbMode {
-    fn default() -> Self {
-        FdbMode::Derived
-    }
-}
 
 /// `"auto"` or a fixed number. Serialised as a string or an integer.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Default)]
 pub enum MtuSpec {
+    #[default]
     Auto,
     Fixed(u16),
 }
 
-impl Default for MtuSpec {
-    fn default() -> Self {
-        MtuSpec::Auto
-    }
-}
 
 impl Serialize for MtuSpec {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
@@ -158,12 +152,6 @@ pub struct PeerSpec {
     /// reached only after it initiates (NAT'd boxes).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
-}
-
-impl PeerSpec {
-    pub fn new(box_id: u8, remote: Ipv4Addr) -> Self {
-        Self { box_id, remote, probe: None, pubkey: None, endpoint: None }
-    }
 }
 
 fn unspecified() -> Ipv4Addr {
@@ -306,8 +294,22 @@ impl MeshSpec {
             (None, FdbMode::Learn) => p.remote,
         }
     }
-    pub fn peer(&self, box_id: u8) -> Option<&PeerSpec> {
-        self.peers.iter().find(|p| p.box_id == box_id)
+}
+
+#[cfg(test)]
+impl PeerSpec {
+    pub fn new(box_id: u8, remote: Ipv4Addr) -> Self {
+        Self { box_id, remote, probe: None, pubkey: None, endpoint: None }
+    }
+}
+
+#[cfg(test)]
+impl MeshStatus {
+    pub fn condition(&self, kind: ConditionType) -> Option<&Condition> {
+        self.conditions.iter().find(|c| c.kind == kind)
+    }
+    pub fn is(&self, kind: ConditionType) -> bool {
+        self.condition(kind).map(|c| c.status).unwrap_or(false)
     }
 }
 
@@ -493,15 +495,6 @@ pub struct MeshStatus {
     pub wireguard: Option<WireguardStatus>,
     #[serde(default)]
     pub metrics: super::metrics::Snapshot,
-}
-
-impl MeshStatus {
-    pub fn condition(&self, kind: ConditionType) -> Option<&Condition> {
-        self.conditions.iter().find(|c| c.kind == kind)
-    }
-    pub fn is(&self, kind: ConditionType) -> bool {
-        self.condition(kind).map(|c| c.status).unwrap_or(false)
-    }
 }
 
 // ---------- TOML `[mesh]` ----------

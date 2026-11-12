@@ -10,7 +10,7 @@
 
 use anyhow::{Context, Result};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use tracing::{info, warn};
 
@@ -37,7 +37,7 @@ fn cert_is_valid(path: &str) -> bool {
     
     // Try to parse it with openssl
     let output = Command::new("openssl")
-        .args(&["x509", "-in", path, "-noout"])
+        .args(["x509", "-in", path, "-noout"])
         .output();
     
     matches!(output, Ok(o) if o.status.success())
@@ -53,7 +53,7 @@ fn generate_ca() -> Result<()> {
     
     // Generate CA private key (4096-bit RSA, 10-year validity)
     let output = Command::new("openssl")
-        .args(&["genrsa", "-out", CA_KEY, "4096"])
+        .args(["genrsa", "-out", CA_KEY, "4096"])
         .output()
         .context("generating CA private key")?;
     
@@ -63,7 +63,7 @@ fn generate_ca() -> Result<()> {
     
     // Generate self-signed CA certificate
     let output = Command::new("openssl")
-        .args(&[
+        .args([
             "req", "-new", "-x509",
             "-days", "3650",
             "-key", CA_KEY,
@@ -91,7 +91,7 @@ fn generate_ca() -> Result<()> {
 /// mesh bridge, ...). Used for the server cert's SubjectAltName.
 fn local_ipv4_addrs() -> Vec<String> {
     let out = Command::new("ip")
-        .args(&["-4", "-o", "addr", "show", "scope", "global"])
+        .args(["-4", "-o", "addr", "show", "scope", "global"])
         .output();
     let Ok(out) = out else { return vec![] };
     String::from_utf8_lossy(&out.stdout)
@@ -129,7 +129,7 @@ fn server_san(hostname: &str) -> String {
 /// change) must be reissued or every qemu+tls connection fails.
 fn server_cert_san_ok(hostname: &str) -> bool {
     let out = Command::new("openssl")
-        .args(&["x509", "-in", SERVER_CERT, "-noout", "-ext", "subjectAltName"])
+        .args(["x509", "-in", SERVER_CERT, "-noout", "-ext", "subjectAltName"])
         .output();
     let Ok(out) = out else { return false };
     if !out.status.success() {
@@ -154,7 +154,7 @@ fn generate_server_cert(hostname: &str) -> Result<()> {
     
     // Generate server private key
     let output = Command::new("openssl")
-        .args(&["genrsa", "-out", SERVER_KEY, "2048"])
+        .args(["genrsa", "-out", SERVER_KEY, "2048"])
         .output()
         .context("generating server private key")?;
     
@@ -166,7 +166,7 @@ fn generate_server_cert(hostname: &str) -> Result<()> {
     let csr_path = "/tmp/server.csr";
     let subject = format!("/CN={}/O=libvirt/OU=server", hostname);
     let output = Command::new("openssl")
-        .args(&[
+        .args([
             "req", "-new",
             "-key", SERVER_KEY,
             "-out", csr_path,
@@ -195,7 +195,7 @@ fn generate_server_cert(hostname: &str) -> Result<()> {
 
     // Sign with CA
     let output = Command::new("openssl")
-        .args(&[
+        .args([
             "x509", "-req",
             "-in", csr_path,
             "-CA", CA_CERT,
@@ -240,7 +240,7 @@ fn generate_client_cert(hostname: &str) -> Result<()> {
     
     // Generate client private key
     let output = Command::new("openssl")
-        .args(&["genrsa", "-out", CLIENT_KEY, "2048"])
+        .args(["genrsa", "-out", CLIENT_KEY, "2048"])
         .output()
         .context("generating client private key")?;
     
@@ -252,7 +252,7 @@ fn generate_client_cert(hostname: &str) -> Result<()> {
     let csr_path = "/tmp/client.csr";
     let subject = format!("/CN={}/O=libvirt/OU=client", hostname);
     let output = Command::new("openssl")
-        .args(&[
+        .args([
             "req", "-new",
             "-key", CLIENT_KEY,
             "-out", csr_path,
@@ -267,7 +267,7 @@ fn generate_client_cert(hostname: &str) -> Result<()> {
     
     // Sign with CA
     let output = Command::new("openssl")
-        .args(&[
+        .args([
             "x509", "-req",
             "-in", csr_path,
             "-CA", CA_CERT,
@@ -313,21 +313,20 @@ fn get_mesh_ip() -> Option<String> {
     // Try common mesh interface names
     for iface in &["virbr-xdebbie", "virbr-int", "br-int"] {
         let output = Command::new("ip")
-            .args(&["addr", "show", iface])
+            .args(["addr", "show", iface])
             .output();
         
-        if let Ok(output) = output {
-            if output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                // Parse "inet 10.23.0.1/16" line
-                for line in stdout.lines() {
-                    if line.contains("inet 10.23") || line.contains("inet 192.168") {
-                        if let Some(ip) = line.trim().split_whitespace().nth(1) {
-                            if let Some(ip_only) = ip.split('/').next() {
-                                return Some(ip_only.to_string());
-                            }
-                        }
-                    }
+        if let Ok(output) = output
+            && output.status.success()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            // Parse "inet 10.23.0.1/16" line
+            for line in stdout.lines() {
+                if (line.contains("inet 10.23") || line.contains("inet 192.168"))
+                    && let Some(ip) = line.split_whitespace().nth(1)
+                    && let Some(ip_only) = ip.split('/').next()
+                {
+                    return Some(ip_only.to_string());
                 }
             }
         }
@@ -386,7 +385,7 @@ auth_tls = "none"
     // Modern libvirtd uses socket activation, not --listen
     // Enable libvirtd-tls.socket for TLS listening
     let socket_enable = Command::new("systemctl")
-        .args(&["enable", "libvirtd-tls.socket"])
+        .args(["enable", "libvirtd-tls.socket"])
         .output();
     
     if let Ok(output) = socket_enable {

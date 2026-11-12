@@ -6,7 +6,12 @@ mod api;
 mod bootstrap;
 mod config;
 mod dhcp;
+// Peer discovery and leader election (docs/autodiscovery.md) announce and
+// score, but nothing acts on the elected leader yet; the accessors for that
+// half are unused until it is wired up.
+#[allow(dead_code)]
 mod discovery;
+#[allow(dead_code)]
 mod election;
 mod libvirt;
 mod lvm;
@@ -179,8 +184,7 @@ async fn main() -> anyhow::Result<()> {
         },
     });
 
-    match cli.cmd {
-        Some(Cmd::Check) => {
+    if let Some(Cmd::Check) = cli.cmd {
         use libvirt::Hypervisor;
         let mut bad = 0;
         for h in &cfg.hosts {
@@ -196,8 +200,6 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         std::process::exit(if bad == 0 { 0 } else { 1 });
-        }
-        _ => {}
     }
 
     // Second chance for libvirt autostart: domains whose disks weren't ready
@@ -387,6 +389,3 @@ async fn serve(cfg: &config::Config, listen: std::net::SocketAddr, app: axum::Ro
     }
     Ok(())
 }
-
-
-mod ca;

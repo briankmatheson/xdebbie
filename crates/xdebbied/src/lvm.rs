@@ -170,7 +170,7 @@ impl LvmManager {
               self.vg_name, lv_name, base_lv);
         
         let output = Command::new("/usr/sbin/lvcreate")
-            .args(&[
+            .args([
                 "-s",                                          // snapshot
                 "-n", &lv_name,                                // name of new snapshot
                 &format!("{}/{}", self.vg_name, base_lv),     // source LV (positional)
@@ -191,7 +191,7 @@ impl LvmManager {
         info!("Clearing activation skip flag and activating {}/{}", self.vg_name, lv_name);
         
         let skip_output = Command::new("/usr/sbin/lvchange")
-            .args(&[
+            .args([
                 "-kn",  // clear activation skip flag
                 &format!("{}/{}", self.vg_name, lv_name),
             ])
@@ -204,7 +204,7 @@ impl LvmManager {
         }
 
         let activate_output = Command::new("/usr/sbin/lvchange")
-            .args(&[
+            .args([
                 "-ay",
                 &format!("{}/{}", self.vg_name, lv_name),
             ])
@@ -311,7 +311,7 @@ impl LvmManager {
         let status = if let Some(ref pool) = self.thin_pool {
             // Thin provisioned
             Command::new("/usr/sbin/lvcreate")
-                .args(&[
+                .args([
                     "-V", &size,                              // virtual size
                     "-T", &format!("{}/{}", self.vg_name, pool), // thin pool
                     "-n", &lv_name,                           // name
@@ -322,7 +322,7 @@ impl LvmManager {
             // Thick provisioned (fallback)
             warn!("No thin pool configured, creating thick LV (slow)");
             Command::new("/usr/sbin/lvcreate")
-                .args(&[
+                .args([
                     "-L", &size,                              // size
                     "-n", &lv_name,                           // name
                     &self.vg_name,                            // vg
@@ -348,7 +348,7 @@ impl LvmManager {
             if self.lv_exists(&lv_name)? {
                 info!("Removing LV: {}/{}", self.vg_name, lv_name);
                 let _ = Command::new("/usr/sbin/lvremove")
-                    .args(&["-f", &self.lv_path(&lv_name)])
+                    .args(["-f", &self.lv_path(&lv_name)])
                     .status();
             }
         }
@@ -358,7 +358,7 @@ impl LvmManager {
     /// Check if a logical volume exists
     fn lv_exists(&self, lv_name: &str) -> Result<bool> {
         let output = Command::new("/usr/sbin/lvs")
-            .arg(&format!("{}/{}", self.vg_name, lv_name))
+            .arg(format!("{}/{}", self.vg_name, lv_name))
             .output()
             .context("checking if logical volume exists")?;
         Ok(output.status.success())
@@ -376,7 +376,7 @@ impl LvmManager {
     pub fn free_gib(&self) -> Result<u64> {
         if let Some(ref pool) = self.thin_pool {
             let output = Command::new("/usr/sbin/lvs")
-                .args(&[
+                .args([
                     "--noheadings",
                     "--units", "b",
                     "--nosuffix",
@@ -403,7 +403,7 @@ impl LvmManager {
     /// Get LVM statistics for monitoring
     pub fn get_stats(&self) -> Result<LvmStats> {
         let output = Command::new("/usr/sbin/vgs")
-            .args(&[
+            .args([
                 "--noheadings",
                 "--units", "g",
                 "-o", "vg_size,vg_free",
@@ -423,17 +423,10 @@ impl LvmManager {
             anyhow::bail!("Unexpected vgs output format");
         }
 
-        let total_gib = parts[0].trim_end_matches('g').parse::<f64>()
-            .context("parsing total size")?;
         let free_gib = parts[1].trim_end_matches('g').parse::<f64>()
             .context("parsing free size")?;
 
-        Ok(LvmStats {
-            vg_name: self.vg_name.clone(),
-            total_gib,
-            free_gib,
-            used_gib: total_gib - free_gib,
-        })
+        Ok(LvmStats { free_gib })
     }
 }
 
@@ -459,10 +452,7 @@ pub fn parse_thin_free_gib(text: &str) -> Result<u64> {
 /// LVM statistics
 #[derive(Debug, Clone)]
 pub struct LvmStats {
-    pub vg_name: String,
-    pub total_gib: f64,
     pub free_gib: f64,
-    pub used_gib: f64,
 }
 
 #[cfg(test)]

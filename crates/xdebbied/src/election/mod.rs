@@ -10,5 +10,3 @@
 pub mod scoring;
 pub mod state;
 
-pub use scoring::{calculate_score, get_uptime};
-pub use state::{ElectionState, ElectionStateMachine};

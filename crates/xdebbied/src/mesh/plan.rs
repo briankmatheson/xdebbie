@@ -27,6 +27,7 @@ pub struct Plan {
     pub excluded: Vec<Excluded>,
 }
 
+#[cfg(test)]
 impl Plan {
     pub fn is_empty(&self) -> bool {
         self.actions.is_empty()

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 use uuid::Uuid;
 
 use crate::discovery::messages::NodeCapacity;
@@ -115,13 +115,11 @@ pub fn get_uptime() -> Duration {
     // Try to read /proc/uptime on Linux
     #[cfg(target_os = "linux")]
     {
-        if let Ok(content) = std::fs::read_to_string("/proc/uptime") {
-            if let Some(uptime_str) = content.split_whitespace().next() {
-                if let Ok(uptime_secs) = uptime_str.parse::<f64>() {
+        if let Ok(content) = std::fs::read_to_string("/proc/uptime")
+            && let Some(uptime_str) = content.split_whitespace().next()
+                && let Ok(uptime_secs) = uptime_str.parse::<f64>() {
                     return Duration::from_secs_f64(uptime_secs);
                 }
-            }
-        }
     }
 
     // Fallback: assume we just started (will be overridden by process start time tracking)

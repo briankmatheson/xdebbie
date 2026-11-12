@@ -104,6 +104,7 @@ pub struct Request {
 }
 
 impl Request {
+    #[cfg(test)]
     pub fn broadcast_requested(&self) -> bool {
         self.flags & 0x8000 != 0
     }

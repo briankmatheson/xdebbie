@@ -463,8 +463,8 @@ fn print_mesh(doc: &Value) {
     );
     println!();
     println!(
-        "{:<5} {:<9} {:<16} {:<16} {:<8} {:>8} {:>4}  {}",
-        "BOX", "DEVICE", "REMOTE", "PROBE", "STATE", "RTT", "FDB", "LAST CHANGE"
+        "{:<5} {:<9} {:<16} {:<16} {:<8} {:>8} {:>4}  LAST CHANGE",
+        "BOX", "DEVICE", "REMOTE", "PROBE", "STATE", "RTT", "FDB"
     );
     for p in st["peers"].as_array().into_iter().flatten() {
         let rtt = p["rtt_ms"].as_f64().map(|r| format!("{r:.2}ms")).unwrap_or_else(|| "-".into());

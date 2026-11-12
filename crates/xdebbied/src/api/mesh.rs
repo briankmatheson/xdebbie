@@ -3,6 +3,9 @@
 //! the rest of the API. Handlers never touch the kernel directly: they
 //! update desired state and the manager reconciles.
 
+// axum handlers return the Response they want sent; boxing it buys nothing here.
+#![allow(clippy::result_large_err)]
+
 use std::sync::Arc;
 
 use axum::{

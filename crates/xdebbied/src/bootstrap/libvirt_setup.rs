@@ -9,13 +9,11 @@ use tracing::info;
 pub struct NetworkInfo {
     pub name: String,
     pub bridge: String,
-    pub subnet: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct StoragePoolInfo {
     pub name: String,
-    pub path: String,
 }
 
 #[derive(Debug, Clone)]
@@ -68,7 +66,6 @@ pub fn discover_networks(uri: &str) -> Result<Vec<NetworkInfo>> {
         networks.push(NetworkInfo {
             name: name.to_string(),
             bridge,
-            subnet: String::new(), // Could parse from net-dumpxml if needed
         });
     }
 
@@ -93,39 +90,7 @@ pub fn discover_storage_pools(uri: &str) -> Result<Vec<StoragePoolInfo>> {
             continue;
         }
 
-        // Get pool path from pool-info
-        let path_out = Command::new("virsh")
-            .args(["-q", "-c", uri, "pool-dumpxml", name])
-            .output()
-            .ok()
-            .and_then(|o| {
-                if o.status.success() {
-                    Some(String::from_utf8_lossy(&o.stdout).to_string())
-                } else {
-                    None
-                }
-            });
-
-        let path = path_out
-            .as_ref()
-            .and_then(|xml| {
-                // Simple extraction of <path>...</path>
-                xml.lines()
-                    .find(|l| l.trim().starts_with("<path>"))
-                    .and_then(|l| {
-                        l.split("<path>")
-                            .nth(1)
-                            .and_then(|s| s.split("</path>").next())
-                    })
-            })
-            .unwrap_or("/var/lib/libvirt/images")
-            .trim()
-            .to_string();
-
-        pools.push(StoragePoolInfo {
-            name: name.to_string(),
-            path,
-        });
+        pools.push(StoragePoolInfo { name: name.to_string() });
     }
 
     Ok(pools)
@@ -360,14 +325,13 @@ pub fn ensure_storage_pool(uri: &str, name: &str, path: &str) -> Result<()> {
 /// (`[[hosts]].name`, placement pins, `xdctl host ls`), so ask the resolver
 /// instead of trusting whichever form /etc/hostname happens to hold.
 pub fn get_hostname() -> String {
-    if let Ok(out) = Command::new("hostname").arg("-f").output() {
-        if out.status.success() {
+    if let Ok(out) = Command::new("hostname").arg("-f").output()
+        && out.status.success() {
             let fqdn = String::from_utf8_lossy(&out.stdout).trim().to_string();
             if !fqdn.is_empty() {
                 return fqdn;
             }
         }
-    }
     hostname::get()
         .ok()
         .and_then(|h| h.into_string().ok())

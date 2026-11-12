@@ -21,15 +21,12 @@ pub const DEFAULT_CONFIG_DIR: &str = "/etc/xdebbie";
 pub const DEFAULT_CONFIG_FILE: &str = "/etc/xdebbie/xdebbied.toml";
 pub const DEFAULT_TOKEN_FILE: &str = "/etc/xdebbie/token";
 pub const DEFAULT_STATE_DIR: &str = "/var/lib/xdebbie";
-pub const DEFAULT_STATE_FILE: &str = "/var/lib/xdebbie/state.json";
 pub const DEFAULT_ENV_FILE: &str = "xdebbie_env";
 
 /// Default libvirt URIs and resources
 pub const DEFAULT_LIBVIRT_URI: &str = "qemu:///system";
 pub const DEFAULT_NETWORK_NAME: &str = "xdebbie";
 pub const DEFAULT_NETWORK_SUBNET: &str = "192.168.100.0/24";
-pub const DEFAULT_NETWORK_DHCP_START: &str = "192.168.100.100";
-pub const DEFAULT_NETWORK_DHCP_END: &str = "192.168.100.250";
 pub const DEFAULT_POOL_NAME: &str = "xdebbie";
 pub const DEFAULT_POOL_PATH: &str = "/var/lib/libvirt/xdebbie";
 

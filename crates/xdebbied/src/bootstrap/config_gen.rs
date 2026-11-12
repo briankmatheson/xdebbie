@@ -184,11 +184,9 @@ mod tests {
             networks: vec![super::super::libvirt_setup::NetworkInfo {
                 name: "default".to_string(),
                 bridge: "virbr0".to_string(),
-                subnet: "192.168.122.0/24".to_string(),
             }],
             pools: vec![super::super::libvirt_setup::StoragePoolInfo {
                 name: "default".to_string(),
-                path: "/var/lib/libvirt/images".to_string(),
             }],
         };
 
