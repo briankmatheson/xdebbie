@@ -137,7 +137,11 @@ xdctl mesh delete --yes               # tear down; falls back to [mesh] TOML
 Conditions: `Ready`, `Degraded` (some peer not Up), and blocking ones that
 stop all kernel writes: `GeneveModuleMissing`, `UnderlayMissing`,
 `BridgeMissing`, `WireguardModuleMissing`, `WireguardConflict`. Warnings:
-`BridgeMacMismatch`, `NameConflict`, and `BridgeStpEnabled` — which only
+`BridgeMacMismatch` (the bridge is not `52:54:00:23:<box>:fe`, so in
+`derived` mode *peers* cannot reach this box's bridge address — its gateway
+and DNS — fix with `virsh net-edit` on the `<mac>` and `ip link set <bridge>
+address …` to apply live; `xdebbied bootstrap --box` sets it when it creates
+the network), `NameConflict`, and `BridgeStpEnabled` — which only
 stays set if turning STP off failed: the mesh **forces STP off** on its
 bridge every tick, since isolated tunnel ports make it loop-free and BPDUs
 crossing tunnels would only make STP misbehave. Peers carry `state` (`Pending`/`Up`/`Down`/`Error`), `rtt_ms`,

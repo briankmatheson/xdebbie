@@ -70,6 +70,10 @@ enum Cmd {
         /// Storage pool path
         #[arg(long, default_value = "/var/lib/libvirt/xdebbie")]
         pool_path: String,
+        /// Mesh box id (0-253, unique per host): written to [mesh] and used
+        /// for the bridge MAC 52:54:00:23:<box>:fe when the network is created
+        #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u8).range(0..=253))]
+        r#box: u8,
     },
 }
 
@@ -91,6 +95,7 @@ async fn main() -> anyhow::Result<()> {
             subnet,
             pool,
             pool_path,
+            r#box,
         }) => {
             let opts = bootstrap::BootstrapOptions {
                 config_path: cli.config.clone(),
@@ -100,6 +105,7 @@ async fn main() -> anyhow::Result<()> {
                 network_subnet: subnet.clone(),
                 pool_name: pool.clone(),
                 pool_path: pool_path.clone(),
+                box_id: *r#box,
                 ..Default::default()
             };
             bootstrap::bootstrap(&opts)?;

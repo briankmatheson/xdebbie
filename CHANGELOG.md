@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Why: the regeneration bug fixed in 0.11.2 showed that a dropped `[mesh]`
   silently took a box out of the mesh. The default should be the thing the
   rest of the system assumes.
+- `xdebbied bootstrap --box <0-253>` (default 0) sets the mesh box id in
+  the generated `[mesh]` and gives the libvirt network bootstrap creates the
+  bridge MAC `52:54:00:23:<box>:fe` that the derived FDB scheme expects —
+  previously libvirt picked a random one and the mesh reported
+  `BridgeMacMismatch` forever. An existing network is not changed; bootstrap
+  warns and says how to fix it.
 
 ## [0.11.2] - 2026-11-12
 

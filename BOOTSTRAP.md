@@ -64,6 +64,7 @@ Bootstrap the system with automatic resource discovery and creation.
 - `--subnet <CIDR>` - Network subnet (default: `192.168.100.0/24`)
 - `--pool <NAME>` - Storage pool name (default: `xdebbie`)
 - `--pool-path <PATH>` - Storage pool path (default: `/var/lib/libvirt/xdebbie`)
+- `--box <0-253>` - This host's mesh box id (default: `0`; unique per host). Written to `[mesh]`, and the libvirt network bootstrap creates gets the bridge MAC `52:54:00:23:<box>:fe` the mesh's derived FDB scheme expects. For a network that already exists bootstrap only warns when the MAC differs
 
 **Examples:**
 

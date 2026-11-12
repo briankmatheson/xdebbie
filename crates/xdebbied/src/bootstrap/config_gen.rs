@@ -13,7 +13,7 @@ use super::libvirt_setup::{get_hostname, LibvirtResources};
 /// network was adopted — then `[network]` is emitted commented out, because
 /// turning on a second DHCP server on a bridge that already has one is
 /// exactly the mistake we want operators to make on purpose, not by default.
-pub fn generate_config(resources: &LibvirtResources, uri: &str, created_subnet: Option<&str>) -> String {
+pub fn generate_config(resources: &LibvirtResources, uri: &str, created_subnet: Option<&str>, box_id: u8) -> String {
     let hostname = get_hostname();
     let (net_prefix, net_cidr, net_note) = match created_subnet {
         Some(s) => ("", s.to_string(), "# Bootstrap created the libvirt network without a DHCP range; xdebbied\n# allocates each VM an address at creation and answers DHCP for it itself.".to_string()),
@@ -106,7 +106,7 @@ multicast_addr = "239.0.0.42:7442"
 # turns it off.
 [mesh]
 enabled = true
-box = 0                        # this host's box id (0-253), unique per host
+box = {box_id}                        # this host's box id (0-253), unique per host
 bridge = "{bridge}"
 vni = 23
 dstport = 6081
@@ -302,9 +302,9 @@ mod tests {
             }],
         };
 
-        let config = generate_config(&resources, "qemu:///system", Some("192.168.100.0/24"));
+        let config = generate_config(&resources, "qemu:///system", Some("192.168.100.0/24"), 2);
         assert!(config.contains("\n[network]\ncidr = \"192.168.100.0/24\""), "{config}");
-        let adopted = generate_config(&resources, "qemu:///system", None);
+        let adopted = generate_config(&resources, "qemu:///system", None, 0);
         assert!(adopted.contains("\n# [network]\n# cidr = "), "{adopted}");
         // both must parse as config
         let parsed: crate::config::Config = toml::from_str(&config).unwrap();
@@ -312,6 +312,7 @@ mod tests {
         // the generated [mesh] is live, on the discovered bridge, with managed WireGuard
         let mesh = parsed.mesh_config().to_spec();
         assert!(mesh.enabled && mesh.bridge() == "virbr0" && mesh.wireguard.is_some(), "{config}");
+        assert_eq!(mesh.box_id, 2);
         assert!(config.contains("listen = \"0.0.0.0:7443\""));
         assert!(config.contains("bridge = \"virbr0\""));
         assert!(config.contains("storage_pool = \"default\""));
@@ -356,7 +357,7 @@ abe = "http://10.22.0.1:80"
 cpu_overcommit = 4.0
 "#;
         // The template emits its own [network] (created subnet) and [[hosts]].
-        let generated = generate_config(&resources, "qemu:///system", Some("192.168.100.0/24"));
+        let generated = generate_config(&resources, "qemu:///system", Some("192.168.100.0/24"), 0);
         let merged = carry_over(old, &generated).unwrap();
         let cfg: crate::config::Config = toml::from_str(&merged).unwrap_or_else(|e| panic!("{e}\n{merged}"));
 

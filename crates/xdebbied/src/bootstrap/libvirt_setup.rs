@@ -141,12 +141,16 @@ pub fn subnet_gateway(subnet: &str) -> Result<(String, String)> {
 
 /// DHCP can be disabled by passing empty strings for dhcp_start/dhcp_end.
 /// This is useful when using external DHCP servers like ISC DHCP.
+/// `mac`: the bridge's MAC. The mesh's derived FDB scheme assumes
+/// `52:54:00:23:<box>:fe` (`mesh::bridge_mac`), so a network bootstrap
+/// creates gets exactly that instead of libvirt's random pick.
 pub fn ensure_network(
     uri: &str,
     name: &str,
     subnet: &str,
     dhcp_start: &str,
     dhcp_end: &str,
+    mac: &str,
 ) -> Result<String> {
     // Check if network already exists
     let exists = Command::new("virsh")
@@ -206,10 +210,11 @@ pub fn ensure_network(
         r#"<network>
   <name>{}</name>
   <bridge name='{}' stp='off' delay='0'/>
+  <mac address='{}'/>
 {}  <ip address='{}' netmask='{}'>
 {}  </ip>
 </network>"#,
-        name, bridge_name, dns_tag, gateway, netmask, dhcp_section
+        name, bridge_name, mac, dns_tag, gateway, netmask, dhcp_section
     );
 
     // Write XML to temp file
@@ -245,6 +250,15 @@ pub fn ensure_network(
 
     info!("Network '{}' created and started (bridge: {})", name, bridge_name);
     Ok(bridge_name)
+}
+
+/// The `<mac address>` of a defined network, if any.
+pub fn network_mac(uri: &str, name: &str) -> Option<String> {
+    let out = Command::new("virsh").args(["-q", "-c", uri, "net-dumpxml", name]).output().ok()?;
+    let xml = String::from_utf8_lossy(&out.stdout);
+    let i = xml.find("<mac address='")? + "<mac address='".len();
+    let rest = &xml[i..];
+    Some(rest[..rest.find('\'')?].to_ascii_lowercase())
 }
 
 /// Create a directory-based storage pool if it doesn't exist

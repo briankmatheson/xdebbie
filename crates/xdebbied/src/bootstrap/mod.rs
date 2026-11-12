@@ -43,6 +43,8 @@ pub struct BootstrapOptions {
     pub pool_path: String,
     pub listen_addr: String,
     pub force: bool,
+    /// Mesh box id (0-253): written to `[mesh]` and fixes the bridge MAC.
+    pub box_id: u8,
 }
 
 impl Default for BootstrapOptions {
@@ -58,6 +60,7 @@ impl Default for BootstrapOptions {
             pool_path: DEFAULT_POOL_PATH.to_string(),
             listen_addr: "0.0.0.0:7443".to_string(),
             force: false,
+            box_id: 0,
         }
     }
 }
@@ -115,10 +118,22 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     // No libvirt DHCP range: xdebbied's own responder serves the bridge
     // (`[network]` in the generated config). Two DHCP servers on one bridge
     // — worse, on one meshed L2 — is the thing we are avoiding.
+    let want_mac = crate::mesh::bridge_mac(opts.box_id);
     let created_subnet = if !network_exists {
-        libvirt_setup::ensure_network(&opts.libvirt_uri, &opts.network_name, &opts.network_subnet, "", "")?;
+        libvirt_setup::ensure_network(&opts.libvirt_uri, &opts.network_name, &opts.network_subnet, "", "", &want_mac)?;
         Some(opts.network_subnet.clone())
     } else {
+        // Not ours to change live (a MAC change resets every guest's ARP
+        // entry for the gateway); say what the mesh will keep reporting.
+        match libvirt_setup::network_mac(&opts.libvirt_uri, &opts.network_name) {
+            Some(mac) if mac != want_mac => warn!(
+                "network '{}' has MAC {mac}; the mesh (box {}) expects {want_mac}. Fix with: \
+                 `virsh net-edit {}` (set <mac address='{want_mac}'/>) and, to apply now, \
+                 `ip link set <bridge> address {want_mac}`",
+                opts.network_name, opts.box_id, opts.network_name
+            ),
+            _ => {}
+        }
         None
     };
 
@@ -154,7 +169,7 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
             Err(e) => warn!("{e:#}; left untouched - fix it, `xdebbied serve` will not start until it parses"),
         }
     } else {
-        let generated = config_gen::generate_config(&resources, &opts.libvirt_uri, created_subnet.as_deref());
+        let generated = config_gen::generate_config(&resources, &opts.libvirt_uri, created_subnet.as_deref(), opts.box_id);
         let content = if exists {
             let bak = config_gen::back_up(&opts.config_path)?;
             info!("Previous configuration saved as {}", bak.display());
