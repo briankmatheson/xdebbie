@@ -142,15 +142,37 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     // Step 5: Generate configuration
     info!("Step 5/8: Generating configuration");
     
-    if config_gen::config_exists(&opts.config_path) && !opts.force {
-        info!(
-            "Configuration already exists at {}, skipping (use --force to overwrite)",
-            opts.config_path.display()
-        );
+    let exists = opts.config_path.exists();
+    if exists && !opts.force {
+        match config_gen::config_parses(&opts.config_path) {
+            Ok(()) => info!(
+                "Configuration already exists at {}, skipping (use --force to regenerate)",
+                opts.config_path.display()
+            ),
+            // Never replace a hand-edited file because of a typo: serve will
+            // refuse to start and say why.
+            Err(e) => warn!("{e:#}; left untouched - fix it, `xdebbied serve` will not start until it parses"),
+        }
     } else {
-        let config_content =
-            config_gen::generate_config(&resources, &opts.libvirt_uri, created_subnet.as_deref());
-        config_gen::write_config(&opts.config_path, &config_content)?;
+        let generated = config_gen::generate_config(&resources, &opts.libvirt_uri, created_subnet.as_deref());
+        let content = if exists {
+            let bak = config_gen::back_up(&opts.config_path)?;
+            info!("Previous configuration saved as {}", bak.display());
+            let old = std::fs::read_to_string(&opts.config_path)?;
+            match config_gen::carry_over(&old, &generated) {
+                Ok(c) => {
+                    info!("Regenerated configuration; operator settings carried over");
+                    c
+                }
+                Err(e) => {
+                    warn!("{e:#}; regenerated from scratch (previous file is in the backup)");
+                    generated
+                }
+            }
+        } else {
+            generated
+        };
+        config_gen::write_config(&opts.config_path, &content)?;
     }
 
     // Step 6: Generate token
@@ -163,6 +185,13 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
         );
         token::read_token(&opts.token_path)?
     } else {
+        if opts.token_path.exists() {
+            let bak = config_gen::back_up(&opts.token_path)?;
+            warn!(
+                "Replacing the API token (--force); previous one saved as {}. Clients holding the old token (xdctl env, abe-csi, CAPX) must be updated",
+                bak.display()
+            );
+        }
         let new_token = token::generate_token()?;
         token::write_token(&opts.token_path, &new_token)?;
         new_token

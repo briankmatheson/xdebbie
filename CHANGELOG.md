@@ -5,6 +5,23 @@ All notable changes to XDebbie will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.2] - 2026-11-12
+
+### Fixed
+- Bootstrap replaced a hand-edited `xdebbied.toml` whenever it failed to
+  parse (a typo was enough), silently dropping `volume_group`, `[network]`,
+  `[mesh]` and the rest. It now leaves such a file alone and warns; with
+  `--force` it backs the old file up as `.bak-<timestamp>` and carries the
+  operator's settings (`volume_group`, `thin_pool`, `tls_*`, `advertise_url`,
+  `policy`, `reconcile_interval_secs`, `host_stale_secs`, `[network]`,
+  `[mesh]`, `[[hosts]]`) into the regenerated one. A `--force` token
+  regeneration is backed up and warned about too.
+- A config, state or token file that does not load now exits with status
+  78 (`EX_CONFIG`) and `xdebbied.service` lists it in
+  `RestartPreventExitStatus`, so the failure stays visible in
+  `systemctl status` instead of cycling through bootstrap every few
+  seconds.
+
 ## [0.11.1] - 2026-11-12
 
 ### Fixed

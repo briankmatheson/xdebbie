@@ -166,17 +166,121 @@ pub fn write_config(path: &Path, content: &str) -> Result<()> {
     Ok(())
 }
 
-/// Check if config file exists and is valid
-pub fn config_exists(path: &Path) -> bool {
-    if !path.exists() {
-        return false;
+/// Does the existing config parse? `Err` carries the TOML error.
+pub fn config_parses(path: &Path) -> Result<()> {
+    let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    toml::from_str::<toml::Value>(&text).with_context(|| format!("parsing {}", path.display()))?;
+    Ok(())
+}
+
+/// Copy `path` to `path.bak-<timestamp>` and return the copy's path.
+pub fn back_up(path: &Path) -> Result<std::path::PathBuf> {
+    let stamp = chrono::Local::now().format("%Y%m%d%H%M%S");
+    let mut bak = path.as_os_str().to_owned();
+    bak.push(format!(".bak-{stamp}"));
+    let bak = std::path::PathBuf::from(bak);
+    std::fs::copy(path, &bak).with_context(|| format!("backing up {} to {}", path.display(), bak.display()))?;
+    Ok(bak)
+}
+
+/// Operator settings regeneration must not lose. Scalars replace the
+/// template's line (or are inserted before the first table); tables
+/// replace the template's own `[network]` / `[[hosts]]` blocks.
+const KEEP_SCALARS: &[&str] = &[
+    "volume_group",
+    "thin_pool",
+    "tls_cert",
+    "tls_key",
+    "advertise_url",
+    "policy",
+    "reconcile_interval_secs",
+    "host_stale_secs",
+];
+const KEEP_TABLES: &[&str] = &["network", "mesh", "hosts"];
+
+/// Regenerated config with the operator's settings from `old` carried over.
+/// `old` that does not parse is an error; the caller decides what to do.
+pub fn carry_over(old: &str, generated: &str) -> Result<String> {
+    let old: toml::Table = toml::from_str(old).context("previous config")?;
+    let mut scalars = toml::Table::new();
+    let mut tables = toml::Table::new();
+    for k in KEEP_SCALARS {
+        if let Some(v) = old.get(*k) {
+            scalars.insert(k.to_string(), v.clone());
+        }
+    }
+    for k in KEEP_TABLES {
+        if let Some(v) = old.get(*k) {
+            tables.insert(k.to_string(), v.clone());
+        }
+    }
+    if scalars.is_empty() && tables.is_empty() {
+        return Ok(generated.to_string());
     }
 
-    // Try to parse it
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| toml::from_str::<toml::Value>(&s).ok())
-        .is_some()
+    // Drop the template's own blocks for tables we carry over.
+    let mut lines: Vec<&str> = vec![];
+    let mut skipping = false;
+    for l in generated.lines() {
+        if let Some(name) = table_header(l) {
+            skipping = tables.contains_key(name);
+        }
+        if !skipping {
+            lines.push(l);
+        }
+    }
+
+    let line_for = |k: &str| -> Result<String> {
+        let mut t = toml::Table::new();
+        t.insert(k.to_string(), scalars[k].clone());
+        Ok(toml::to_string(&t)?.trim_end().to_string())
+    };
+    let is_key = |l: &str, k: &str| l.starts_with(k) && l[k.len()..].trim_start().starts_with('=');
+    let mut pending = vec![];
+    for k in scalars.keys() {
+        if !lines.iter().any(|l| is_key(l, k)) {
+            pending.push(line_for(k)?);
+        }
+    }
+
+    let mut out: Vec<String> = vec![];
+    let mut inserted = false;
+    for l in lines {
+        if !inserted && table_header(l).is_some() {
+            if !pending.is_empty() {
+                out.push("# Kept from the previous configuration".into());
+                out.append(&mut pending);
+                out.push(String::new());
+            }
+            inserted = true;
+        }
+        match scalars.keys().find(|k| is_key(l, k)) {
+            Some(k) => out.push(line_for(k)?),
+            None => out.push(l.to_string()),
+        }
+    }
+    if !pending.is_empty() {
+        out.push("# Kept from the previous configuration".into());
+        out.append(&mut pending);
+    }
+    let mut text = out.join("\n");
+    text.push('\n');
+    if !tables.is_empty() {
+        text.push_str("\n# Kept from the previous configuration\n");
+        text.push_str(&toml::to_string(&tables)?);
+    }
+    Ok(text)
+}
+
+/// `[x]`, `[[x]]`, `[x.y]` -> `x`; comments and values -> `None`.
+fn table_header(line: &str) -> Option<&str> {
+    let l = line.trim_start();
+    if !l.starts_with('[') {
+        return None;
+    }
+    let inner = l.trim_start_matches('[');
+    let name = inner.split([']', '.']).next()?.trim();
+    (!name.is_empty()).then_some(name)
 }
 
 #[cfg(test)]
@@ -205,5 +309,70 @@ mod tests {
         assert!(config.contains("listen = \"0.0.0.0:7443\""));
         assert!(config.contains("bridge = \"virbr0\""));
         assert!(config.contains("storage_pool = \"default\""));
+    }
+
+    #[test]
+    fn regeneration_keeps_operator_settings() {
+        let resources = LibvirtResources {
+            networks: vec![super::super::libvirt_setup::NetworkInfo { name: "default".to_string(), bridge: "virbr0".to_string() }],
+            pools: vec![super::super::libvirt_setup::StoragePoolInfo { name: "default".to_string() }],
+        };
+        let old = r#"
+listen = "0.0.0.0:7443"
+state_file = "/var/lib/xdebbie/state.json"
+policy = "pack"
+volume_group = "timesink-vg"
+thin_pool = "abe"
+advertise_url = "https://timesink.example:7443"
+
+[network]
+cidr = "10.23.0.0/16"
+leader_only = true
+
+[mesh]
+enabled = true
+box = 0
+underlay = "wg-flock"
+allow_plain_underlay = true
+
+[mesh.wireguard]
+listen_port = 51820
+
+[[mesh.peers]]
+box = 1
+pubkey = "k"
+endpoint = "gram.example:51820"
+
+[[hosts]]
+name = "timesink.example"
+uri = "qemu:///system"
+abe = "http://10.22.0.1:80"
+cpu_overcommit = 4.0
+"#;
+        // The template emits its own [network] (created subnet) and [[hosts]].
+        let generated = generate_config(&resources, "qemu:///system", Some("192.168.100.0/24"));
+        let merged = carry_over(old, &generated).unwrap();
+        let cfg: crate::config::Config = toml::from_str(&merged).unwrap_or_else(|e| panic!("{e}\n{merged}"));
+
+        assert_eq!(cfg.volume_group.as_deref(), Some("timesink-vg"));
+        assert_eq!(cfg.thin_pool.as_deref(), Some("abe"));
+        assert_eq!(cfg.advertise_url.as_deref(), Some("https://timesink.example:7443"));
+        assert!(merged.contains("policy = \"pack\"") && !merged.contains("policy = \"spread\""));
+        let net = cfg.network.unwrap();
+        assert_eq!(net.cidr.to_string(), "10.23.0.0/16");
+        assert!(net.leader_only);
+        assert!(!merged.contains("192.168.100.0/24"), "template's [network] dropped:\n{merged}");
+        let mesh = cfg.mesh.unwrap();
+        assert!(mesh.enabled);
+        assert_eq!(mesh.peers.len(), 1);
+        assert_eq!(cfg.hosts.len(), 1);
+        assert_eq!(cfg.hosts[0].abe.as_deref(), Some("http://10.22.0.1:80"));
+        assert_eq!(cfg.hosts[0].cpu_overcommit, 4.0);
+        // Generated things still come from the template.
+        assert!(merged.contains("token_file = \"/etc/xdebbie/token\""));
+
+        // Nothing to keep: untouched.
+        assert_eq!(carry_over("listen = \"1.2.3.4:7443\"\n", &generated).unwrap(), generated);
+        assert!(carry_over("not = [toml", &generated).is_err());
     }
 }

@@ -58,7 +58,7 @@ Bootstrap the system with automatic resource discovery and creation.
 
 **Options:**
 
-- `--force` - Overwrite existing configuration and token files
+- `--force` - Regenerate the configuration and token. The old files are kept as `.bak-<timestamp>`; operator settings (`volume_group`, `thin_pool`, `tls_*`, `advertise_url`, `policy`, `[network]`, `[mesh]`, `[[hosts]]`) are carried into the new config. A config that exists but does not parse is never replaced without `--force`
 - `--uri <URI>` - Libvirt URI (default: `qemu:///system`)
 - `--network <NAME>` - Network name to create (default: `xdebbie`)
 - `--subnet <CIDR>` - Network subnet (default: `192.168.100.0/24`)
@@ -241,12 +241,13 @@ sudo apt-get install -y libvirt-daemon-system libvirt-clients qemu-kvm qemu-util
    └─ If no xdebbie pool → mkdir + virsh pool-define + pool-start + pool-autostart
 
 5. Generate Configuration
-   ├─ If config exists and not --force → skip
+   ├─ If config exists and not --force → skip (warn if it does not parse)
+   ├─ If config exists and --force → back up, regenerate, carry operator settings over
    ├─ Generate TOML from template with discovered resources
    └─ Write to /etc/xdebbie/xdebbied.toml
 
 6. Generate Token
-   ├─ If token exists and not --force → reuse
+   ├─ If token exists and not --force → reuse (--force: back up, regenerate, warn)
    ├─ Generate 32 random bytes → hex encode
    ├─ Write to /etc/xdebbie/token with mode 0600
    └─ Write /etc/xdebbie/xdebbie_env with URL and token

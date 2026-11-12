@@ -29,6 +29,14 @@ first connection (`sudo -u xdebbie ssh xdebbie@srv2 true`).
 | Ship a new base image | `build-image.sh v1.37 && push-image.sh … srv1 srv2 srv3 srv4`, then point the machine templates at it |
 | Upgrade Kubernetes | New XDebbie8sMachineTemplate with the new image; bump `version` on KCP and the MachineDeployment |
 
+When xdebbied will not start, `systemctl status xdebbied` shows it: a
+config, state or token file that does not load exits with status 78
+(`EX_CONFIG`) and systemd does not retry, so the error stays put. Fix the
+file and `systemctl restart xdebbied`. `xdebbied bootstrap --force`
+regenerates the config and token; it backs both up as `.bak-<timestamp>`
+and carries `volume_group`, `thin_pool`, `tls_*`, `advertise_url`,
+`policy`, `[network]`, `[mesh]` and `[[hosts]]` into the new file.
+
 For Kubernetes VMs, prefer `kubectl drain` + letting CAPI replace the
 Machine over live migration; it exercises the path you rely on in a failure.
 Live migration exists for pets and for draining quickly.

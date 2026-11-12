@@ -120,7 +120,8 @@ async fn main() -> anyhow::Result<()> {
 
     let cfg = Arc::new(
         config::Config::load(&cli.config)
-            .with_context(|| format!("loading {}", cli.config.display()))?,
+            .with_context(|| format!("loading {}", cli.config.display()))
+            .unwrap_or_else(|e| fatal_config(e)),
     );
 
     // Geneve mesh. The TOML section is validated here; a bad one stops the
@@ -130,7 +131,8 @@ async fn main() -> anyhow::Result<()> {
         cfg.state_dir(),
         cfg.mesh.as_ref(),
     )
-    .context("mesh configuration")?;
+    .context("mesh configuration")
+    .unwrap_or_else(|e| fatal_config(e));
 
     if matches!(cli.cmd, Some(Cmd::Serve { mesh_only: true, .. })) {
         let token = load_token(&cfg)?;
@@ -210,7 +212,7 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let store = store::Store::open(cfg.state_file.clone())?;
+    let store = store::Store::open(cfg.state_file.clone()).unwrap_or_else(|e| fatal_config(e));
     let seeds = cfg.hosts.clone();
     store
         .update(|s| {
@@ -243,7 +245,7 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let token = load_token(&cfg)?;
+    let token = load_token(&cfg).unwrap_or_else(|e| fatal_config(e));
 
     // Resolve listen address once: explicit config > default-route IP > loopback.
     let listen = cfg.effective_listen();
@@ -338,6 +340,15 @@ async fn main() -> anyhow::Result<()> {
         http,
     });
     serve(&cfg, listen, app).await
+}
+
+/// A file on disk is wrong (config, state, token): restarting cannot fix
+/// it, so say so and exit with EX_CONFIG, which the unit lists in
+/// `RestartPreventExitStatus`. The failure then sits in `systemctl status`
+/// instead of cycling through bootstrap every few seconds.
+fn fatal_config(e: anyhow::Error) -> ! {
+    tracing::error!(error = format!("{e:#}"), "cannot start; fix the file and `systemctl restart xdebbied` (not retrying)");
+    std::process::exit(78)
 }
 
 fn load_token(cfg: &config::Config) -> anyhow::Result<Option<Arc<token::Tokens>>> {
