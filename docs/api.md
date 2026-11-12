@@ -8,13 +8,26 @@ Any box in a cluster answers. Hosts, VMs, volumes, failure domains and
 `/v1/schedule` are decided by the elected leader; a follower forwards them
 there and relays the reply (503 with `Retry-After` during an election, 502
 if the leader is unreachable). `/v1/leader`, `/v1/network`, `/v1/mesh*` and
-`/healthz` describe the box you asked. See [autodiscovery.md](autodiscovery.md).
+`/v1/token` and `/healthz` describe the box you asked. See
+[autodiscovery.md](autodiscovery.md).
 
 ## Leader
 
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/v1/leader` | `{this, state, is_leader, leader, peers}`; `leader` is `null` during an election. `xdctl` calls this first and talks to `leader.api_url` |
+
+## Token
+
+One bearer token per cluster; rotation overlaps the old and new until every
+node accepts the new one (docs/operations.md). Fingerprints are the first
+12 hex of SHA-256; the token itself is shown only by `rotate`.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/v1/token` | Local to the box asked: `{id, previous, currentUsed, rotating, nodes}`. `nodes` (leader only) lists each peer as `current`, `overlap`, `installing`, `stale` or `unreachable: …` |
+| PUT | `/v1/token` | Local. `{current, previous}` — the set this box must accept. What the leader pushes to peers; authenticate with any token the box still holds |
+| POST | `/v1/token/rotate` | Leader. 201 `{token, id, previous}`; the only time a token is returned. 409 while an earlier rotation is still being distributed |
 
 ## Hosts
 

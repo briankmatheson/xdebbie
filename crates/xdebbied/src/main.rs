@@ -14,6 +14,7 @@ mod lvm;
 mod mesh;
 mod reconcile;
 mod store;
+mod token;
 
 use std::{path::PathBuf, sync::Arc};
 
@@ -292,6 +293,16 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(rec.run());
     tokio::spawn(mesh.clone().run());
 
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .build()
+        .expect("reqwest client");
+    if let Some(t) = &token {
+        tokio::spawn(
+            token::Distributor { tokens: t.clone(), leadership: leadership.clone(), http: http.clone() }.run(),
+        );
+    }
+
     let dhcp = match (cfg.network.clone(), cfg.dhcp_bridge()) {
         (Some(net), Some(bridge)) => {
             let overlay = mesh.overlay.clone();
@@ -324,22 +335,14 @@ async fn main() -> anyhow::Result<()> {
         dhcp,
         abe: abe::Client::new(),
         leadership,
-        http: reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(300))
-            .build()
-            .expect("reqwest client"),
+        http,
     });
     serve(&cfg, listen, app).await
 }
 
-fn load_token(cfg: &config::Config) -> anyhow::Result<Option<Arc<String>>> {
+fn load_token(cfg: &config::Config) -> anyhow::Result<Option<Arc<token::Tokens>>> {
     Ok(match &cfg.token_file {
-        Some(p) => Some(Arc::new(
-            std::fs::read_to_string(p)
-                .with_context(|| format!("reading {}", p.display()))?
-                .trim()
-                .to_owned(),
-        )),
+        Some(p) => Some(Arc::new(token::Tokens::load(p)?)),
         None => {
             tracing::warn!("no token_file configured: API is unauthenticated");
             None

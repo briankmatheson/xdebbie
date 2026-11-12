@@ -6,8 +6,8 @@
 //!
 //! Only the elected leader answers cluster routes (hosts, VMs, volumes,
 //! scheduling); a follower forwards them to the leader verbatim and relays
-//! the reply (`forward_to_leader`). `/v1/leader`, `/v1/network` and
-//! `/v1/mesh*` describe the box you asked, so they are served locally.
+//! the reply (`forward_to_leader`). `/v1/leader`, `/v1/network`, `/v1/token`
+//! and `/v1/mesh*` describe the box you asked, so they are served locally.
 
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -25,7 +25,7 @@ use xdebbie_core::*;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::{abe, config::Config, leader::Leadership, mesh::MeshManager, store::Store};
+use crate::{abe, config::Config, leader::Leadership, mesh::MeshManager, store::Store, token::Tokens};
 
 pub mod mesh;
 
@@ -39,7 +39,8 @@ const FORWARD_BODY_LIMIT: usize = 16 << 20;
 pub struct App {
     pub store: Store,
     pub cfg: Arc<Config>,
-    pub token: Option<Arc<String>>,
+    /// `None`: unauthenticated (no `token_file`).
+    pub token: Option<Arc<Tokens>>,
     pub mesh: Arc<MeshManager>,
     /// Present when `[network]` is configured (even with `dhcp = false`).
     pub dhcp: Option<Arc<crate::dhcp::DhcpServer>>,
@@ -96,9 +97,11 @@ pub fn router(app: App) -> Router {
         .route("/volumes/{id}", get(get_volume).delete(delete_volume))
         .route("/volumes/{id}/attach", post(attach_volume))
         .route("/volumes/{id}/detach", post(detach_volume))
+        .route("/token/rotate", post(rotate_token))
         .layer(middleware::from_fn_with_state(app.clone(), forward_to_leader))
         // This box: served wherever you ask.
         .route("/leader", get(leader_status))
+        .route("/token", get(token_status).put(put_token))
         .route("/network", get(network))
         .with_state(app.clone())
         .merge(mesh::router(mesh::MeshApi { mesh: app.mesh.clone() }))
@@ -109,14 +112,17 @@ pub fn router(app: App) -> Router {
 }
 
 /// Bearer-token middleware usable by any router (`None` = unauthenticated).
-pub async fn bearer_auth(State(token): State<Option<Arc<String>>>, req: Request, next: Next) -> Response {
-    if let Some(tok) = &token {
-        let ok = req
+pub async fn bearer_auth(State(tokens): State<Option<Arc<Tokens>>>, req: Request, next: Next) -> Response {
+    if let Some(tokens) = &tokens {
+        let presented = req
             .headers()
             .get(header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "))
-            .is_some_and(|v| constant_time_eq(v.as_bytes(), tok.as_bytes()));
+            .and_then(|v| v.strip_prefix("Bearer "));
+        let ok = match presented {
+            Some(p) => tokens.accepts(p).await,
+            None => false,
+        };
         if !ok {
             return ApiErr(
                 StatusCode::UNAUTHORIZED,
@@ -128,8 +134,43 @@ pub async fn bearer_auth(State(token): State<Option<Arc<String>>>, req: Request,
     next.run(req).await
 }
 
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+// ---------- tokens ----------
+
+fn tokens(a: &App) -> R<&Arc<Tokens>> {
+    a.token.as_ref().ok_or_else(|| bad("no token_file configured: this API is unauthenticated"))
+}
+
+async fn token_status(State(a): State<App>) -> R<Json<TokenStatus>> {
+    Ok(Json(tokens(&a)?.status().await))
+}
+
+/// The leader pushes its token set here; also fine to call by hand.
+async fn put_token(State(a): State<App>, Json(set): Json<TokenSet>) -> R<Json<TokenStatus>> {
+    if set.current.trim().is_empty() {
+        return Err(bad("current token must not be empty"));
+    }
+    let t = tokens(&a)?;
+    t.install(set).await?;
+    Ok(Json(t.status().await))
+}
+
+/// Mint a new token. The old one keeps working until every peer has
+/// confirmed the new one; the distributor then retires it everywhere.
+async fn rotate_token(State(a): State<App>) -> R<(StatusCode, Json<TokenRotated>)> {
+    let t = tokens(&a)?;
+    if t.rotating().await {
+        let pending: Vec<_> = t.status().await.nodes.into_iter().filter(|n| n.state != "current").map(|n| n.hostname).collect();
+        return Err(conflict(format!(
+            "a rotation is still being distributed (waiting on: {}); see GET /v1/token",
+            if pending.is_empty() { "nobody yet checked".to_string() } else { pending.join(", ") }
+        )));
+    }
+    let before = t.get().await.current;
+    let token = t.rotate().await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(TokenRotated { id: crate::token::fingerprint(&token), previous: crate::token::fingerprint(&before), token }),
+    ))
 }
 
 // ---------- leader ----------
@@ -830,10 +871,16 @@ mod tests {
         election::state::ElectionStateMachine,
         leader::Leadership,
         mesh::{FakeNetOps, MeshManager},
+        token::Tokens,
     };
 
     /// Serve a router on an ephemeral port; returns its base URL.
     async fn spawn(leadership: Leadership, store: Store) -> String {
+        let tokens = Arc::new(Tokens::in_memory(TokenSet { current: "secret".into(), previous: None }));
+        spawn_with(leadership, store, tokens).await
+    }
+
+    async fn spawn_with(leadership: Leadership, store: Store, tokens: Arc<Tokens>) -> String {
         let dir = tempfile::tempdir().unwrap();
         let f = FakeNetOps::new();
         f.add_bridge("br-int", 1500, "52:54:00:23:00:fe");
@@ -842,7 +889,7 @@ mod tests {
         let app = App {
             store,
             cfg: Arc::new(toml::from_str("state_file = 'unused'").unwrap()),
-            token: Some(Arc::new("secret".into())),
+            token: Some(tokens),
             mesh,
             dhcp: None,
             abe: abe::Client::new(),
@@ -920,5 +967,78 @@ mod tests {
         election.write().await.become_leader();
         let hosts: Vec<Host> = auth(c.get(format!("{follower_url}/v1/hosts"))).send().await.unwrap().json().await.unwrap();
         assert!(hosts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn rotation_overlaps_until_every_peer_took_the_new_token() {
+        use crate::token::{Distributor, Seen};
+        let dir = tempfile::tempdir().unwrap();
+        let shared = || Arc::new(Tokens::in_memory(TokenSet { current: "secret".into(), previous: None }));
+
+        // Follower first, so the leader's peer table can name it.
+        let f_tokens = shared();
+        let follower_url =
+            spawn_with(Leadership::standalone("follower", "http://unused"), Store::open(dir.path().join("f.json")).unwrap(), f_tokens.clone()).await;
+
+        let me = Uuid::new_v4();
+        let election = Arc::new(RwLock::new(ElectionStateMachine::new(me, Duration::from_secs(10), Duration::from_secs(5))));
+        election.write().await.activate();
+        election.write().await.become_leader();
+        let peers = Arc::new(RwLock::new(PeerTable::new()));
+        peers.write().await.insert(PeerInfo::new(Uuid::new_v4(), "follower".into(), follower_url.clone(), 1.0));
+        let leadership = Leadership::for_test(
+            LeaderRef { node_id: Some(me), hostname: "leader".into(), api_url: "http://unused".into() },
+            election,
+            peers,
+        );
+        let l_tokens = shared();
+        let leader_url = spawn_with(leadership.clone(), Store::open(dir.path().join("l.json")).unwrap(), l_tokens.clone()).await;
+
+        let c = reqwest::Client::new();
+        let get = |url: &str, tok: &str| c.get(format!("{url}/v1/token")).bearer_auth(tok).send();
+
+        // Rotate on the leader: new token returned once, old still accepted there.
+        let r = c.post(format!("{leader_url}/v1/token/rotate")).bearer_auth("secret").send().await.unwrap();
+        assert_eq!(r.status(), StatusCode::CREATED);
+        let rotated: TokenRotated = r.json().await.unwrap();
+        assert_eq!(rotated.previous, crate::token::fingerprint("secret"));
+        assert!(get(&leader_url, "secret").await.unwrap().status().is_success());
+        assert!(get(&leader_url, &rotated.token).await.unwrap().status().is_success());
+        // ...but the follower has not heard yet.
+        assert_eq!(get(&follower_url, &rotated.token).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+        // A second rotation while this one is out is refused.
+        let r = c.post(format!("{leader_url}/v1/token/rotate")).bearer_auth(&rotated.token).send().await.unwrap();
+        assert_eq!(r.status(), StatusCode::CONFLICT);
+
+        // Sweep 1: the follower rejects the new token, so the pair is pushed with the old one.
+        let d = Distributor { tokens: l_tokens.clone(), leadership, http: reqwest::Client::new() };
+        let seen = d.sweep().await;
+        assert_eq!(seen[&follower_url], Seen::Installing);
+        assert!(f_tokens.accepts("secret").await && f_tokens.accepts(&rotated.token).await, "overlap on the follower");
+        assert!(l_tokens.rotating().await, "not retired until the follower is confirmed");
+        let st: TokenStatus = get(&leader_url, "secret").await.unwrap().json().await.unwrap();
+        assert_eq!((st.rotating, st.nodes[0].state.as_str()), (true, "installing"));
+
+        // Sweep 2: confirmed with the new token on the follower -> previous retired everywhere.
+        let seen = d.sweep().await;
+        assert_eq!(seen[&follower_url], Seen::Current { overlap: true });
+        assert!(!l_tokens.rotating().await);
+        assert!(!f_tokens.rotating().await);
+        assert_eq!(get(&follower_url, "secret").await.unwrap().status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(get(&leader_url, "secret").await.unwrap().status(), StatusCode::UNAUTHORIZED);
+        assert!(get(&follower_url, &rotated.token).await.unwrap().status().is_success());
+
+        // Steady state: a peer still holding a retired token gets tidied.
+        f_tokens.install(TokenSet { current: rotated.token.clone(), previous: Some("stray".into()) }).await.unwrap();
+        let seen = d.sweep().await;
+        assert_eq!(seen[&follower_url], Seen::Current { overlap: true });
+        assert!(!f_tokens.rotating().await);
+        assert_eq!(d.sweep().await[&follower_url], Seen::Current { overlap: false });
+
+        // A peer that missed the rotation entirely is reported, not fixed.
+        f_tokens.install(TokenSet { current: "else".into(), previous: None }).await.unwrap();
+        assert_eq!(d.sweep().await[&follower_url], Seen::Stale);
+        let st: TokenStatus = get(&leader_url, &rotated.token).await.unwrap().json().await.unwrap();
+        assert_eq!(st.nodes[0].state, "stale");
     }
 }

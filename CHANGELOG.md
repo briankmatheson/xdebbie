@@ -5,6 +5,23 @@ All notable changes to XDebbie will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-11-12
+
+### Added
+- **Token rotation.** `POST /v1/token/rotate` on the leader (`xdctl token
+  rotate`) mints a new bearer token and keeps accepting the old one. The
+  leader pushes the pair to every peer (`PUT /v1/token`, with the token the
+  peer still knows) and confirms each with `GET /v1/token` using the new
+  token; when every peer is confirmed the old token is retired everywhere,
+  peers first, leader last. `GET /v1/token` / `xdctl token status` show
+  fingerprints and each peer's state (`current`, `overlap`, `installing`,
+  `stale`, `unreachable`). On disk: `token_file` always holds the current
+  token, `token_file.previous` exists during a rotation (a restart resumes
+  it), and `export XDEBBIE_TOKEN=` in `xdebbie_env` is rewritten. A slow
+  sweep afterwards tidies peers still holding a retired token and reports
+  ones that missed the rotation as `stale`. `TokenStatus`, `TokenNode`,
+  `TokenSet`, `TokenRotated` in `xdebbie-core`.
+
 ## [0.10.0] - 2026-11-12
 
 ### Changed

@@ -16,7 +16,8 @@ open the multicast socket, is its own leader. Nothing else changes.
 |---|---|---|
 | Reconciler (`inventory → schedule → step VMs`) | runs every `reconcile_interval_secs` | idle (`follower: reconciler idle, the leader decides` in the log) |
 | `/v1/hosts`, `/v1/vms`, `/v1/volumes`, `/v1/failure-domains`, `/v1/schedule` | answers from its store | forwards to the leader verbatim, relays status, headers and body |
-| `/v1/leader`, `/v1/network`, `/v1/mesh*`, `/healthz` | local | local (they describe the box you asked) |
+| `/v1/leader`, `/v1/network`, `/v1/token`, `/v1/mesh*`, `/healthz` | local | local (they describe the box you asked) |
+| Token rotation (`/v1/token/rotate`) | mints, distributes to peers, retires the old one | forwards |
 | DHCP responder | answers | answers unless `[network] leader_only = true` |
 
 Forwarding adds one header, `X-Xdebbie-Forwarded-By: <hostname>`. A request
@@ -26,7 +27,8 @@ While an election is running a follower answers `503` with
 `Retry-After: 2`. If the leader cannot be reached the follower answers
 `502` naming it. Bearer auth is checked on the box you asked, then the
 `Authorization` header travels with the request, so every box in a cluster
-must share one token.
+must share one token — `xdctl token rotate` changes it everywhere
+(docs/operations.md).
 
 ## `GET /v1/leader`
 

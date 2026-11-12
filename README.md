@@ -187,6 +187,10 @@ sudo journalctl -u xdebbied -f | grep -i discovery
 
 # Check who's the leader
 xdctl leader
+
+# Rotate the API token cluster-wide (old one works until every node has the new)
+xdctl token rotate
+xdctl token status
 ```
 
 See [BOOTSTRAP.md](BOOTSTRAP.md) for detailed bootstrap documentation and

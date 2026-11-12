@@ -469,6 +469,53 @@ pub struct LeaderStatus {
     pub peers: usize,
 }
 
+/// `GET /v1/token`: which bearer tokens this box accepts, by fingerprint
+/// (first 12 hex of SHA-256; the tokens themselves never leave a box
+/// except in `PUT /v1/token`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TokenStatus {
+    /// Fingerprint of the current token.
+    pub id: String,
+    /// Fingerprint of the previous token, still accepted while a rotation
+    /// is being distributed.
+    pub previous: Option<String>,
+    /// A request has authenticated with the current token on this box.
+    pub current_used: bool,
+    /// A rotation is in progress (the previous token is still accepted).
+    pub rotating: bool,
+    /// What the leader last saw on each peer; empty on followers.
+    #[serde(default)]
+    pub nodes: Vec<TokenNode>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TokenNode {
+    pub hostname: String,
+    pub api_url: String,
+    /// `current`: accepts the current token (and nothing older);
+    /// `overlap`: accepts current and previous; `installing`: new set
+    /// pushed, not yet confirmed; `stale`: rejects every token we hold;
+    /// `unreachable: <why>`.
+    pub state: String,
+}
+
+/// `PUT /v1/token`: the set a box must accept. Sent by the leader.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TokenSet {
+    pub current: String,
+    #[serde(default)]
+    pub previous: Option<String>,
+}
+
+/// `POST /v1/token/rotate` reply. The only time a token is shown.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TokenRotated {
+    pub token: String,
+    pub id: String,
+    /// Fingerprint of the token being retired.
+    pub previous: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LeaderRef {
     /// Election identity; `None` when running standalone.

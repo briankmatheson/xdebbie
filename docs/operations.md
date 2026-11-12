@@ -43,8 +43,20 @@ not stop running VMs; it only makes xdebbied forget them.
 
 - xdebbied holds an SSH key that can drive libvirt on every host, which is
   root-equivalent there. Treat the xdebbied box accordingly.
-- The API is protected by one bearer token. Run it with TLS (`tls_cert`,
-  `tls_key`) whenever it listens off loopback; xdebbied warns if you do not.
+- The API is protected by one bearer token, shared by every box in a
+  cluster. Run it with TLS (`tls_cert`, `tls_key`) whenever it listens off
+  loopback; xdebbied warns if you do not.
+- Rotate it with `xdctl token rotate`. The leader mints a new token, keeps
+  accepting the old one, and pushes the pair to every peer; once each peer
+  has authenticated a request with the new token the old one is retired
+  everywhere, peers first. `xdctl token status` shows where each peer
+  stands (`current`, `overlap`, `installing`, `stale`, `unreachable`).
+  Each box rewrites `export XDEBBIE_TOKEN=` in its `/etc/xdebbie/xdebbie_env`
+  as it switches; re-source it, and update other holders (the abe-csi
+  secret, CAPX). A box that is down for the whole rotation ends up `stale`
+  and must be given the current token by hand (`PUT /v1/token`, or copy
+  `/etc/xdebbie/token` from the leader and restart). A leader restart
+  resumes an unfinished rotation from `/etc/xdebbie/token.previous`.
 - Bootstrap data (which contains cluster join tokens) is stored in
   state.json and in a seed volume on the host. Restrict both.
 - capq needs `get` on Secrets cluster-wide to read bootstrap data. Scope it

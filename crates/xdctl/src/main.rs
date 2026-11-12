@@ -58,6 +58,9 @@ enum Cmd {
     Fd,
     /// Which xdebbied decides for the cluster.
     Leader,
+    /// API bearer token: status and rotation.
+    #[command(subcommand)]
+    Token(TokenCmd),
     /// Geneve mesh between hypervisors.
     #[command(subcommand)]
     Mesh(MeshCmd),
@@ -73,6 +76,15 @@ enum Cmd {
         #[arg(value_enum)]
         shell: Shell,
     },
+}
+
+#[derive(Subcommand)]
+enum TokenCmd {
+    /// Which tokens the leader accepts and where each peer stands.
+    Status,
+    /// Mint a new token on the leader. The old one keeps working until
+    /// every node has taken the new one; then it is retired everywhere.
+    Rotate,
 }
 
 #[derive(Subcommand)]
@@ -723,6 +735,42 @@ fn main() -> Result<()> {
                 Some(l) => println!("leader  {}", who(l)),
                 None => println!("leader  none yet"),
             }
+        }
+        Cmd::Token(TokenCmd::Status) => {
+            let v = api.call(Method::GET, "/token", None)?;
+            if cli.json {
+                return out(v);
+            }
+            let st: TokenStatus = serde_json::from_value(v)?;
+            println!("current   {}{}", st.id, if st.current_used { "  (in use)" } else { "" });
+            match &st.previous {
+                Some(p) => println!("previous  {}  (still accepted: rotation in progress)", p),
+                None => println!("previous  none"),
+            }
+            if !st.nodes.is_empty() {
+                println!("{:<32} {:<28} STATE", "PEER", "URL");
+                for n in &st.nodes {
+                    println!("{:<32} {:<28} {}", n.hostname, n.api_url, n.state);
+                }
+            }
+        }
+        Cmd::Token(TokenCmd::Rotate) => {
+            let (code, v) = api.call_raw(Method::POST, "/token/rotate", None, None)?;
+            if !code.is_success() {
+                bail!("{code}: {}", api_error_text(&v));
+            }
+            if cli.json {
+                return out(v);
+            }
+            let r: TokenRotated = serde_json::from_value(v)?;
+            println!("new token {}  (replaces {})", r.id, r.previous);
+            println!();
+            println!("export XDEBBIE_TOKEN='{}'", r.token);
+            println!();
+            println!("The old token keeps working until every node has the new one, then it is");
+            println!("retired. /etc/xdebbie/xdebbie_env is updated on each node as it switches;");
+            println!("re-source it, and update any other holder (abe-csi secret, CAPX). Watch with");
+            println!("`xdctl token status`.");
         }
         Cmd::Fd => {
             let v = api.call(Method::GET, "/failure-domains", None)?;
