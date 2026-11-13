@@ -5,6 +5,15 @@ All notable changes to XDebbie will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.6] - 2026-11-13
+
+### Fixed
+- `virsh start` on a domain that is already running is a no-op instead of
+  an error. A VM whose domain briefly looked missing (e.g. across a daemon
+  upgrade) was pushed back to `Provisioning` and then stuck there forever on
+  "Domain is already active", which also blocked every volume attach to it
+  ("waiting for vm (Provisioning)").
+
 ## [0.16.5] - 2026-11-13
 
 ### Added

@@ -1060,9 +1060,14 @@ impl Hypervisor for Virsh {
         if vm.spec.storage == Storage::Abe {
             self.ensure_connected(vm).await?;
         }
-        self.run(&host.uri, &["start", &vm.domain_name()])
-            .await
-            .map(drop)
+        // Idempotent: a VM that is already up (started by hand, by libvirt
+        // autostart, or by a reconcile that lost its reply) must not wedge
+        // in Provisioning with "Domain is already active".
+        match self.run(&host.uri, &["start", &vm.domain_name()]).await {
+            Ok(_) => Ok(()),
+            Err(e) if e.to_string().contains("already active") => Ok(()),
+            Err(e) => Err(e),
+        }
     }
     async fn shutdown(&self, host: &Host, vm: &Vm, force: bool) -> Result<()> {
         let cmd = if force { "destroy" } else { "shutdown" };
