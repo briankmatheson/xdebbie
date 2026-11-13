@@ -16,6 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per box.
 
 ### Fixed
+- ABE capacity went stale on every host 60 s after a 0.16.5 leader started
+  and never came back: the leader's agent dispatch forwarded every
+  hypervisor call but `abe_utilization` and `refresh_endpoints`, which fell
+  through to the trait defaults (no reading, nothing refreshed). With both
+  readings gone the scheduler answered every ABE VM with "abe capacity
+  unknown" on every host. Both now go through `POST /v1/agent/abe-utilization`
+  and `/v1/agent/refresh-endpoints` on the host's box (local when that is
+  the leader).
 - Issued API certificates carry an Authority Key Identifier. OpenSSL 3 in
   strict mode (Python 3.13's default) refused the chain without it:
   "Missing Authority Key Identifier". Existing certs are not reissued;

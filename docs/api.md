@@ -86,7 +86,7 @@ Host body:
 | POST | `/v1/vms/{uuid}/reboot` | Running VMs only |
 | POST | `/v1/vms/{uuid}/migrate` | `{"host": "srv2"}` or `{}` for scheduler's choice |
 | POST | `/v1/schedule` | Dry run. Body is a VmSpec; returns ranked hosts or 422 with reasons |
-| POST | `/v1/agent/{op}` | This box, never forwarded: the leader's hypervisor calls for hosts this daemon owns (`inventory`, `state`, `prepare-disks`, `provision`, `start`, `shutdown`, `reboot`, `destroy`, `addresses`, `tap-owners`, `migrate`, `attach-volume`, `detach-volume`). Body `{host, vm, ...}`, reply the call's result; cluster token or peer certificate |
+| POST | `/v1/agent/{op}` | This box, never forwarded: the leader's hypervisor calls for hosts this daemon owns (`inventory`, `abe-utilization`, `refresh-endpoints`, `state`, `prepare-disks`, `provision`, `start`, `shutdown`, `reboot`, `destroy`, `addresses`, `tap-owners`, `migrate`, `attach-volume`, `detach-volume`). Body `{host, vm, ...}`, reply the call's result; cluster token or peer certificate |
 
 VmSpec:
 

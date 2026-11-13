@@ -20,7 +20,7 @@ use std::{collections::HashMap, sync::Arc};
 use anyhow::{Context, Result, bail};
 use axum::{Json, Router, extract::State, routing::post};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use xdebbie_core::{Address, ApiError, Attachment, Capacity, Disk, Host, Vm, Volume};
+use xdebbie_core::{AbeCapacity, Address, ApiError, Attachment, Capacity, Disk, Host, Vm, Volume};
 
 use crate::{
     api::ApiErr,
@@ -81,6 +81,20 @@ pub struct MigrateReq {
 #[derive(Serialize, Deserialize)]
 pub struct StateResp {
     pub state: Option<DomState>,
+}
+#[derive(Serialize, Deserialize)]
+pub struct AbeResp {
+    pub capacity: Option<AbeCapacity>,
+}
+#[derive(Serialize, Deserialize)]
+pub struct RefreshReq {
+    pub host: Host,
+    pub disks: Vec<Disk>,
+}
+#[derive(Serialize, Deserialize)]
+pub struct RefreshResp {
+    pub disks: Vec<Disk>,
+    pub changed: bool,
 }
 #[derive(Serialize, Deserialize)]
 pub struct TargetResp {
@@ -167,6 +181,41 @@ impl<H: Hypervisor> Hypervisor for Dispatch<H> {
                     .await
             }
             None => self.local.inventory(&localize(&self.cfg, host)).await,
+        }
+    }
+
+    /// Asked where the VMs run: the ABE answers anyone, but the reading
+    /// is one more thing the agent owns (its client, its TLS trust).
+    async fn abe_utilization(&self, host: &Host) -> Result<Option<AbeCapacity>> {
+        match self.agent(host) {
+            Some(a) => {
+                let r: AbeResp = self
+                    .call(a, "abe-utilization", &HostReq { host: host.clone() })
+                    .await?;
+                Ok(r.capacity)
+            }
+            None => self.local.abe_utilization(&localize(&self.cfg, host)).await,
+        }
+    }
+
+    /// Runs where the disks are connected: only that box knows which of
+    /// its NVMe controllers are up.
+    async fn refresh_endpoints(&self, host: &Host, disks: &mut Vec<Disk>) -> Result<bool> {
+        match self.agent(host) {
+            Some(a) => {
+                let req = RefreshReq {
+                    host: host.clone(),
+                    disks: disks.clone(),
+                };
+                let r: RefreshResp = self.call(a, "refresh-endpoints", &req).await?;
+                *disks = r.disks;
+                Ok(r.changed)
+            }
+            None => {
+                self.local
+                    .refresh_endpoints(&localize(&self.cfg, host), disks)
+                    .await
+            }
         }
     }
 
@@ -411,6 +460,8 @@ impl<H> Clone for AgentApi<H> {
 pub fn router<H: Hypervisor>(api: AgentApi<H>) -> Router {
     Router::new()
         .route("/agent/inventory", post(inventory::<H>))
+        .route("/agent/abe-utilization", post(abe_utilization::<H>))
+        .route("/agent/refresh-endpoints", post(refresh_endpoints::<H>))
         .route("/agent/state", post(state::<H>))
         .route("/agent/prepare-disks", post(prepare_disks::<H>))
         .route("/agent/provision", post(provision::<H>))
@@ -440,6 +491,29 @@ async fn inventory<H: Hypervisor>(
         .await
         .map(Json)
         .map_err(err)
+}
+async fn abe_utilization<H: Hypervisor>(
+    State(a): State<AgentApi<H>>,
+    Json(q): Json<HostReq>,
+) -> R<AbeResp> {
+    let capacity =
+        a.hv.abe_utilization(&localize(&a.cfg, &q.host))
+            .await
+            .map_err(err)?;
+    Ok(Json(AbeResp { capacity }))
+}
+async fn refresh_endpoints<H: Hypervisor>(
+    State(a): State<AgentApi<H>>,
+    Json(mut q): Json<RefreshReq>,
+) -> R<RefreshResp> {
+    let changed =
+        a.hv.refresh_endpoints(&localize(&a.cfg, &q.host), &mut q.disks)
+            .await
+            .map_err(err)?;
+    Ok(Json(RefreshResp {
+        disks: q.disks,
+        changed,
+    }))
 }
 async fn state<H: Hypervisor>(State(a): State<AgentApi<H>>, Json(q): Json<VmReq>) -> R<StateResp> {
     let state =
@@ -612,6 +686,29 @@ mod tests {
                 disk_free_gib: 77,
             })
         }
+        async fn abe_utilization(&self, h: &Host) -> Result<Option<AbeCapacity>> {
+            self.log(h, "abe_utilization");
+            Ok(h.abe.as_ref().map(|_| AbeCapacity {
+                thin: true,
+                bytes: 100 << 30,
+                used_bytes: 10 << 30,
+                free_bytes: 90 << 30,
+                provisioned_bytes: 30 << 30,
+                data_percent: 10.0,
+                metadata_percent: None,
+                tls: true,
+                seen: chrono::Utc::now(),
+            }))
+        }
+        async fn refresh_endpoints(&self, h: &Host, disks: &mut Vec<Disk>) -> Result<bool> {
+            self.log(h, "refresh_endpoints");
+            let mut changed = false;
+            for d in disks.iter_mut().filter(|d| d.port == "4420") {
+                d.port = "4421".into();
+                changed = true;
+            }
+            Ok(changed)
+        }
         async fn state(&self, h: &Host, v: &Vm) -> Result<Option<DomState>> {
             self.log(h, "state");
             Ok(self
@@ -722,6 +819,13 @@ mod tests {
 
         let cap = d.inventory(&h).await.unwrap();
         assert_eq!(cap.disk_free_gib, 77);
+        // the ABE reading comes from the agent too (0.16.5 left it on the
+        // trait default and every host's capacity went stale)
+        assert_eq!(d.abe_utilization(&h).await.unwrap(), None);
+        let mut with_abe = h.clone();
+        with_abe.abe = Some("https://10.22.1.1:443".into());
+        let abe = d.abe_utilization(&with_abe).await.unwrap().unwrap();
+        assert!(abe.thin && abe.tls && abe.bytes == 100 << 30);
         assert_eq!(d.state(&h, &v).await.unwrap(), None);
         d.provision(&h, &v).await.unwrap();
         assert_eq!(d.state(&h, &v).await.unwrap(), Some(DomState::Running));
@@ -758,6 +862,10 @@ mod tests {
             .to_string();
         assert_eq!(e, "second disk failed");
         assert_eq!(disks.len(), 1);
+        // endpoints are refreshed where the disks are connected
+        assert!(d.refresh_endpoints(&h, &mut disks).await.unwrap());
+        assert_eq!(disks[0].port, "4421");
+        assert!(!d.refresh_endpoints(&h, &mut disks).await.unwrap());
         d.destroy(&h, &v).await.unwrap();
         assert_eq!(d.state(&h, &v).await.unwrap(), None);
 
