@@ -18,6 +18,10 @@
 #   capacity  15 GiB pool: the first 10 GiB VM runs, the second stays
 #             Pending ("abe capacity"), POST /v1/volumes for 10 GiB → 507.
 #   noabe     a host without [[hosts]].abe: the VM stays Pending ("no abe").
+#   tls       the daemon carries a cluster identity (tls_cert/tls_key/ca_file
+#             from an openssl-made CA, so its ABE client presents a client
+#             certificate) and still talks to the plain-http fake; host ls
+#             reports the fake's `"tls": false`.
 #
 # Usage: tests/abe/run.sh            (builds release binaries if missing)
 set -euo pipefail
@@ -72,10 +76,26 @@ start_fake() { # env assignments...
   for _ in $(seq 1 50); do curl -s http://127.0.0.1:8000/_calls >/dev/null 2>&1 && break; sleep 0.1; done
 }
 
-# start_env <phase> [NOABE=1] [FAKE_ABE_*=... for the fake]
+# A CA plus a localhost cert signed by it (serverAuth + clientAuth, like
+# bootstrap's api-cert.pem), for a daemon that serves https and presents a
+# client certificate: $WORK/pki/{ca,cert,key}.pem.
+make_pki() {
+  local d="$WORK/pki"; mkdir -p "$d"
+  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 2 \
+    -subj "/CN=xdebbie test CA" -keyout "$d/ca-key.pem" -out "$d/ca.pem" \
+    -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" >/dev/null 2>&1
+  openssl req -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+    -subj "/CN=localhost" -keyout "$d/key.pem" -out "$d/csr.pem" >/dev/null 2>&1
+  printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth,clientAuth\nbasicConstraints=CA:FALSE\n' > "$d/ext.cnf"
+  openssl x509 -req -in "$d/csr.pem" -CA "$d/ca.pem" -CAkey "$d/ca-key.pem" -CAcreateserial \
+    -days 2 -extfile "$d/ext.cnf" -out "$d/cert.pem" >/dev/null 2>&1
+}
+
+# start_env <phase> [NOABE=1] [TLS=1] [FAKE_ABE_*=... for the fake]
 start_env() {
   local phase=$1; shift
   local noabe=0; [[ "${1:-}" == NOABE=1 ]] && { noabe=1; shift; }
+  local tls=0; [[ "${1:-}" == TLS=1 ]] && { tls=1; shift; }
   WORK="$BASE/$phase"
   mkdir -p "$WORK/sys" "$WORK/byid" "$WORK/abe" "$WORK/bin" "$WORK/pool" "$WORK/doms"
   # the daemon looks for /dev/disk/by-id/nvme-uuid.<id>; own that directory
@@ -89,9 +109,14 @@ start_env() {
   start_fake "$@"
   sed "s#@WORK@#$WORK#g" "$HERE/xdebbied.toml.in" > "$WORK/xdebbied.toml"
   [ $noabe = 1 ] && sed -i '/^abe = /d' "$WORK/xdebbied.toml"
+  X="$XDCTL --url http://127.0.0.1:7443"
+  if [ $tls = 1 ]; then
+    make_pki
+    sed -i "1a tls_cert = \"$WORK/pki/cert.pem\"\ntls_key = \"$WORK/pki/key.pem\"\nca_file = \"$WORK/pki/ca.pem\"\npeer_ca_dir = \"$WORK/pki/peers\"" "$WORK/xdebbied.toml"
+    X="$XDCTL --url https://127.0.0.1:7443 --ca $WORK/pki/ca.pem"
+  fi
   FAKE_IMAGE_BYTES=$IMG_BYTES RUST_LOG=${RUST_LOG:-info} "$XDEBBIED" --config "$WORK/xdebbied.toml" serve >"$WORK/xdebbied.log" 2>&1 &
   DPID=$!
-  X="$XDCTL --url http://127.0.0.1:7443"
   for _ in $(seq 1 150); do $X host ls >/dev/null 2>&1 && break; sleep 0.1; done
   $X host ls >/dev/null 2>&1 || { echo "daemon did not come up:"; cat "$WORK/xdebbied.log"; exit 1; }
   echo "=== phase $phase ($WORK)"
@@ -343,6 +368,28 @@ if [ "$($X vm describe "$id" | j 'd["phase"]')" = Pending ] && [[ "$msg" == *"no
   pass "N1: no host with abe: the VM stays Pending ($msg); POST /v1/volumes → 503; host ls shows - for ABE"
 else
   flunk "N1: msg='$msg' r=$r phase=$($X vm describe "$id" | j 'd["phase"]')"
+fi
+stop_env
+
+############################################################################
+# The daemon built with a cluster identity (what every real box has): its
+# ABE client presents the cert, which must not get in the way of a plain
+# http:// ABE. The API itself is https here, so xdctl needs --ca.
+start_env tls TLS=1
+id=$($X vm create tls-vm --image img --cpus 1 --memory-mib 256 --disk-gib 2 --storage abe --json | j 'd["id"]')
+phase=$(wait_phase "$id" Running)
+sleep 1.5   # one inventory tick, so abeCapacity (and its tls flag) is there
+hl=$($X host ls)
+# (the log carries ansi colour codes around the `=`)
+if [ "$phase" = Running ] && grep -q 'client_cert.\{0,16\}true' "$WORK/xdebbied.log" \
+   && grep -q 'serving https' "$WORK/xdebbied.log" \
+   && [ "$(j 'len([p for m,p in d if p=="/version"])' <<<"$(calls)")" -ge 1 ] \
+   && [ "$($X host describe h1 | j 'd["abeCapacity"]["tls"]')" = False ] \
+   && grep -E -q '^h1 .* [0-9]+/[0-9]+ no +Ready' <<<"$hl" \
+   && ! grep -q 'tls: ' "$WORK/xdebbied.log"; then
+  pass "T1: daemon with tls_cert/tls_key/ca_file (client cert loaded, API on https) still provisions on the http fake; host ls shows TLS=no for a 0.4.0 abe"
+else
+  flunk "T1: phase=$phase hostls=$(tail -1 <<<"$hl") describe=$($X host describe h1 | j 'd.get("abeCapacity")') log=$(grep -E 'client_cert|serving|tls' "$WORK/xdebbied.log" | sed 's/\x1b\[[0-9;]*m//g' | head -5)"
 fi
 stop_env
 

@@ -2,7 +2,7 @@
 """Stand-in for abe 0.4.0's HTTP API (see abe/README.md): volumes are plain
 files under $FAKE_ABE_DIR so the test can inspect what xdebbied did.
 
-  GET /version                         -> {version, features} (404 if FAKE_ABE_LEGACY=1)
+  GET /version                         -> {version, features, tls:false} (404 if FAKE_ABE_LEGACY=1)
   GET /configure?bytes=N&raw=true      -> Message {message,id,port,traddr,nqn,bytes,existing}
       &name=<n>                        -> same volume again with existing:true
       ?base=<image>&bytes=N            -> Message + base, sealed (port "" once sealed)
@@ -86,7 +86,8 @@ class H(BaseHTTPRequestHandler):
         state["calls"].append(["GET", self.path])
         if u.path == "/version":
             if LEGACY: return self.send(404, {"error": "no route"})
-            return self.send(200, {"version": "0.4.0", "features": ["reexport", "ports", "name", "trim", "base", "clone"]})
+            # a 0.4.0 abe: plain http, no fence; "tls" is what 0.5.0 adds to the reply
+            return self.send(200, {"version": "0.4.0", "features": ["reexport", "ports", "name", "trim", "base", "clone"], "tls": False})
         if u.path == "/configure":
             if state["fail_first"]:
                 state["fail_first"] = False
