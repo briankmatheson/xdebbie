@@ -19,8 +19,9 @@ version yet.
 
 ## How it works
 
-1. `[[hosts]].abe = "http://<addr>:<port>"` tells xdebbied where each host's
-   ABE API is. Hosts without it cannot run `storage = abe` VMs: the
+1. `[[hosts]].abe = "https://<addr>:<port>"` tells xdebbied where each host's
+   ABE API is (`http://` for an ABE before 0.5.0; the scheme is used as
+   written, nothing rewrites it). Hosts without it cannot run `storage = abe` VMs: the
    scheduler skips them (`no abe`) and the VM stays `Pending` until a host
    with an ABE and enough [capacity](#capacity-accounting) exists.
 2. When an `abe` VM is provisioned the driver asks ABE for its disks and
@@ -28,10 +29,10 @@ version yet.
 
    ```json
    "disks": [
-     {"role": "root", "server": "http://10.22.0.1:80", "traddr": "10.22.0.1",
+     {"role": "root", "server": "https://10.22.0.1:443", "traddr": "10.22.0.1",
       "port": "44001", "id": "3f2c…", "bytes": 10737418240, "populated": true,
       "origin": "b7e1…"},
-     {"role": "data", "server": "http://10.22.0.1:80", "traddr": "10.22.0.1",
+     {"role": "data", "server": "https://10.22.0.1:443", "traddr": "10.22.0.1",
       "port": "44002", "id": "9a01…", "bytes": 107374182400, "populated": true}
    ]
    ```
@@ -126,7 +127,7 @@ that fits nowhere stays `Pending` with the per-host reasons in `message`.
 
 ```toml
 [[hosts]]
-abe = "http://10.22.1.1:80"
+abe = "https://10.22.1.1:443"
 abe_overcommit = 1.0            # promised bytes may reach bytes × this (thin pools only)
 abe_max_data_percent = 85.0     # refuse new volumes when the pool's data is fuller
 abe_max_metadata_percent = 80.0 # … or its metadata
@@ -186,14 +187,19 @@ limitation as above).
 ## Setting up a host
 
 ```sh
-# the exporter (abe >= 0.2.0), see abe/README.md
-sudo apt install ./abe_0.2.0-1_amd64.deb nvme-cli
+# the exporter (abe >= 0.5.0), see abe/README.md
+sudo apt install ./abe-block-exporter_0.5.0-1_amd64.deb nvme-cli
 sudo tee /etc/default/abe <<'EOF'
 ABE_VG=timesink-vg            # any VG; a thin pool is recommended
 ABE_THIN_POOL=xdebbie-pool
 ABE_TRADDR=10.22.0.1          # bind nvmet ports and the API to the WireGuard
 ABE_ADVERTISE=10.22.0.1       # underlay address only: reachable from other
-ABE_LISTEN=10.22.0.1:80       # hypervisors, not from the LAN or from guests
+ABE_LISTEN=10.22.0.1:443      # hypervisors, not from the LAN or from guests
+# the API is mutual TLS; reuse xdebbie's cluster identity (every box's
+# api-cert.pem carries serverAuth + clientAuth, and abe runs as root)
+ABE_TLS_CERT=/etc/xdebbie/api-cert.pem
+ABE_TLS_KEY=/etc/xdebbie/api-key.pem
+ABE_TLS_CA=/etc/xdebbie/api-ca.pem
 EOF
 # wg-flock is created by xdebbied, so make abe wait for it at boot
 sudo mkdir -p /etc/systemd/system/abe.service.d
@@ -208,15 +214,45 @@ sudo modprobe nvme-tcp && echo nvme-tcp | sudo tee /etc/modules-load.d/nvme-tcp.
 
 # tell xdebbied
 sudo tee -a /etc/xdebbie/xdebbied.toml <<'EOF'   # inside the host's [[hosts]] block
-abe = "http://10.22.0.1:80"
+abe = "https://10.22.0.1:443"
 EOF
 sudo systemctl restart xdebbied
 ```
 
 Then `xdctl vm create demo --image debian-13 --disk-gib 10 --storage abe`.
 `xdctl vm describe demo | jq .disks` shows the volumes; `nvme list` on the
-host shows them attached; `curl -s http://10.22.0.1/volumes` shows them on
-the exporter.
+host shows them attached; `curl --cacert /etc/xdebbie/api-ca.pem --cert
+/etc/xdebbie/api-cert.pem --key /etc/xdebbie/api-key.pem
+https://10.22.0.1/volumes` shows them on the exporter. `xdctl host ls` has a
+`TLS` column (`yes` once `/version` says so, `no` for an older ABE).
+
+### TLS
+
+xdebbied talks to ABE with the same client it uses for other boxes
+(`Config::http_client`): the cluster CA (`ca_file` plus every PEM in
+`peer_ca_dir`) as trust roots and this box's `tls_cert`/`tls_key` as its
+client certificate. An ABE 0.5.0 on the paths above therefore admits
+exactly the xdebbieds enrolled under the cluster CA and nothing else: no
+token, no extra configuration. A refused handshake shows up in the log and
+in the host's inventory error as `tls: <reason>` (for example `tls: invalid
+peer certificate: UnknownIssuer` when the CA paths disagree) rather than as
+a timeout. TLS applies to `https://` URLs only, so an `http://` host record
+keeps working for an ABE 0.4.0 that has not been upgraded.
+
+### Port fence
+
+ABE opens an nvmet port only to the box that asked for it: the client
+address of the TLS connection that made the `/configure`, `GET /id` or
+`/clone` call goes into an nftables set on the ABE host, and every other
+source gets a TCP reset on that port. Nothing in xdebbie had to change for
+this: `nvme connect` always runs on the box that made the ABE call (attach
+is local), and the [endpoint refresh](#endpoint-refresh) already asks
+`GET /id/<id>` for every disk that is not connected before connecting, so
+after moving a VM or restoring ABE the next reconcile re-asks and the port
+follows. An ABE restarted with volumes exported by 0.4.0 (no client
+recorded) adopts the one established connection it finds on each port; a
+port with none stays closed until the next `GET /id`, which the reconciler
+makes.
 
 ### Addresses
 
@@ -228,8 +264,9 @@ host reaches its own underlay address too. The ABE HTTP API only needs to be
 reachable by the xdebbied that schedules VMs onto that host.
 
 Bind both the API (`ABE_LISTEN`) and nvmet (`ABE_TRADDR`) to that same
-underlay address: the API has no authentication, so it must not be reachable
-from the LAN or from guests on the bridge. The cost is that abe then depends
+underlay address: the API admits only cluster certificates and the nvmet
+ports are fenced to their caller, but neither should be reachable from the
+LAN or from guests on the bridge in the first place. The cost is that abe then depends
 on `wg-flock` existing, hence the `After=xdebbied.service` drop-in above.
 ABE opens one TCP port per volume (`44001`, `44002`, …) in the 44000-44999
 range.
@@ -241,7 +278,7 @@ on the underlay only, which `simple/bin/setup_abe_host.py` does:
 
 ```sh
 sudo ufw allow in on wg-flock proto tcp from 10.22.0.0/16 to any port 44000:44999 comment 'abe nvme/tcp'
-sudo ufw allow in on wg-flock proto tcp from 10.22.0.0/16 to any port 80 comment 'abe api'
+sudo ufw allow in on wg-flock proto tcp from 10.22.0.0/16 to any port 443 comment 'abe api'
 ```
 
 Guests on the bridge arrive on `virbr-xdebbie`, not `wg-flock`, so they
@@ -253,7 +290,7 @@ cannot reach ABE even though 10.22.0.1 is routable from them.
 [[hosts]]
 name = "timesink"
 uri = "qemu:///system"
-abe = "http://10.22.0.1:80"     # this host's ABE API (underlay address)
+abe = "https://10.22.0.1:443"   # this host's ABE API (underlay address)
 abe_overcommit = 1.0            # thin pool: promised bytes may reach bytes × this
 abe_max_data_percent = 85.0     # refuse new volumes above this data usage
 abe_max_metadata_percent = 80.0 # … or this metadata usage
@@ -267,7 +304,8 @@ nvme_sys = "/sys/class/nvme"
 `VmSpec.storage`: `local` | `abe` (default `local`). `Vm.disks[]`: `role`
 (`root`|`data`), `server`, `traddr`, `port`, `id` (== NQN), `bytes`,
 `populated`, `origin` (base id for a thin clone, absent otherwise).
-`Host.abeCapacity` is the last `/utilization` reading; `Volume.deleting`
+`Host.abeCapacity` is the last `/utilization` reading (its `tls` says the
+ABE's `/version` reports mutual TLS); `Volume.deleting`
 is set while a delete is in flight or failed. All of these are optional in
 the state file, so a 0.14 `state.json` loads unchanged.
 

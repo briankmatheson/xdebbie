@@ -36,7 +36,8 @@ pub struct Host {
     /// CPU overcommit ratio (vCPU : pCPU). 1.0 = no overcommit.
     #[serde(alias = "cpu_overcommit", default = "default_cpu_ratio")]
     pub cpu_overcommit: f64,
-    /// ABE (NVMe-oF block exporter) API on this host, e.g. `http://10.22.0.1:80`.
+    /// ABE (NVMe-oF block exporter) API on this host, e.g. `https://10.22.0.1:443`
+    /// (`http://` for an ABE before 0.5.0; used as written).
     /// VMs with `storage = abe` get their disks from the ABE of the host they
     /// are scheduled on; any host can attach them later.
     #[serde(default, skip_serializing_if = "Option::is_none")]

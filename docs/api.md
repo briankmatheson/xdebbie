@@ -52,7 +52,7 @@ public ones.
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/v1/hosts` | List hosts, with discovered `capacity`, `lastSeen` and, for hosts with an `abe`, the last `/utilization` reading as `abeCapacity` (`thin`, `bytes`, `usedBytes`, `freeBytes`, `provisionedBytes`, `dataPercent`, `metadataPercent`, `seen`) |
+| GET | `/v1/hosts` | List hosts, with discovered `capacity`, `lastSeen` and, for hosts with an `abe`, the last `/utilization` reading as `abeCapacity` (`thin`, `bytes`, `usedBytes`, `freeBytes`, `provisionedBytes`, `dataPercent`, `metadataPercent`, `tls` — the ABE's API is behind mutual TLS, abe ≥ 0.5.0 — `seen`) |
 | GET | `/v1/hosts/{name}` | |
 | PUT | `/v1/hosts/{name}` | Upsert. 201 created, 200 updated. Keeps runtime fields |
 | DELETE | `/v1/hosts/{name}` | 409 if VMs remain — drain first |
@@ -68,7 +68,7 @@ Host body:
  "controlPlaneEligible": true, "labels": {"disk": "nvme"}, "storagePool": "default",
  "bridge": "br0", "cpuOvercommit": 4.0, "memOvercommit": 1.0,
  "reservedMemoryMib": 4096, "reservedCpus": 2,
- "abe": "http://10.22.1.1:80", "abeOvercommit": 1.0,
+ "abe": "https://10.22.1.1:443", "abeOvercommit": 1.0,
  "abeMaxDataPercent": 85.0, "abeMaxMetadataPercent": 80.0}
 ```
 
@@ -122,7 +122,7 @@ ABE. This is what the `abe-csi` driver uses from inside Kubernetes VMs.
 Volume:
 
 ```json
-{"id": "7c0a…(32 hex)", "name": "pvc-1b2c", "server": "http://10.22.0.1:80",
+{"id": "7c0a…(32 hex)", "name": "pvc-1b2c", "server": "https://10.22.0.1:443",
  "traddr": "10.22.0.1", "port": "44002", "bytes": 5368709120,
  "perf": {"bs": "4k", "iodepth": 1, "seconds": 5, "write_lat_us": 187.5, "write_iops": 5000.0, "write_mib_s": 19.5},
  "attachTo": "<vm uuid>", "attached": {"vm": "<vm uuid>", "host": "timesink", "target": "vdc"},
