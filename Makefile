@@ -43,7 +43,7 @@ clippy: lint
 
 # cargo-deb builds the release binaries itself (profile release, -p xdebbied).
 deb:
-	@command -v cargo-deb >/dev/null || { echo "cargo-deb missing: cargo install cargo-deb"; exit 1; }
+	@$(CARGO) deb --version >/dev/null 2>&1 || { echo "cargo-deb missing: cargo install cargo-deb"; exit 1; }
 	$(CARGO) deb -p xdebbied
 	@ls -l $(DEB)
 
