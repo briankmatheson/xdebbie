@@ -13,8 +13,12 @@ use super::libvirt_setup::{get_hostname, LibvirtResources};
 /// network was adopted — then `[network]` is emitted commented out, because
 /// turning on a second DHCP server on a bridge that already has one is
 /// exactly the mistake we want operators to make on purpose, not by default.
-pub fn generate_config(resources: &LibvirtResources, uri: &str, created_subnet: Option<&str>, box_id: u8) -> String {
+pub fn generate_config(resources: &LibvirtResources, uri: &str, created_subnet: Option<&str>, box_id: u8, join: Option<&str>) -> String {
     let hostname = get_hostname();
+    let ca_url_line = match join {
+        Some(u) => format!("ca_url = \"{}\"", u.trim_end_matches('/')),
+        None => "# ca_url = \"https://node0.example.net:7443\"".to_string(),
+    };
     // Bootstrap generates api-cert.pem/api-key.pem and enables TLS by default.
     // advertise_url uses https:// to match.
     let advertise_url = format!("https://{}:7443", hostname);
@@ -81,6 +85,10 @@ multicast_addr = "239.0.0.42:7442"
 # URL peers and xdctl use to reach this box. Auto-detected from hostname;
 # change to https:// and add tls_cert/tls_key above to enable TLS.
 advertise_url = "{advertise_url}"
+# The box holding the cluster CA key (set by `bootstrap --join`). Enrolment
+# requests and `xdctl approve` that land here are forwarded to it. Leave
+# unset on the box that was bootstrapped first.
+{ca_url_line}
 
 # Overlay addressing + built-in DHCP (docs/network.md). The scheduler binds an
 # address to every VM at creation (`xdctl vm ls` shows it before first boot)
@@ -197,6 +205,7 @@ const KEEP_SCALARS: &[&str] = &[
     "tls_cert",
     "tls_key",
     "advertise_url",
+    "ca_url",
     "policy",
     "reconcile_interval_secs",
     "host_stale_secs",
@@ -205,11 +214,23 @@ const KEEP_TABLES: &[&str] = &["network", "mesh", "hosts"];
 
 /// Regenerated config with the operator's settings from `old` carried over.
 /// `old` that does not parse is an error; the caller decides what to do.
+#[cfg(test)]
 pub fn carry_over(old: &str, generated: &str) -> Result<String> {
+    carry_over_except(old, generated, &[])
+}
+
+/// Regenerated config with the operator's settings from `old` carried
+/// over, except `fresh` keys, which take the generated value even if the
+/// previous config had one (`ca_url` when re-joining a different CA).
+/// `old` that does not parse is an error; the caller decides what to do.
+pub fn carry_over_except(old: &str, generated: &str, fresh: &[&str]) -> Result<String> {
     let old: toml::Table = toml::from_str(old).context("previous config")?;
     let mut scalars = toml::Table::new();
     let mut tables = toml::Table::new();
     for k in KEEP_SCALARS {
+        if fresh.contains(k) {
+            continue;
+        }
         if let Some(v) = old.get(*k) {
             scalars.insert(k.to_string(), v.clone());
         }
@@ -304,13 +325,21 @@ mod tests {
             }],
         };
 
-        let config = generate_config(&resources, "qemu:///system", Some("192.168.100.0/24"), 2);
+        let config = generate_config(&resources, "qemu:///system", Some("192.168.100.0/24"), 2, None);
         assert!(config.contains("\n[network]\ncidr = \"192.168.100.0/24\""), "{config}");
-        let adopted = generate_config(&resources, "qemu:///system", None, 0);
+        let adopted = generate_config(&resources, "qemu:///system", None, 0, Some("https://ca:7443/"));
         assert!(adopted.contains("\n# [network]\n# cidr = "), "{adopted}");
         // both must parse as config
         let parsed: crate::config::Config = toml::from_str(&config).unwrap();
-        let _: crate::config::Config = toml::from_str(&adopted).unwrap();
+        let joined: crate::config::Config = toml::from_str(&adopted).unwrap();
+        assert_eq!(parsed.ca_url, None);
+        assert_eq!(joined.ca_url.as_deref(), Some("https://ca:7443"));
+        // A re-join to another CA wins over the carried-over ca_url.
+        let rejoined = carry_over_except(&adopted, &config, &["ca_url"]).unwrap();
+        let rejoined: crate::config::Config = toml::from_str(&rejoined).unwrap();
+        assert_eq!(rejoined.ca_url, None);
+        let kept: crate::config::Config = toml::from_str(&carry_over(&adopted, &config).unwrap()).unwrap();
+        assert_eq!(kept.ca_url.as_deref(), Some("https://ca:7443"));
         // the generated [mesh] is live, on the discovered bridge, with managed WireGuard
         let mesh = parsed.mesh_config().to_spec();
         assert!(mesh.enabled && mesh.bridge() == "virbr0" && mesh.wireguard.is_some(), "{config}");
@@ -364,7 +393,7 @@ abe = "http://10.22.0.1:80"
 cpu_overcommit = 4.0
 "#;
         // The template emits its own [network] (created subnet) and [[hosts]].
-        let generated = generate_config(&resources, "qemu:///system", Some("192.168.100.0/24"), 0);
+        let generated = generate_config(&resources, "qemu:///system", Some("192.168.100.0/24"), 0, None);
         let merged = carry_over(old, &generated).unwrap();
         let cfg: crate::config::Config = toml::from_str(&merged).unwrap_or_else(|e| panic!("{e}\n{merged}"));
 

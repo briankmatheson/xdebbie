@@ -8,6 +8,12 @@
 //! scheduling); a follower forwards them to the leader verbatim and relays
 //! the reply (`forward_to_leader`). `/v1/leader`, `/v1/network`, `/v1/token`
 //! and `/v1/mesh*` describe the box you asked, so they are served locally.
+//! `/v1/enroll*` belongs to the box holding the cluster CA key and is
+//! forwarded there (`forward_to_ca`).
+//!
+//! Authentication (`authenticate`): a valid bearer token, or a client
+//! certificate signed by the cluster CA (another xdebbied). Submitting and
+//! polling an enrolment needs neither, that is how a box gets its cert.
 
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -25,13 +31,24 @@ use xdebbie_core::*;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::{abe, config::Config, leader::Leadership, mesh::MeshManager, store::Store, token::Tokens};
+use crate::{
+    abe,
+    config::Config,
+    enroll::{Decision, Enrollments},
+    leader::Leadership,
+    mesh::MeshManager,
+    store::Store,
+    tls::ClientCert,
+    token::Tokens,
+};
 
 pub mod mesh;
 
 /// Set on requests a follower forwards; a second hop means leadership moved
 /// mid-request, so the receiver answers 503 instead of bouncing it on.
 const FORWARDED_BY: HeaderName = HeaderName::from_static("x-xdebbie-forwarded-by");
+/// Fingerprint of the cluster CA, sent with `GET /v1/ca`.
+const CA_FINGERPRINT: HeaderName = HeaderName::from_static("x-xdebbie-ca-fingerprint");
 /// Largest request body a follower will relay.
 const FORWARD_BODY_LIMIT: usize = 16 << 20;
 
@@ -50,6 +67,8 @@ pub struct App {
     pub leadership: Leadership,
     /// Client used to forward requests to the leader.
     pub http: reqwest::Client,
+    /// Enrolment queue; signs only on the CA box.
+    pub enroll: Arc<Enrollments>,
 }
 
 pub struct ApiErr(StatusCode, String);
@@ -98,39 +117,74 @@ pub fn router(app: App) -> Router {
         .route("/volumes/{id}/attach", post(attach_volume))
         .route("/volumes/{id}/detach", post(detach_volume))
         .route("/token/rotate", post(rotate_token))
-        .layer(middleware::from_fn_with_state(app.clone(), forward_to_leader))
+        .layer(middleware::from_fn_with_state(app.clone(), forward_to_leader));
+    // Enrolment: decided by the box holding the CA key.
+    let enroll = Router::new()
+        .route("/enroll", get(enroll_list).post(enroll_submit))
+        .route("/enroll/{id}", get(enroll_get))
+        .route("/enroll/{id}/approve", post(enroll_approve))
+        .route("/enroll/{id}/deny", post(enroll_deny))
+        .layer(middleware::from_fn_with_state(app.clone(), forward_to_ca));
+    let v1 = v1
+        .merge(enroll)
         // This box: served wherever you ask.
         .route("/leader", get(leader_status))
         .route("/token", get(token_status).put(put_token))
+        .route("/enroll/token", get(enroll_token))
+        .route("/ca", get(ca_cert))
         .route("/network", get(network))
         .with_state(app.clone())
         .merge(mesh::router(mesh::MeshApi { mesh: app.mesh.clone() }))
-        .layer(middleware::from_fn_with_state(app.token.clone(), bearer_auth));
+        .layer(middleware::from_fn_with_state(app.token.clone(), authenticate));
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .nest("/v1", v1)
 }
 
-/// Bearer-token middleware usable by any router (`None` = unauthenticated).
-pub async fn bearer_auth(State(tokens): State<Option<Arc<Tokens>>>, req: Request, next: Next) -> Response {
-    if let Some(tokens) = &tokens {
-        let presented = req
-            .headers()
-            .get(header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "));
-        let ok = match presented {
-            Some(p) => tokens.accepts(p).await,
-            None => false,
-        };
-        if !ok {
-            return ApiErr(
-                StatusCode::UNAUTHORIZED,
-                "missing or invalid bearer token".into(),
-            )
-            .into_response();
-        }
+/// How a request proved who it is. Set on every request by [`authenticate`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Authn {
+    Token,
+    /// Another xdebbied: client cert signed by the cluster CA.
+    Cert(crate::tls::PeerIdentity),
+    /// Only allowed on the public enrolment routes.
+    Anonymous,
+}
+
+/// Routes a box may call before it has a token or a cert: ask to be
+/// enrolled, poll the answer, fetch the CA to pin.
+fn is_public(method: &axum::http::Method, path: &str) -> bool {
+    let path = path.strip_prefix("/v1").unwrap_or(path);
+    match (method, path) {
+        (&axum::http::Method::POST, "/enroll") => true,
+        (&axum::http::Method::GET, "/ca") => true,
+        (&axum::http::Method::GET, p) => p.strip_prefix("/enroll/").is_some_and(|id| !id.is_empty() && id != "token" && !id.contains('/')),
+        _ => false,
     }
+}
+
+/// Auth middleware usable by any router: bearer token, else a client
+/// certificate the TLS layer verified, else 401 unless the route is public.
+/// `None` tokens = unauthenticated API (lab use only).
+pub async fn authenticate(State(tokens): State<Option<Arc<Tokens>>>, mut req: Request, next: Next) -> Response {
+    let presented = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(str::to_string);
+    let peer = req.extensions().get::<ClientCert>().and_then(|c| c.0.clone());
+    let authn = match (&tokens, presented, peer) {
+        (None, _, _) => Authn::Token,
+        (Some(t), Some(p), _) if t.accepts(&p).await => Authn::Token,
+        (Some(_), _, Some(id)) => Authn::Cert(id),
+        _ => Authn::Anonymous,
+    };
+    if authn == Authn::Anonymous && !is_public(req.method(), req.uri().path()) {
+        return ApiErr(StatusCode::UNAUTHORIZED, "missing or invalid bearer token (or client certificate)".into())
+            .into_response();
+    }
+    req.extensions_mut().insert(authn);
     next.run(req).await
 }
 
@@ -242,6 +296,99 @@ async fn forward(http: &reqwest::Client, base: &str, me: &str, req: Request) -> 
         r = r.header(k.as_str(), v.as_bytes());
     }
     Ok(r.body(Body::from(resp.bytes().await?))?)
+}
+
+// ---------- enrolment ----------
+
+/// Enrolment routes belong to the box with the CA key. Elsewhere they are
+/// forwarded to `ca_url` (set by `bootstrap --join`).
+async fn forward_to_ca(State(a): State<App>, req: Request, next: Next) -> Response {
+    if a.enroll.can_sign() {
+        return next.run(req).await;
+    }
+    if let Some(from) = req.headers().get(&FORWARDED_BY) {
+        let from = from.to_str().unwrap_or("?");
+        return ApiErr(
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!("{from} forwarded this enrolment request here but this box has no CA key; check ca_url there"),
+        )
+        .into_response();
+    }
+    let Some(ca_url) = a.cfg.ca_url.clone() else {
+        return ApiErr(
+            StatusCode::CONFLICT,
+            format!(
+                "this box has no cluster CA key ({}) and no ca_url; run this against the box that was bootstrapped first",
+                a.cfg.ca_key.display()
+            ),
+        )
+        .into_response();
+    };
+    let me = a.leadership.status().await.this.hostname;
+    match forward(&a.http, &ca_url, &me, req).await {
+        Ok(r) => r,
+        Err(e) => ApiErr(StatusCode::BAD_GATEWAY, format!("forwarding to CA box {ca_url}: {e:#}")).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct ListQuery {
+    #[serde(default)]
+    all: bool,
+}
+
+async fn enroll_list(State(a): State<App>, Query(q): Query<ListQuery>) -> Json<Vec<Enrollment>> {
+    Json(a.enroll.list(q.all).await)
+}
+
+/// A joiner asks for its certificate: queued until an operator approves.
+async fn enroll_submit(State(a): State<App>, Json(req): Json<EnrollRequest>) -> R<(StatusCode, Json<Enrollment>)> {
+    let e = a.enroll.submit(req).await.map_err(|e| bad(e.to_string()))?;
+    if e.status == EnrollStatus::Pending {
+        tracing::info!(id = %e.id, host = %e.hostname, fp = %e.fingerprint, "enrolment pending: `xdctl approve {}`", e.hostname);
+    }
+    Ok((StatusCode::ACCEPTED, Json(e)))
+}
+
+async fn enroll_get(State(a): State<App>, Path(id): Path<String>) -> R<Json<Enrollment>> {
+    a.enroll.get(&id).await.map(Json).ok_or_else(|| nf("enrolment"))
+}
+
+async fn enroll_approve(State(a): State<App>, Path(id): Path<String>) -> R<Json<Enrollment>> {
+    let e = a.enroll.decide(&id, Decision::Approve).await.map_err(|e| ApiErr(StatusCode::NOT_FOUND, e.to_string()))?;
+    tracing::info!(id = %e.id, host = %e.hostname, "enrolment approved");
+    Ok(Json(e))
+}
+
+async fn enroll_deny(State(a): State<App>, Path(id): Path<String>) -> R<Json<Enrollment>> {
+    let e = a.enroll.decide(&id, Decision::Deny).await.map_err(|e| ApiErr(StatusCode::NOT_FOUND, e.to_string()))?;
+    tracing::info!(id = %e.id, host = %e.hostname, "enrolment denied");
+    Ok(Json(e))
+}
+
+/// The cluster token, for a box that just got its certificate. Client
+/// certificate only: a bearer token holder has it already.
+async fn enroll_token(State(a): State<App>, axum::Extension(authn): axum::Extension<Authn>) -> R<Json<TokenSet>> {
+    let Authn::Cert(peer) = authn else {
+        return Err(ApiErr(StatusCode::FORBIDDEN, "a client certificate signed by the cluster CA is required".into()));
+    };
+    let t = tokens(&a)?;
+    tracing::info!(peer = %peer.hostname, "handed the cluster token to an enrolled box");
+    Ok(Json(t.get().await))
+}
+
+/// The cluster CA certificate (PEM). Public: it is what a joiner pins.
+async fn ca_cert(State(a): State<App>) -> R<([(HeaderName, String); 2], String)> {
+    let pem = match a.enroll.ca_pem() {
+        Some(p) => p.to_string(),
+        None => std::fs::read_to_string(&a.cfg.ca_file)
+            .map_err(|e| ApiErr(StatusCode::NOT_FOUND, format!("no CA certificate at {}: {e}", a.cfg.ca_file.display())))?,
+    };
+    let fp = crate::bootstrap::api_tls::cert_fingerprint(&pem)?;
+    Ok((
+        [(header::CONTENT_TYPE, "application/x-pem-file".to_string()), (CA_FINGERPRINT, fp)],
+        pem,
+    ))
 }
 
 // ---------- hosts ----------
@@ -895,6 +1042,7 @@ mod tests {
             abe: abe::Client::new(),
             leadership,
             http: reqwest::Client::new(),
+            enroll: Arc::new(Enrollments::load(dir.path().join("enroll.json"), None).unwrap()),
         };
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", l.local_addr().unwrap());
@@ -903,6 +1051,88 @@ mod tests {
             drop(dir);
         });
         url
+    }
+
+    /// The real thing: HTTPS with client certificates, this box holding the
+    /// CA. A joiner needs no credentials to enrol and poll; once approved,
+    /// its certificate alone gets it the token and every other route.
+    #[tokio::test]
+    async fn enrolment_over_mtls_ends_with_the_cluster_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = crate::bootstrap::api_tls::generate_localhost(dir.path());
+        let signer = crate::bootstrap::api_tls::CaSigner::load(&paths.ca_cert, &paths.ca_key).unwrap().unwrap();
+        let ca_pem = signer.ca_pem().to_string();
+        let f = FakeNetOps::new();
+        f.add_bridge("br-int", 1500, "52:54:00:23:00:fe");
+        f.add_underlay("ul0", 1420, Ipv4Addr::new(10, 22, 0, 1));
+        let mesh = MeshManager::new_for_test(Arc::new(f), dir.path().into(), None).unwrap();
+        let app = App {
+            store: Store::open(dir.path().join("state.json")).unwrap(),
+            cfg: Arc::new(toml::from_str("state_file = 'unused'").unwrap()),
+            token: Some(Arc::new(Tokens::in_memory(TokenSet { current: "secret".into(), previous: None }))),
+            mesh,
+            dhcp: None,
+            abe: abe::Client::new(),
+            leadership: Leadership::standalone("ca-box", "https://unused"),
+            http: reqwest::Client::new(),
+            enroll: Arc::new(Enrollments::load(dir.path().join("enroll.json"), Some(signer)).unwrap()),
+        };
+        let roots = crate::tls::client_roots(&paths.ca_cert, &dir.path().join("nonexistent"));
+        let sc = crate::tls::server_config(&paths.server_cert, &paths.server_key, roots).unwrap();
+        let handle: axum_server::Handle<std::net::SocketAddr> = axum_server::Handle::new();
+        let h = handle.clone();
+        tokio::spawn(async move {
+            axum_server::bind("127.0.0.1:0".parse().unwrap())
+                .acceptor(crate::tls::PeerCertAcceptor::new(sc))
+                .handle(h)
+                .serve(router(app).into_make_service())
+                .await
+                .unwrap();
+        });
+        let addr = handle.listening().await.unwrap();
+        let url = format!("https://127.0.0.1:{}", addr.port());
+        let ca = reqwest::Certificate::from_pem(ca_pem.as_bytes()).unwrap();
+        let anon = reqwest::Client::builder().use_rustls_tls().add_root_certificate(ca.clone()).build().unwrap();
+
+        // No credentials: public routes only.
+        assert_eq!(anon.get(format!("{url}/v1/leader")).send().await.unwrap().status(), 401);
+        assert_eq!(anon.get(format!("{url}/v1/enroll")).send().await.unwrap().status(), 401);
+        assert_eq!(anon.get(format!("{url}/v1/enroll/token")).send().await.unwrap().status(), 401);
+        let served_ca = anon.get(format!("{url}/v1/ca")).send().await.unwrap().text().await.unwrap();
+        assert_eq!(served_ca, ca_pem);
+
+        // Joiner: key + CSR, submit, poll.
+        let csr = crate::bootstrap::api_tls::make_csr("joiner.test").unwrap();
+        let req = EnrollRequest { hostname: "joiner.test".into(), box_id: 3, api_url: "https://joiner.test:7443".into(), csr: csr.csr_pem, wg_pubkey: None };
+        let r = anon.post(format!("{url}/v1/enroll")).json(&req).send().await.unwrap();
+        assert_eq!(r.status(), 202);
+        let e: Enrollment = r.json().await.unwrap();
+        assert_eq!((e.status, e.fingerprint.as_str()), (EnrollStatus::Pending, csr.fingerprint.as_str()));
+        let polled: Enrollment = anon.get(format!("{url}/v1/enroll/{}", e.id)).send().await.unwrap().json().await.unwrap();
+        assert_eq!(polled.status, EnrollStatus::Pending);
+        assert_eq!(anon.post(format!("{url}/v1/enroll/{}/approve", e.id)).send().await.unwrap().status(), 401);
+
+        // Operator approves by hostname with the token.
+        let pending: Vec<Enrollment> = anon.get(format!("{url}/v1/enroll")).bearer_auth("secret").send().await.unwrap().json().await.unwrap();
+        assert_eq!(pending.len(), 1);
+        let r = anon.post(format!("{url}/v1/enroll/joiner.test/approve")).bearer_auth("secret").send().await.unwrap();
+        assert_eq!(r.status(), 200);
+        let approved: Enrollment = anon.get(format!("{url}/v1/enroll/{}", e.id)).send().await.unwrap().json().await.unwrap();
+        assert_eq!(approved.status, EnrollStatus::Approved);
+        let cert = approved.cert.unwrap();
+        assert_eq!(approved.ca.as_deref(), Some(ca_pem.as_str()));
+
+        // Token holders do not get the token route; the new member does,
+        // and everything else, on its certificate alone.
+        assert_eq!(anon.get(format!("{url}/v1/enroll/token")).bearer_auth("secret").send().await.unwrap().status(), 403);
+        let ident = reqwest::Identity::from_pem(format!("{cert}\n{}", csr.key_pem).as_bytes()).unwrap();
+        let member = reqwest::Client::builder().use_rustls_tls().add_root_certificate(ca).identity(ident).build().unwrap();
+        let set: TokenSet = member.get(format!("{url}/v1/enroll/token")).send().await.unwrap().json().await.unwrap();
+        assert_eq!(set.current, "secret");
+        let st: LeaderStatus = member.get(format!("{url}/v1/leader")).send().await.unwrap().json().await.unwrap();
+        assert!(st.is_leader);
+        let status: TokenStatus = member.get(format!("{url}/v1/token")).send().await.unwrap().json().await.unwrap();
+        assert_eq!(status.id, crate::token::fingerprint("secret"));
     }
 
     #[tokio::test]

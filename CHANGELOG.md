@@ -5,6 +5,39 @@ All notable changes to XDebbie will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2026-11-12
+
+### Added
+- **Cluster enrolment with operator approval.** One CA per cluster: the
+  first box bootstrapped keeps the CA key (`/etc/xdebbie/api-ca-key.pem`,
+  root:root 0400). A new box runs
+  `xdebbied bootstrap --box N --join https://first:7443 [--ca-fingerprint …]`:
+  it pins the CA (y/N prompt or pinned fingerprint), generates a key and
+  CSR, `POST /v1/enroll`s it and waits. An operator runs `xdctl enroll ls`
+  and `xdctl approve <host>` (or `xdctl enroll deny`) from any member; the
+  CA box signs, the joiner installs the cert and fetches the cluster token
+  over mTLS (`GET /v1/enroll/token`). No tokens or CA files to copy by hand.
+- **Client-certificate authentication.** The API asks every TLS client for
+  a certificate; one signed by the cluster CA is accepted in place of a
+  bearer token. Daemons present their own cert to each other, so leader
+  forwarding and token distribution work before tokens are in sync (the
+  distributor now also replaces a peer's token when the peer answered on
+  its certificate but holds a different one).
+- API: `GET/POST /v1/enroll`, `GET /v1/enroll/{id}`,
+  `POST /v1/enroll/{id}/{approve,deny}` (forwarded to the CA box via the
+  new `ca_url` config key), `GET /v1/enroll/token` (client cert only),
+  `GET /v1/ca` (public; `X-Xdebbie-CA-Fingerprint` header).
+- xdctl: `enroll ls [--all]`, `enroll approve|deny`, `approve <host>`, `ca`.
+- Config: `ca_key` (default `/etc/xdebbie/api-ca-key.pem`), `ca_url`
+  (set by `--join`, kept across `--force`; a new `--join` replaces it).
+
+### Changed
+- `bootstrap --force` on the CA box reissues the server cert but keeps the
+  CA. Certs are issued with serverAuth + clientAuth.
+- Bootstrap runs before the async runtime starts (plain blocking work).
+- The peer CA directory (`/etc/xdebbie/peers`) is still honoured but no
+  longer needed: every box's cert chains to the cluster CA.
+
 ## [0.13.0] - 2026-11-12
 
 ### Security

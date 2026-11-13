@@ -53,11 +53,11 @@ boxB$ xdctl mesh peer add 0 --pubkey <A's key> --endpoint boxA.example:51820
 boxA$ xdctl mesh peer add 1 --pubkey <B's key> --endpoint boxB.example:51820
 ```
 
-Those `xdctl` calls go to the API over HTTPS. Each box's cert is signed by
-its own bootstrap CA, so before enrolling, copy `/etc/xdebbie/api-ca.pem`
-from each box into `/etc/xdebbie/peers/` on the other (see BOOTSTRAP.md,
-"API TLS") and restart `xdebbied`. Without that, followers cannot forward
-to the leader and `xdctl` on one box cannot reach the other.
+Those `xdctl` calls go to the API over HTTPS. Every box's cert is signed
+by the one cluster CA, which the second box got when it was enrolled
+(`xdebbied bootstrap --join https://first:7443`, then `xdctl approve` —
+see BOOTSTRAP.md, "Joining a cluster"). A box that was never enrolled
+cannot be reached by the others' daemons or `xdctl`.
 
 A peer behind NAT can omit `endpoint`; it initiates towards the others and
 keepalives hold the mapping. The firewall rule still restricts Geneve to the

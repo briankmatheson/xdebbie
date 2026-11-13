@@ -161,41 +161,70 @@ export XDEBBIE_CA=/etc/xdebbie/api-ca.pem
 `XDEBBIE_URL` is the config's `advertise_url` (the hostname, never
 `0.0.0.0`), so the same file works from another machine.
 
-### API TLS: `/etc/xdebbie/api-{ca,cert,key}.pem`
+### API TLS and the cluster CA: `/etc/xdebbie/api-*.pem`
 
-Bootstrap generates a per-box CA and a server certificate signed by it
-(in-process with `rcgen`; no openssl needed) and writes
-`tls_cert`/`tls_key` into the config, so the API serves **HTTPS from the
-first start**. The bearer token and the WireGuard public keys exchanged
-during mesh enrolment therefore never cross the LAN in clear.
+There is **one CA per cluster**. The first box bootstrapped generates it
+(in-process with `rcgen`; no openssl needed) and keeps the key; it signs
+every other box's certificate through *enrolment* (next section). Bootstrap
+writes `tls_cert`/`tls_key` into the config, so the API serves **HTTPS from
+the first start**; the bearer token and the WireGuard public keys exchanged
+during mesh enrolment never cross the LAN in clear.
 
 | File | Owner | Mode | Purpose |
 |---|---|---|---|
-| `api-ca.pem` | root:xdebbie | 0440 | CA; give this to peers and to `xdctl` |
-| `api-cert.pem` | root:xdebbie | 0440 | server cert (SANs: hostname, FQDN, every local IPv4) |
-| `api-key.pem` | root:root | 0400 | server key |
-| `peers/*.pem` | root:xdebbie | 0440 | other boxes' CAs, trusted in addition to our own |
+| `api-ca.pem` | root:xdebbie | 0440 | cluster CA cert; what `xdctl` trusts (`XDEBBIE_CA`) |
+| `api-ca-key.pem` | root:root | 0400 | CA key — **first box only**; signs `xdctl approve` |
+| `api-cert.pem` | root:xdebbie | 0440 | this box's cert (SANs: hostname, FQDN, every local IPv4; serverAuth + clientAuth) |
+| `api-key.pem` | root:root | 0400 | this box's key |
+| `peers/*.pem` | root:xdebbie | 0440 | extra CAs to trust (rarely needed now) |
 
-Certificates are only reissued with `--force` (or if a file is missing).
-The server cert lists the host's IPv4 addresses at generation time; if
-the box's address changes, `xdebbied bootstrap --force` reissues it.
+On the CA box, `--force` reissues the server cert but **keeps the CA**
+(members' certs chain to it). A box upgraded from 0.13 has certs but no CA
+key: run `bootstrap --force` there once if it is to be the CA box, or
+`bootstrap --join` if another box is. The server cert lists the host's
+IPv4 addresses at generation time; if the address changes,
+`xdebbied bootstrap --force` reissues it.
 
-**Exchanging CAs between boxes.** Each box trusts its own `ca_file` plus
-every `*.pem` in `peer_ca_dir` (`/etc/xdebbie/peers`), both for the
-daemon's leader forwarding and for `xdctl` (`XDEBBIE_CA` accepts a
-comma-separated list of files or directories, default
-`/etc/xdebbie/api-ca.pem,/etc/xdebbie/peers`). Before meshing:
+Every daemon presents its own cert when it talks to another box (leader
+forwarding, token distribution, enrolment forwarding), and every daemon
+accepts a client cert signed by the cluster CA in place of a bearer
+token. That is how a new box gets the token in the first place.
+
+### Joining a cluster: enrolment and approval
+
+Nothing to copy by hand. On the box bootstrapped first (the CA box),
+bootstrap prints the CA fingerprint and the exact command to run
+elsewhere. On the new box:
 
 ```bash
-# on gram
-scp /etc/xdebbie/api-ca.pem timesink:/tmp/gram.pem
-ssh timesink sudo install -m 0440 -g xdebbie /tmp/gram.pem /etc/xdebbie/peers/
-# on timesink
-scp /etc/xdebbie/api-ca.pem gram:/tmp/timesink.pem
-ssh gram sudo install -m 0440 -g xdebbie /tmp/timesink.pem /etc/xdebbie/peers/
-# then on both
-sudo systemctl restart xdebbied
+sudo xdebbied bootstrap --box 1 --join https://gram.example.net:7443 \
+     --ca-fingerprint sha256:3fa1…        # optional; without it you are asked y/N
 ```
+
+The joiner fetches the CA, pins it, generates a key (`api-key.pem`, never
+leaves the box) and a CSR, posts it to `POST /v1/enroll` and waits,
+printing the key fingerprint. From any member (CA box or not — requests
+are forwarded to the CA box via `ca_url`):
+
+```bash
+xdctl enroll ls                 # ID  HOST  BOX  URL  FINGERPRINT  STATUS  AGE
+xdctl approve timesink          # == xdctl enroll approve; by hostname or id
+xdctl enroll deny <id>          # the box can ask again with --join --force
+xdctl enroll ls --all           # include approved / denied
+xdctl ca                        # CA PEM + fingerprint, to check against --join
+```
+
+On approval the CA box signs the CSR; the joiner picks up the certificate
+within seconds, installs `api-cert.pem` + `api-ca.pem`, then fetches the
+**cluster token** over mTLS (`GET /v1/enroll/token`, client-certificate
+only) and writes `/etc/xdebbie/token` and `xdebbie_env`. Bootstrap then
+finishes as usual. The joiner's config gets `ca_url = "https://gram…"`
+so later `xdctl approve` calls made against it are forwarded.
+
+Re-running `bootstrap --join` resumes a pending enrolment (state in
+`/var/lib/xdebbie/join.json`); `--force` starts over with a new key.
+Pending requests live in `/var/lib/xdebbie/enroll.json` on the CA box
+(at most 64; the rest are refused). `--join` refuses plain `http://`.
 
 `xdctl --insecure` (or `XDEBBIE_INSECURE=1`) skips verification for a lab.
 

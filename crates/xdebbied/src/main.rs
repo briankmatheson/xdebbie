@@ -8,12 +8,14 @@ mod config;
 mod dhcp;
 mod discovery;
 mod election;
+mod enroll;
 mod leader;
 mod libvirt;
 mod lvm;
 mod mesh;
 mod reconcile;
 mod store;
+mod tls;
 mod token;
 
 use std::{path::PathBuf, sync::Arc};
@@ -74,11 +76,20 @@ enum Cmd {
         /// for the bridge MAC 52:54:00:23:<box>:fe when the network is created
         #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u8).range(0..=253))]
         r#box: u8,
+        /// Join an existing cluster: API URL of the box bootstrapped first
+        /// (it holds the cluster CA), e.g. https://node0:7443. This box
+        /// gets a certificate from it once an operator runs
+        /// `xdctl approve <this hostname>` there, then the cluster token.
+        #[arg(long, value_name = "URL")]
+        join: Option<String>,
+        /// Expected `sha256:...` fingerprint of the cluster CA (printed by
+        /// bootstrap on the CA box). Without it you are asked to confirm.
+        #[arg(long, value_name = "FP", requires = "join")]
+        ca_fingerprint: Option<String>,
     },
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
@@ -86,7 +97,8 @@ async fn main() -> anyhow::Result<()> {
         .init();
     let cli = Cli::parse();
 
-    // Handle bootstrap command
+    // Bootstrap runs outside the async runtime: it is plain blocking work
+    // (shelling out, and HTTP to the CA box when joining).
     match &cli.cmd {
         Some(Cmd::Bootstrap {
             force,
@@ -96,6 +108,8 @@ async fn main() -> anyhow::Result<()> {
             pool,
             pool_path,
             r#box,
+            join,
+            ca_fingerprint,
         }) => {
             let opts = bootstrap::BootstrapOptions {
                 config_path: cli.config.clone(),
@@ -106,6 +120,8 @@ async fn main() -> anyhow::Result<()> {
                 pool_name: pool.clone(),
                 pool_path: pool_path.clone(),
                 box_id: *r#box,
+                join: join.clone(),
+                ca_fingerprint: ca_fingerprint.clone(),
                 ..Default::default()
             };
             bootstrap::bootstrap(&opts)?;
@@ -124,6 +140,14 @@ async fn main() -> anyhow::Result<()> {
         _ => {}
     }
 
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("starting runtime")?
+        .block_on(run(cli))
+}
+
+async fn run(cli: Cli) -> anyhow::Result<()> {
     let cfg = Arc::new(
         config::Config::load(&cli.config)
             .with_context(|| format!("loading {}", cli.config.display()))
@@ -145,7 +169,7 @@ async fn main() -> anyhow::Result<()> {
         let listen = cfg.effective_listen();
         tokio::spawn(mesh.clone().run());
         let v1 = api::mesh::router(api::mesh::MeshApi { mesh })
-            .layer(axum::middleware::from_fn_with_state(token, api::bearer_auth));
+            .layer(axum::middleware::from_fn_with_state(token, api::authenticate));
         let app = axum::Router::new()
             .route("/healthz", axum::routing::get(|| async { "ok" }))
             .nest("/v1", v1);
@@ -334,6 +358,19 @@ async fn main() -> anyhow::Result<()> {
         _ => None,
     };
 
+    // Enrolment queue; this box signs only if it holds the CA key.
+    let signer = bootstrap::api_tls::CaSigner::load(&cfg.ca_file, &cfg.ca_key)
+        .context("loading cluster CA")
+        .unwrap_or_else(|e| fatal_config(e));
+    match (&signer, &cfg.ca_url) {
+        (Some(_), _) => info!(ca_key = %cfg.ca_key.display(), "this box holds the cluster CA: `xdctl approve` is decided here"),
+        (None, Some(u)) => info!(ca_url = %u, "enrolment requests are forwarded to the CA box"),
+        (None, None) => info!("no cluster CA key and no ca_url: enrolment unavailable on this box"),
+    }
+    let enroll = Arc::new(
+        enroll::Enrollments::load(cfg.state_dir().join("enroll.json"), signer).unwrap_or_else(|e| fatal_config(e)),
+    );
+
     let app = api::router(api::App {
         store,
         cfg: cfg.clone(),
@@ -343,6 +380,7 @@ async fn main() -> anyhow::Result<()> {
         abe: abe::Client::new(),
         leadership,
         http,
+        enroll,
     });
     serve(&cfg, listen, app).await
 }
@@ -366,22 +404,22 @@ fn load_token(cfg: &config::Config) -> anyhow::Result<Option<Arc<token::Tokens>>
     })
 }
 
-/// Serve `app` on `listen`, HTTPS if a cert/key pair is configured.
+/// Serve `app` on `listen`, HTTPS if a cert/key pair is configured. Over
+/// HTTPS, client certificates signed by the cluster CA are recognised.
 async fn serve(cfg: &config::Config, listen: std::net::SocketAddr, app: axum::Router) -> anyhow::Result<()> {
     match (&cfg.tls_cert, &cfg.tls_key) {
         (Some(c), Some(k)) => {
-            let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-            let tls = axum_server::tls_rustls::RustlsConfig::from_pem_file(c, k)
-                .await
-                .context("loading TLS certificate/key")?;
+            let roots = tls::client_roots(&cfg.ca_file, &cfg.peer_ca_dir);
+            let sc = tls::server_config(c, k, roots).context("loading TLS certificate/key")?;
             let h = axum_server::Handle::new();
             let h2 = h.clone();
             tokio::spawn(async move {
                 let _ = tokio::signal::ctrl_c().await;
                 h2.graceful_shutdown(Some(std::time::Duration::from_secs(10)));
             });
-            info!(%listen, "xdebbied serving https");
-            axum_server::bind_rustls(listen, tls)
+            info!(%listen, "xdebbied serving https (client certificates accepted)");
+            axum_server::bind(listen)
+                .acceptor(tls::PeerCertAcceptor::new(sc))
                 .handle(h)
                 .serve(app.into_make_service())
                 .await?;

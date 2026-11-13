@@ -9,6 +9,7 @@ pub mod api_tls;
 pub mod config_gen;
 pub mod deps;
 pub mod firewall;
+pub mod join;
 pub mod libvirt_setup;
 pub mod tls_certs;
 pub mod token;
@@ -46,6 +47,10 @@ pub struct BootstrapOptions {
     pub force: bool,
     /// Mesh box id (0-253): written to `[mesh]` and fixes the bridge MAC.
     pub box_id: u8,
+    /// Join an existing cluster through the CA box at this URL.
+    pub join: Option<String>,
+    /// Pinned `sha256:` fingerprint of that cluster CA.
+    pub ca_fingerprint: Option<String>,
 }
 
 impl Default for BootstrapOptions {
@@ -62,6 +67,8 @@ impl Default for BootstrapOptions {
             listen_addr: "0.0.0.0:7443".to_string(),
             force: false,
             box_id: 0,
+            join: None,
+            ca_fingerprint: None,
         }
     }
 }
@@ -144,7 +151,7 @@ fn chown_config_dir(cfg_dir: &Path) {
         let name = entry.file_name();
         let name = name.to_string_lossy();
         match name.as_ref() {
-            "token" | "token.previous" | "api-key.pem" => fix(&path, 0o400, 0), // root:root
+            "token" | "token.previous" | "api-key.pem" | "api-ca-key.pem" => fix(&path, 0o400, 0), // root:root
             "xdebbied.toml" | "xdebbie_env" | "api-ca.pem" | "api-cert.pem" => fix(&path, 0o440, gid), // root:xdebbie
             "peers" => fix(&path, 0o750, gid),
             _ => {} // backups etc. — leave alone
@@ -267,12 +274,14 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
             Err(e) => warn!("{e:#}; left untouched - fix it, `xdebbied serve` will not start until it parses"),
         }
     } else {
-        let generated = config_gen::generate_config(&resources, &opts.libvirt_uri, created_subnet.as_deref(), opts.box_id);
+        let generated =
+            config_gen::generate_config(&resources, &opts.libvirt_uri, created_subnet.as_deref(), opts.box_id, opts.join.as_deref());
         let content = if exists {
             let bak = config_gen::back_up(&opts.config_path)?;
             info!("Previous configuration saved as {}", bak.display());
             let old = std::fs::read_to_string(&opts.config_path)?;
-            match config_gen::carry_over(&old, &generated) {
+            let fresh: &[&str] = if opts.join.is_some() { &["ca_url"] } else { &[] };
+            match config_gen::carry_over_except(&old, &generated, fresh) {
                 Ok(c) => {
                     info!("Regenerated configuration; operator settings carried over");
                     c
@@ -288,41 +297,76 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
         config_gen::write_config(&opts.config_path, &content)?;
     }
 
-    // Step 6: Generate token
-    info!("Step 6/8: Generating API token");
-    
-    let token = if token::token_exists(&opts.token_path) && !opts.force {
-        info!(
-            "Token already exists at {}, reusing",
-            opts.token_path.display()
-        );
-        token::read_token(&opts.token_path)?
-    } else {
-        if opts.token_path.exists() {
-            let bak = config_gen::back_up(&opts.token_path)?;
-            warn!(
-                "Replacing the API token (--force); previous one saved as {}. Clients holding the old token (xdctl env, abe-csi, CAPX) must be updated",
-                bak.display()
-            );
-        }
-        let new_token = token::generate_token()?;
-        token::write_token(&opts.token_path, &new_token)?;
-        new_token
-    };
-
     // Create state directory
     std::fs::create_dir_all(&opts.state_dir).context("creating state directory")?;
 
-    // Step 7a: Generate API TLS certificates (CA + server cert, pure Rust).
-    // These are written before the firewall step so the config already has
-    // the right tls_cert/tls_key paths when it is loaded for the firewall.
-    info!("Step 7/8: Generating API TLS certificates");
     let api_tls_paths = api_tls::ApiTlsPaths::default();
     let hostname = libvirt_setup::get_hostname();
-    if let Err(e) = api_tls::ensure_api_tls(&hostname, opts.force, &api_tls_paths) {
-        warn!("Failed to generate API TLS certs: {e:#}");
-        warn!("xdebbied will serve plain HTTP until certs are fixed; re-run bootstrap");
-    }
+    let cfg_dir = opts.config_path.parent().unwrap_or_else(|| Path::new(DEFAULT_CONFIG_DIR));
+
+    // Step 6 + 7a: token and API certificate. A joining box gets both from
+    // the cluster CA (after `xdctl approve`); the first box mints its own.
+    let token = if let Some(ca_url) = &opts.join {
+        info!("Step 6/8: Enrolling with the cluster CA at {ca_url}");
+        if api_tls_paths.all_exist() && token::token_exists(&opts.token_path) && !opts.force {
+            info!("Already enrolled (certificate and token present); reusing. Use --force to re-enrol");
+            token::read_token(&opts.token_path)?
+        } else {
+            let api_url = match crate::config::Config::load(&opts.config_path) {
+                Ok(cfg) => cfg.advertise_url(cfg.effective_listen()),
+                Err(_) => derive_advertise_url(&opts.listen_addr),
+            };
+            let set = join::join(&join::JoinOptions {
+                ca_url,
+                expect_fingerprint: opts.ca_fingerprint.as_deref(),
+                hostname: &hostname,
+                box_id: opts.box_id,
+                api_url: &api_url,
+                force: opts.force,
+                paths: &api_tls_paths,
+                state_dir: &opts.state_dir,
+            })
+            .context("joining the cluster")?;
+            if opts.token_path.exists() {
+                let bak = config_gen::back_up(&opts.token_path)?;
+                info!("Replacing the local token with the cluster's; previous one saved as {}", bak.display());
+            }
+            token::write_token(&opts.token_path, &set.current)?;
+            let prev_path = opts.token_path.with_file_name("token.previous");
+            match set.previous {
+                Some(p) => crate::token::write_private(&prev_path, &p)?,
+                None => {
+                    let _ = std::fs::remove_file(&prev_path);
+                }
+            }
+            set.current
+        }
+    } else {
+        info!("Step 6/8: Generating API token");
+        let token = if token::token_exists(&opts.token_path) && !opts.force {
+            info!("Token already exists at {}, reusing", opts.token_path.display());
+            token::read_token(&opts.token_path)?
+        } else {
+            if opts.token_path.exists() {
+                let bak = config_gen::back_up(&opts.token_path)?;
+                warn!(
+                    "Replacing the API token (--force); previous one saved as {}. Clients holding the old token (xdctl env, abe-csi, CAPX) must be updated",
+                    bak.display()
+                );
+            }
+            let new_token = token::generate_token()?;
+            token::write_token(&opts.token_path, &new_token)?;
+            new_token
+        };
+
+        // Step 7a: API TLS: the cluster CA (kept here) and this box's cert.
+        info!("Step 7/8: Generating API TLS certificates");
+        if let Err(e) = api_tls::ensure_api_tls(&hostname, opts.force, &api_tls_paths) {
+            warn!("Failed to generate API TLS certs: {e:#}");
+            warn!("xdebbied will serve plain HTTP until certs are fixed; re-run bootstrap");
+        }
+        token
+    };
 
     // Step 7b: Generate libvirt TLS certificates for multi-host connections.
     if let Err(e) = tls_certs::ensure_tls_certificates(opts.force) {
@@ -346,7 +390,6 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     // Write environment file to /etc/xdebbie/ (system-wide). The URL is the
     // one the config advertises (same thing peers see in discovery), never
     // the 0.0.0.0 listen address; the CA lets xdctl verify the cert.
-    let cfg_dir = opts.config_path.parent().unwrap_or_else(|| Path::new(DEFAULT_CONFIG_DIR));
     let env_path = cfg_dir.join("xdebbie_env");
     let (advertise_url, ca) = match crate::config::Config::load(&opts.config_path) {
         Ok(cfg) => {
@@ -390,14 +433,27 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     info!("");
     info!("Or add this line to ~/.bashrc for permanent access:");
     info!("  [ -r {} ] && source {}", env_path.display(), env_path.display());
-    if let Some(ca) = &ca {
+    if api_tls_paths.is_ca() {
+        let fp = std::fs::read_to_string(&api_tls_paths.ca_cert)
+            .ok()
+            .and_then(|pem| api_tls::cert_fingerprint(&pem).ok())
+            .unwrap_or_else(|| "<unreadable>".into());
         info!("");
-        info!("The API serves HTTPS with a cert from this box's own CA ({}).", ca.display());
-        info!("Before meshing with another box, exchange CA certs so each side can");
-        info!("verify the other (xdctl and leader forwarding both check them):");
-        info!("  scp {} other:/tmp/{}.pem", ca.display(), hostname);
-        info!("  ssh other sudo install -m 0440 -g xdebbie /tmp/{}.pem {}/peers/", hostname, cfg_dir.display());
-        info!("  ... and the same in the other direction; then restart xdebbied on both.");
+        info!("This box holds the cluster CA ({}).", api_tls_paths.ca_key.display());
+        info!("  CA fingerprint: {fp}");
+        info!("To add another box, run there:");
+        info!("  sudo xdebbied bootstrap --box <N> --join {advertise_url} --ca-fingerprint {fp}");
+        info!("then approve it from any member:");
+        info!("  xdctl enroll ls");
+        info!("  xdctl approve <hostname>");
+    } else if let Some(ca_url) = &opts.join {
+        info!("");
+        info!("Enrolled with the cluster CA at {ca_url}; this box's cert is {}.", api_tls_paths.server_cert.display());
+    } else if ca.is_some() {
+        info!("");
+        info!("No cluster CA key here. Either this is the CA box upgraded from 0.13 (run");
+        info!("`bootstrap --force` once to create the key) or it should join another:");
+        info!("  sudo xdebbied bootstrap --box <N> --join https://<ca-box>:7443");
     }
 
     Ok(())

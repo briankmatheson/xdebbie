@@ -18,7 +18,7 @@ case "$1" in
 
         # Secrets: root:root 0400. Operator-readable: root:xdebbie 0440.
         # (Older releases left xdebbie_env world-readable, or root-only.)
-        for f in /etc/xdebbie/token /etc/xdebbie/token.previous /etc/xdebbie/api-key.pem; do
+        for f in /etc/xdebbie/token /etc/xdebbie/token.previous /etc/xdebbie/api-key.pem /etc/xdebbie/api-ca-key.pem; do
             [ -e "$f" ] && chown root:root "$f" && chmod 0400 "$f" || true
         done
         for f in /etc/xdebbie/xdebbied.toml /etc/xdebbie/xdebbie_env /etc/xdebbie/api-ca.pem /etc/xdebbie/api-cert.pem /etc/xdebbie/peers/*.pem; do

@@ -1,8 +1,10 @@
 # xdebbied REST API (v1)
 
 Base URL `https://<xdebbied>:7443`. With `token_file` configured, every `/v1`
-call needs `Authorization: Bearer <token>`. Bodies are JSON with camelCase
-keys. Errors are `{"error": "..."}`.
+call needs `Authorization: Bearer <token>` **or** a TLS client certificate
+signed by the cluster CA (that is how daemons talk to each other). The
+enrolment routes marked *public* below need neither. Bodies are JSON with
+camelCase keys. Errors are `{"error": "..."}`.
 
 Any box in a cluster answers. Hosts, VMs, volumes, failure domains and
 `/v1/schedule` are decided by the elected leader; a follower forwards them
@@ -28,6 +30,23 @@ node accepts the new one (docs/operations.md). Fingerprints are the first
 | GET | `/v1/token` | Local to the box asked: `{id, previous, currentUsed, rotating, nodes}`. `nodes` (leader only) lists each peer as `current`, `overlap`, `installing`, `stale` or `unreachable: …` |
 | PUT | `/v1/token` | Local. `{current, previous}` — the set this box must accept. What the leader pushes to peers; authenticate with any token the box still holds |
 | POST | `/v1/token/rotate` | Leader. 201 `{token, id, previous}`; the only time a token is returned. 409 while an earlier rotation is still being distributed |
+
+## Enrolment
+
+How a box joins (BOOTSTRAP.md, "Joining a cluster"). Decided by the box
+holding the CA key; any other member forwards these to it (`ca_url`), 409
+if it cannot. `xdebbied bootstrap --join` is the only client of the
+public ones.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/v1/ca` | *Public.* Cluster CA certificate, PEM; `X-Xdebbie-CA-Fingerprint: sha256:…` |
+| POST | `/v1/enroll` | *Public.* `{hostname, box, apiUrl, csr, wgPubkey?}` → 202 `{id, hostname, box, apiUrl, fingerprint, status: "pending", requestedAt}`. Same key again returns the same enrolment; at most 64 pending |
+| GET | `/v1/enroll/{id}` | *Public.* The enrolment; once `approved` it carries `cert` and `ca` (PEM) |
+| GET | `/v1/enroll?all=true` | Pending enrolments (`all`: approved and denied too) |
+| POST | `/v1/enroll/{id-or-host}/approve` | Sign the CSR with the cluster CA |
+| POST | `/v1/enroll/{id-or-host}/deny` | Refuse |
+| GET | `/v1/enroll/token` | Local. `{current, previous}` for a caller with a **client certificate** (403 for a bearer token) |
 
 ## Hosts
 

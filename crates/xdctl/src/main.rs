@@ -66,6 +66,17 @@ enum Cmd {
     Fd,
     /// Which xdebbied decides for the cluster.
     Leader,
+    /// Boxes asking to join the cluster (`xdebbied bootstrap --join`).
+    #[command(subcommand)]
+    Enroll(EnrollCmd),
+    /// Approve a box that asked to join: shorthand for `enroll approve`.
+    Approve {
+        /// Hostname (as it appears in `xdctl enroll ls`) or enrolment id.
+        host: String,
+    },
+    /// The cluster CA certificate and its fingerprint (what
+    /// `bootstrap --join --ca-fingerprint` expects).
+    Ca,
     /// API bearer token: status and rotation.
     #[command(subcommand)]
     Token(TokenCmd),
@@ -83,6 +94,26 @@ enum Cmd {
         /// Shell to generate completion for (bash, zsh, fish, elvish, powershell)
         #[arg(value_enum)]
         shell: Shell,
+    },
+}
+
+#[derive(Subcommand)]
+enum EnrollCmd {
+    /// Pending enrolments (`--all` includes approved and denied).
+    Ls {
+        #[arg(long)]
+        all: bool,
+    },
+    /// Sign the box's certificate; its bootstrap then finishes on its own.
+    /// Check the fingerprint against what that box printed first.
+    Approve {
+        /// Hostname or enrolment id.
+        host: String,
+    },
+    /// Refuse. The box can ask again with `bootstrap --join --force`.
+    Deny {
+        /// Hostname or enrolment id.
+        host: String,
     },
 }
 
@@ -320,7 +351,7 @@ const LEADER_WAIT_SECS: u32 = 20;
 /// (comma-separated files or directories). Missing paths are skipped: a
 /// box that still serves plain http has no CA and must keep working.
 fn http_client(ca: &str, insecure: bool) -> Result<Client> {
-    let mut b = Client::builder().danger_accept_invalid_certs(insecure);
+    let mut b = Client::builder().use_rustls_tls().danger_accept_invalid_certs(insecure);
     for entry in ca.split(',').map(str::trim).filter(|s| !s.is_empty()) {
         let p = std::path::Path::new(entry);
         let files: Vec<std::path::PathBuf> = if p.is_dir() {
@@ -345,6 +376,8 @@ struct Api {
     c: Client,
     url: String,
     token: Option<String>,
+    /// `X-Xdebbie-CA-Fingerprint` from the last reply, if any.
+    last_ca_fingerprint: std::cell::RefCell<Option<String>>,
 }
 impl Api {
     /// Move to the elected leader. `seeds` is what the user configured; the
@@ -413,6 +446,9 @@ impl Api {
         }
         let resp = r.send().context("contacting xdebbied")?;
         let code = resp.status();
+        if let Some(fp) = resp.headers().get("x-xdebbie-ca-fingerprint").and_then(|v| v.to_str().ok()) {
+            *self.last_ca_fingerprint.borrow_mut() = Some(fp.to_string());
+        }
         let text = resp.text()?;
         let v: Value = if text.is_empty() {
             Value::Null
@@ -645,6 +681,7 @@ fn main() -> Result<()> {
         c: http_client(&cli.ca, cli.insecure)?,
         url: cli.url.clone(),
         token: cli.token.clone(),
+        last_ca_fingerprint: Default::default(),
     };
     let asked = api.find_leader(&cli.url)?;
     let out = |v: Value| -> Result<()> {
@@ -782,6 +819,56 @@ fn main() -> Result<()> {
                 Some(l) => println!("leader  {}", who(l)),
                 None => println!("leader  none yet"),
             }
+        }
+        Cmd::Enroll(EnrollCmd::Ls { all }) => {
+            let v = api.call(Method::GET, if all { "/enroll?all=true" } else { "/enroll" }, None)?;
+            if cli.json {
+                return out(v);
+            }
+            let es: Vec<Enrollment> = serde_json::from_value(v)?;
+            if es.is_empty() {
+                println!("no {}enrolments", if all { "" } else { "pending " });
+                return Ok(());
+            }
+            println!("{:<9} {:<24} {:>3}  {:<30} {:<23} {:<9} AGE", "ID", "HOST", "BOX", "URL", "FINGERPRINT", "STATUS");
+            for e in es {
+                let fp = e.fingerprint.trim_start_matches("sha256:");
+                let fp = format!("{}…{}", &fp[..8.min(fp.len())], &fp[fp.len().saturating_sub(8)..]);
+                println!(
+                    "{:<9} {:<24} {:>3}  {:<30} {:<23} {:<9} {}",
+                    e.id, e.hostname, e.box_id, e.api_url, fp, e.status, format_age(e.requested_at)
+                );
+            }
+        }
+        Cmd::Enroll(EnrollCmd::Approve { host }) | Cmd::Approve { host } => {
+            let v = api.call(Method::POST, &format!("/enroll/{host}/approve"), None)?;
+            if cli.json {
+                return out(v);
+            }
+            let e: Enrollment = serde_json::from_value(v)?;
+            println!("approved {} (box {}, {})", e.hostname, e.box_id, e.fingerprint);
+            println!("Its `xdebbied bootstrap --join` picks the certificate up within a few seconds.");
+        }
+        Cmd::Enroll(EnrollCmd::Deny { host }) => {
+            let v = api.call(Method::POST, &format!("/enroll/{host}/deny"), None)?;
+            if cli.json {
+                return out(v);
+            }
+            let e: Enrollment = serde_json::from_value(v)?;
+            println!("denied {} ({})", e.hostname, e.fingerprint);
+        }
+        Cmd::Ca => {
+            let (code, v) = api.call_raw(Method::GET, "/ca", None, None)?;
+            if !code.is_success() {
+                bail!("{code}: {}", api_error_text(&v));
+            }
+            let pem = v.as_str().unwrap_or_default().to_string();
+            let fp = api.last_ca_fingerprint.borrow().clone().unwrap_or_default();
+            if cli.json {
+                return out(serde_json::json!({ "fingerprint": fp, "pem": pem }));
+            }
+            println!("# cluster CA fingerprint {fp}");
+            print!("{pem}");
         }
         Cmd::Token(TokenCmd::Status) => {
             let v = api.call(Method::GET, "/token", None)?;

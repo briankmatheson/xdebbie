@@ -42,6 +42,14 @@ pub struct Config {
     /// addition to `ca_file`, so a follower can verify the leader's cert.
     #[serde(default = "d_peer_ca_dir")]
     pub peer_ca_dir: PathBuf,
+    /// Cluster CA private key. Present only on the box that was
+    /// bootstrapped first; it signs enrolments (`xdctl approve`).
+    #[serde(default = "d_ca_key")]
+    pub ca_key: PathBuf,
+    /// API of the box holding the CA key, set by `bootstrap --join`.
+    /// Enrolment calls that land here are forwarded there.
+    #[serde(default)]
+    pub ca_url: Option<String>,
     #[serde(default)]
     pub policy: PlacementPolicy,
     #[serde(default = "d_interval")]
@@ -112,6 +120,9 @@ fn d_ca_file() -> PathBuf {
 }
 fn d_peer_ca_dir() -> PathBuf {
     "/etc/xdebbie/peers".into()
+}
+fn d_ca_key() -> PathBuf {
+    "/etc/xdebbie/api-ca-key.pem".into()
 }
 fn d_interval() -> u64 {
     5
@@ -271,7 +282,7 @@ impl Config {
     /// `peer_ca_dir`, so self-signed bootstrap certs verify.
     pub fn http_client(&self, timeout: std::time::Duration) -> reqwest::Client {
         use crate::bootstrap::api_tls::{load_ca_cert, load_ca_dir};
-        let mut b = reqwest::Client::builder().timeout(timeout);
+        let mut b = reqwest::Client::builder().use_rustls_tls().timeout(timeout);
         let mut n = 0;
         if let Some(c) = load_ca_cert(&self.ca_file) {
             b = b.add_root_certificate(c);
@@ -281,7 +292,26 @@ impl Config {
             b = b.add_root_certificate(c);
             n += 1;
         }
-        tracing::info!(cas = n, ca_file = %self.ca_file.display(), peer_ca_dir = %self.peer_ca_dir.display(), "trusted xdebbie CA certificates");
+        // Present our own cert: a box enrolled under the cluster CA is then
+        // recognised by every other box without a bearer token.
+        let mut ident = false;
+        if let (Some(c), Some(k)) = (&self.tls_cert, &self.tls_key) {
+            match (std::fs::read(c), std::fs::read(k)) {
+                (Ok(mut pem), Ok(key)) => {
+                    pem.push(b'\n');
+                    pem.extend_from_slice(&key);
+                    match reqwest::Identity::from_pem(&pem) {
+                        Ok(id) => {
+                            b = b.identity(id);
+                            ident = true;
+                        }
+                        Err(e) => tracing::warn!("client identity from {}/{}: {e}", c.display(), k.display()),
+                    }
+                }
+                (Err(e), _) | (_, Err(e)) => tracing::warn!("reading {}/{} for client identity: {e}", c.display(), k.display()),
+            }
+        }
+        tracing::info!(cas = n, client_cert = ident, ca_file = %self.ca_file.display(), peer_ca_dir = %self.peer_ca_dir.display(), "trusted xdebbie CA certificates");
         b.build().expect("reqwest client")
     }
 

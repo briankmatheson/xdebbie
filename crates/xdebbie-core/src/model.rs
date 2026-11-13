@@ -528,6 +528,69 @@ pub struct TokenRotated {
     pub previous: String,
 }
 
+/// `POST /v1/enroll` body: a box asking the cluster CA to sign its API
+/// certificate. The private key never leaves the joiner.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EnrollRequest {
+    pub hostname: String,
+    /// Mesh box id (0-253).
+    #[serde(rename = "box")]
+    pub box_id: u8,
+    /// Where the joiner's API will be once it starts.
+    pub api_url: String,
+    /// PEM certificate signing request.
+    pub csr: String,
+    /// WireGuard public key, so an operator can `mesh peer add` straight
+    /// from the enrolment list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wg_pubkey: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum EnrollStatus {
+    Pending,
+    Approved,
+    Denied,
+}
+
+impl std::fmt::Display for EnrollStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            EnrollStatus::Pending => "pending",
+            EnrollStatus::Approved => "approved",
+            EnrollStatus::Denied => "denied",
+        })
+    }
+}
+
+/// One enrolment as the CA box reports it (`GET /v1/enroll`,
+/// `GET /v1/enroll/{id}`). `cert` and `ca` are filled in once approved; the
+/// joiner installs them and restarts.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Enrollment {
+    pub id: String,
+    pub hostname: String,
+    #[serde(rename = "box")]
+    pub box_id: u8,
+    pub api_url: String,
+    /// `sha256:<hex>` of the requested public key; compare it with what
+    /// `xdebbied bootstrap --join` printed before approving.
+    pub fingerprint: String,
+    pub status: EnrollStatus,
+    pub requested_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decided_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wg_pubkey: Option<String>,
+    /// PEM certificate issued by the cluster CA (approved only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cert: Option<String>,
+    /// PEM cluster CA certificate (approved only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ca: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LeaderRef {
     /// Election identity; `None` when running standalone.
