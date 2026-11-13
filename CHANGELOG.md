@@ -5,6 +5,42 @@ All notable changes to XDebbie will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] - unreleased
+
+For ABE 0.5.0 (`abe-block-exporter`), whose API is now HTTPS with mutual
+TLS and whose nvmet ports are fenced to the box that asked for them. Spec:
+`specs/abe-tls.md`; milestone log: `milestones/2026-11-13-abe-tls.md`.
+
+### Added
+- `[[hosts]].abe` takes `https://10.22.<box>.1:443`. The ABE client is
+  built from `Config::http_client` (`abe::Client::with_http`): the cluster
+  CA (`ca_file` plus `peer_ca_dir`) as roots and this box's
+  `tls_cert`/`tls_key` as its client certificate, so an ABE pointed at
+  `/etc/xdebbie/api-*.pem` admits exactly the enrolled xdebbieds. The
+  scheme is used as written: an `http://` record still reaches a 0.4.0
+  ABE.
+- A refused TLS handshake (untrusted server certificate, no client
+  certificate accepted) is reported as `tls: <reason>` (an `AbeHttpError`
+  with status 0, e.g. `tls: invalid peer certificate: UnknownIssuer`) in
+  the log and the inventory error, instead of looking like a timeout.
+- `Host.abeCapacity.tls` (from `/version`'s `"tls"`, abe ≥ 0.5.0, serde
+  default `false`) and a `TLS` column in `xdctl host ls` (`yes` / `no` /
+  `-`).
+- `tests/lint-abe-client.sh`, run by `make test` and `make lint`: the bare
+  `abe::Client::new()` is `#[cfg(test)]` and must not appear outside test
+  code.
+- `tests/abe/run.sh` phase `tls` (T1): a daemon with
+  `tls_cert`/`tls_key`/`ca_file` from an openssl-made CA still provisions
+  on the plain-http fake; `fake-abe.py` answers `"tls": false`.
+
+### Changed
+- Docs (`docs/storage.md`, `docs/api.md`): https host records, the ABE
+  cert variables, a TLS section and a Port fence section (ABE opens an
+  nvmet port only to the box that asked for it; after moving a VM or
+  restoring ABE the next reconcile re-asks via the existing endpoint
+  refresh — no new call sites).
+- Debian revision back to 1 for 0.16.0.
+
 ## [0.15.0] - unreleased
 
 ### Added
