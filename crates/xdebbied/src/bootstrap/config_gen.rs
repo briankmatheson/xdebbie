@@ -266,6 +266,34 @@ pub fn set_mesh_box(content: &str, box_id: u8) -> String {
     s
 }
 
+/// `content` with the top-level scalar `key = value` set, comments and
+/// everything else untouched. A live line is rewritten (keeping its
+/// comment); otherwise a commented-out `# key = …` template line is
+/// replaced; otherwise the line is inserted before the first table.
+pub fn set_top_level(content: &str, key: &str, value: &str) -> String {
+    let line = format!("{key} = {value}");
+    let key_of = |l: &str| l.trim_start().trim_start_matches('#').trim_start().split(['=', ' ', '\t']).next().unwrap_or("").to_string();
+    let lines: Vec<&str> = content.lines().collect();
+    let top_end = lines.iter().position(|l| table_header(l).is_some()).unwrap_or(lines.len());
+    let live = lines[..top_end].iter().position(|l| !l.trim_start().starts_with('#') && key_of(l) == key);
+    let commented = lines[..top_end].iter().position(|l| l.trim_start().starts_with('#') && key_of(l) == key);
+    let mut out: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+    match (live, commented) {
+        (Some(i), _) => {
+            let l = lines[i];
+            let comment = l.find('#').map(|c| &l[c..]).unwrap_or("");
+            out[i] = if comment.is_empty() { line } else { format!("{line}   {comment}") };
+        }
+        (None, Some(i)) => out[i] = line,
+        (None, None) => out.insert(top_end, line),
+    }
+    let mut s = out.join("\n");
+    if content.ends_with('\n') || out.len() > lines.len() {
+        s.push('\n');
+    }
+    s
+}
+
 /// Regenerated config with the operator's settings from `old` carried
 /// over, except `fresh` keys, which take the generated value even if the
 /// previous config had one (`ca_url` when re-joining a different CA).
@@ -424,6 +452,29 @@ mod tests {
         let g = generate_config(&resources, "qemu:///system", None, 0, None);
         let t: toml::Table = toml::from_str(&set_mesh_box(&g, 4)).unwrap();
         assert_eq!(t["mesh"]["box"].as_integer(), Some(4));
+    }
+
+    #[test]
+    fn set_top_level_rewrites_replaces_template_or_inserts() {
+        // Live line keeps its comment.
+        let c = "listen = \"0.0.0.0:7443\"\nca_url = \"https://old:7443\"   # the CA\n\n[mesh]\nbox = 0\n";
+        let out = set_top_level(c, "ca_url", "\"https://new:7443\"");
+        assert_eq!(out, "listen = \"0.0.0.0:7443\"\nca_url = \"https://new:7443\"   # the CA\n\n[mesh]\nbox = 0\n");
+        // The template's commented-out line is replaced in place.
+        let resources = LibvirtResources { networks: vec![], pools: vec![] };
+        let g = generate_config(&resources, "qemu:///system", None, 0, None);
+        assert!(g.contains("\n# ca_url = "));
+        let out = set_top_level(&g, "ca_url", "\"https://ca:7443\"");
+        assert!(!out.contains("\n# ca_url = "));
+        let t: toml::Table = toml::from_str(&out).unwrap();
+        assert_eq!(t["ca_url"].as_str(), Some("https://ca:7443"));
+        assert_eq!(out.lines().count(), g.lines().count());
+        // No such line at all: inserted before the first table, not inside one.
+        let out = set_top_level("listen = \"0.0.0.0:7443\"\n\n[mesh]\nbox = 0\n", "ca_url", "\"https://ca:7443\"");
+        let t: toml::Table = toml::from_str(&out).unwrap();
+        assert_eq!(t["ca_url"].as_str(), Some("https://ca:7443"));
+        assert_eq!(t["mesh"]["box"].as_integer(), Some(0));
+        assert!(t["mesh"].get("ca_url").is_none());
     }
 
     #[test]

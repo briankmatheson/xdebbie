@@ -390,12 +390,26 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     
     let exists = opts.config_path.exists();
     if exists && !opts.force {
+        // A kept config still learns what the cluster decided: the box id
+        // and, for a joiner, which box holds the CA. Nothing else is touched.
+        let existing_ca_url = crate::config::Config::load(&opts.config_path).ok().and_then(|c| c.ca_url);
+        let want_ca_url = opts.join.as_deref().map(|u| u.trim_end_matches('/').to_string());
+        let box_moves = existing_box.is_some_and(|b| b != box_id);
+        let ca_moves = want_ca_url.is_some() && want_ca_url != existing_ca_url;
         match config_gen::config_parses(&opts.config_path) {
-            Ok(()) if existing_box.is_some_and(|b| b != box_id) => {
-                // Only the box id moves: the cluster numbers boxes, not the file.
-                let old = std::fs::read_to_string(&opts.config_path)?;
-                config_gen::write_config(&opts.config_path, &config_gen::set_mesh_box(&old, box_id))?;
-                info!("Configuration kept at {}; [mesh] box set to {box_id}", opts.config_path.display());
+            Ok(()) if box_moves || ca_moves => {
+                let mut c = std::fs::read_to_string(&opts.config_path)?;
+                let mut what = vec![];
+                if box_moves {
+                    c = config_gen::set_mesh_box(&c, box_id);
+                    what.push(format!("[mesh] box = {box_id}"));
+                }
+                if let (true, Some(u)) = (ca_moves, &want_ca_url) {
+                    c = config_gen::set_top_level(&c, "ca_url", &format!("{u:?}"));
+                    what.push(format!("ca_url = {u:?}"));
+                }
+                config_gen::write_config(&opts.config_path, &c)?;
+                info!("Configuration kept at {}; set {}", opts.config_path.display(), what.join(", "));
             }
             Ok(()) => info!(
                 "Configuration already exists at {}, skipping (use --force to regenerate)",

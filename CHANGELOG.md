@@ -32,7 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   enrolment (own id + configured peers + every live enrolment are taken; a
   host that re-enrols keeps its id). Bootstrap now enrols *before* creating
   the libvirt network so the assigned id drives the bridge MAC and `[mesh]
-  box`; an existing config has only its `box` line rewritten.
+  box`; an existing config has only its `box` line (and, for a joiner,
+  `ca_url`) rewritten, comments intact.
 - `xdebbied bootstrap` with no `--join` listens 20 s for a running
   cluster's discovery announcements and offers to join it (leader first);
   hearing nothing, it asks for a URL, Enter = first box. Non-interactive
