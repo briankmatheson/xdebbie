@@ -210,14 +210,50 @@ fn write_secret(path: &Path, value: &str) -> Result<()> {
     write_private(path, &format!("{value}\n"))
 }
 
-/// Mode of every file that holds the token: the daemon and bootstrap run
-/// as root and replace files by rename, so nothing needs write permission.
+/// Mode of token files: root:root 0400.
+/// The daemon and bootstrap run as root and replace files by rename, so
+/// nothing needs write permission.
 pub const SECRET_MODE: u32 = 0o400;
+
+/// Mode of operator-readable files (config, env): root:xdebbie 0440.
+/// Readable by any member of the xdebbie group without sudo.
+pub const GROUP_MODE: u32 = 0o440;
+
+/// Return the GID of the `xdebbie` group, or `None` if it does not exist.
+pub fn xdebbie_gid() -> Option<u32> {
+    let name = match std::ffi::CString::new("xdebbie") {
+        Ok(n) => n,
+        Err(_) => return None,
+    };
+    // SAFETY: getgrnam reads /etc/group and returns a pointer to static
+    // storage. We copy the gid immediately and do not retain the pointer.
+    let grp = unsafe { libc::getgrnam(name.as_ptr()) };
+    if grp.is_null() {
+        None
+    } else {
+        Some(unsafe { (*grp).gr_gid })
+    }
+}
 
 /// Write `content` to `path` atomically as root:root 0400: a temp file in
 /// the same directory gets the mode before any byte lands, then replaces
-/// `path` by rename. Used for the token files and `xdebbie_env`.
+/// `path` by rename. Used for the token files.
 pub fn write_private(path: &Path, content: &str) -> Result<()> {
+    write_atomic(path, content, SECRET_MODE, 0, 0)
+}
+
+/// Write `content` to `path` atomically as root:xdebbie 0440.
+/// Falls back to root:root 0400 if the xdebbie group does not exist yet.
+/// Used for `xdebbied.toml` and `xdebbie_env`.
+pub fn write_group_readable(path: &Path, content: &str) -> Result<()> {
+    let gid = xdebbie_gid().unwrap_or(0);
+    let mode = if gid != 0 { GROUP_MODE } else { SECRET_MODE };
+    write_atomic(path, content, mode, 0, gid)
+}
+
+/// Atomic write with explicit mode and ownership.
+/// Writes a temp file in the same directory, sets mode/owner, then renames.
+fn write_atomic(path: &Path, content: &str, mode: u32, uid: u32, gid: u32) -> Result<()> {
     use std::io::Write;
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     let mut f = tempfile::Builder::new()
@@ -227,12 +263,11 @@ pub fn write_private(path: &Path, content: &str) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        f.as_file().set_permissions(std::fs::Permissions::from_mode(SECRET_MODE))?;
-        // Only root can chown; when bootstrap runs as root this pins
-        // root:root regardless of who owned the previous file.
+        f.as_file()
+            .set_permissions(std::fs::Permissions::from_mode(mode))?;
         if nix_is_root() {
-            std::os::unix::fs::fchown(f.as_file(), Some(0), Some(0))
-                .with_context(|| format!("chown root:root {}", path.display()))?;
+            std::os::unix::fs::fchown(f.as_file(), Some(uid), Some(gid))
+                .with_context(|| format!("chown {}:{} {}", uid, gid, path.display()))?;
         }
     }
     f.write_all(content.as_bytes())?;
@@ -266,7 +301,9 @@ fn rewrite_env_token(env: &Path, token: &str) -> Result<()> {
     if !found {
         return Ok(());
     }
-    write_private(env, &out)
+    // The env file is group-readable (root:xdebbie 0440); preserve that on
+    // every token rotation rather than reverting to root:root 0400.
+    write_group_readable(env, &out)
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {

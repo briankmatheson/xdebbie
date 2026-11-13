@@ -144,17 +144,60 @@ a1b2c3d4e5f6...
 
 ### Environment: `/etc/xdebbie/xdebbie_env`
 
-Root:root mode 0400, like the token it contains. Source it from a root
-shell (`sudo -s`), or copy it to `~/.xdebbie_env` (mode 0400) for an
-unprivileged account that is allowed to drive the cluster.
+Root:xdebbie mode 0440. Bootstrap creates the `xdebbie` system group;
+add an operator account to it (`sudo usermod -aG xdebbie $USER`, then
+log in again) and that account can `source` the file and run `xdctl`
+without sudo. Nobody else can read it.
 
 ```bash
 # xdebbie environment variables
 # Source this file: source /etc/xdebbie/xdebbie_env
 
-export XDEBBIE_URL=http://0.0.0.0:7443
+export XDEBBIE_URL=https://gram.example.net:7443
 export XDEBBIE_TOKEN='a1b2c3d4e5f6...'
+export XDEBBIE_CA=/etc/xdebbie/api-ca.pem
 ```
+
+`XDEBBIE_URL` is the config's `advertise_url` (the hostname, never
+`0.0.0.0`), so the same file works from another machine.
+
+### API TLS: `/etc/xdebbie/api-{ca,cert,key}.pem`
+
+Bootstrap generates a per-box CA and a server certificate signed by it
+(in-process with `rcgen`; no openssl needed) and writes
+`tls_cert`/`tls_key` into the config, so the API serves **HTTPS from the
+first start**. The bearer token and the WireGuard public keys exchanged
+during mesh enrolment therefore never cross the LAN in clear.
+
+| File | Owner | Mode | Purpose |
+|---|---|---|---|
+| `api-ca.pem` | root:xdebbie | 0440 | CA; give this to peers and to `xdctl` |
+| `api-cert.pem` | root:xdebbie | 0440 | server cert (SANs: hostname, FQDN, every local IPv4) |
+| `api-key.pem` | root:root | 0400 | server key |
+| `peers/*.pem` | root:xdebbie | 0440 | other boxes' CAs, trusted in addition to our own |
+
+Certificates are only reissued with `--force` (or if a file is missing).
+The server cert lists the host's IPv4 addresses at generation time; if
+the box's address changes, `xdebbied bootstrap --force` reissues it.
+
+**Exchanging CAs between boxes.** Each box trusts its own `ca_file` plus
+every `*.pem` in `peer_ca_dir` (`/etc/xdebbie/peers`), both for the
+daemon's leader forwarding and for `xdctl` (`XDEBBIE_CA` accepts a
+comma-separated list of files or directories, default
+`/etc/xdebbie/api-ca.pem,/etc/xdebbie/peers`). Before meshing:
+
+```bash
+# on gram
+scp /etc/xdebbie/api-ca.pem timesink:/tmp/gram.pem
+ssh timesink sudo install -m 0440 -g xdebbie /tmp/gram.pem /etc/xdebbie/peers/
+# on timesink
+scp /etc/xdebbie/api-ca.pem gram:/tmp/timesink.pem
+ssh gram sudo install -m 0440 -g xdebbie /tmp/timesink.pem /etc/xdebbie/peers/
+# then on both
+sudo systemctl restart xdebbied
+```
+
+`xdctl --insecure` (or `XDEBBIE_INSECURE=1`) skips verification for a lab.
 
 ### State: `/var/lib/xdebbie/state.json`
 
@@ -273,9 +316,12 @@ This allows bootstrap to work on systems with existing libvirt setups (e.g., `de
 ### Token Security
 
 - Token is 32 random bytes (256 bits of entropy)
-- Token file, `token.previous` (during a rotation) and `xdebbie_env` are
-  root:root 0400, written to a temp file with that mode and renamed into
-  place, so the secret is never world-readable even for an instant
+- Token file and `token.previous` (during a rotation) are root:root 0400;
+  `xdebbie_env` and `xdebbied.toml` are root:xdebbie 0440. All are written
+  to a temp file with the final mode and renamed into place, so a secret
+  is never world-readable even for an instant
+- The API serves HTTPS by default with a bootstrap-generated certificate,
+  so the token never travels in clear
 - Never logged or displayed except in environment file
 - Bearer token authentication for all API requests
 
@@ -360,8 +406,11 @@ ls -la /etc/xdebbie/
 ls -la /var/lib/xdebbie/
 ```
 
-`token`, `token.previous` and `xdebbie_env` should be root:root 0400
-(the package's postinst fixes older installs). `xdebbied.toml` is 0644.
+`token`, `token.previous` and `api-key.pem` should be root:root 0400;
+`xdebbied.toml`, `xdebbie_env`, `api-ca.pem` and `api-cert.pem`
+root:xdebbie 0440; the directory and `peers/` root:xdebbie 0750.
+Re-running `xdebbied bootstrap` (without `--force`) repairs ownership
+without touching content.
 
 ## Comparison with Manual Setup
 
@@ -432,7 +481,8 @@ sudo chmod 600 /etc/xdebbie/token
 
 # 7. Create env file
 cat > /etc/xdebbie/xdebbie_env <<EOF
-export XDEBBIE_URL=http://0.0.0.0:7443
+export XDEBBIE_URL=https://$(hostname -f):7443
+export XDEBBIE_CA=/etc/xdebbie/api-ca.pem
 export XDEBBIE_TOKEN='$TOKEN'
 EOF
 

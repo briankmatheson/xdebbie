@@ -71,4 +71,43 @@ if command -v nft >/dev/null && nft list ruleset 2>/dev/null | grep -q 'hook inp
 fi
 
 systemctl enable --now libvirtd
+
+# Strip desktop services that cause idle sleep, spurious wakeups, and
+# wasted RAM on a headless hypervisor.  Each is only disabled/masked if
+# it is actually present so the script stays idempotent on a minimal install.
+DESKTOP_UNITS=(
+  gdm.service           # GNOME display manager → triggers idle suspend
+  sddm.service          # KDE display manager
+  lightdm.service       # LightDM
+  power-profiles-daemon.service  # desktop power profiles (conflicts with tuned)
+  upower.service        # desktop battery/power events
+  bluetooth.service     # no BT needed on a hypervisor
+  cups.service          # printing
+  cups-browsed.service  # network printer discovery
+)
+for unit in "${DESKTOP_UNITS[@]}"; do
+  if systemctl list-unit-files "$unit" 2>/dev/null | grep -q "$unit"; then
+    systemctl disable --now "$unit" 2>/dev/null || true
+    systemctl mask "$unit"
+    echo ">> masked $unit"
+  fi
+done
+
+# Switch to multi-user (text) target so a reboot doesn't re-launch a DM.
+systemctl set-default multi-user.target
+
+# Prevent systemd-logind from sleeping the box when the last session ends
+# or the lid is closed (common on repurposed laptops/mini-ITX desktops).
+mkdir -p /etc/systemd/logind.conf.d
+cat > /etc/systemd/logind.conf.d/xdebbie-nosleep.conf <<'EOF'
+[Login]
+HandleSuspendKey=ignore
+HandleHibernateKey=ignore
+HandleLidSwitch=ignore
+HandleLidSwitchExternalPower=ignore
+HandleLidSwitchDocked=ignore
+IdleAction=ignore
+EOF
+systemctl restart systemd-logind
+
 echo ">> $(hostname) ready: $(nproc) cpus, $(free -g | awk '/Mem:/{print $2}') GiB RAM"

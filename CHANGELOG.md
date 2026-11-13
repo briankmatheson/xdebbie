@@ -5,6 +5,47 @@ All notable changes to XDebbie will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-11-12
+
+### Security
+- **The API serves HTTPS out of the box.** Bootstrap generates a per-box CA
+  and a server certificate signed by it (in-process with `rcgen`, no
+  openssl) as `/etc/xdebbie/api-{ca,cert,key}.pem`, and writes
+  `tls_cert`/`tls_key` into the config. The bearer token and the WireGuard
+  public keys exchanged during mesh enrolment no longer cross the LAN in
+  clear. The server cert's SANs cover the hostname, FQDN and every local
+  IPv4 address; `bootstrap --force` reissues it after an address change.
+- Trust between boxes: each daemon and `xdctl` trust the box's own CA
+  (`ca_file`) plus every `*.pem` in `peer_ca_dir` (`/etc/xdebbie/peers`).
+  Copy `api-ca.pem` from each box into the other's `peers/` before
+  enrolling (recipe in BOOTSTRAP.md). `xdctl --ca` / `XDEBBIE_CA` take a
+  comma-separated list of files or directories; `--insecure` /
+  `XDEBBIE_INSECURE` skips verification for a lab.
+- `xdebbie_env` and `xdebbied.toml` are root:xdebbie 0440 and the config
+  directory root:xdebbie 0750. Bootstrap and the package postinst create
+  the `xdebbie` system group; add an operator to it
+  (`usermod -aG xdebbie`) and `source /etc/xdebbie/xdebbie_env` works
+  without sudo. `token`, `token.previous` and `api-key.pem` stay root:root
+  0400. Token rotation keeps the env file's group mode.
+
+### Fixed
+- Bootstrap wrote `advertise_url` commented out and `XDEBBIE_URL` as
+  `http://0.0.0.0:7443`, so peers announced `127.0.0.1` in discovery and
+  `xdctl leader` showed every box on loopback. `advertise_url` is now
+  emitted live as `https://<fqdn>:7443` and the env file carries the same
+  URL (plus `XDEBBIE_CA`).
+- Package postinst forced `xdebbie_env` back to root:root 0400 on every
+  upgrade; it now applies the 0440/0400 split above.
+
+### Changed
+- `xdctl` default `--url` is `https://127.0.0.1:7443`.
+- New config keys `ca_file` (default `/etc/xdebbie/api-ca.pem`) and
+  `peer_ca_dir` (default `/etc/xdebbie/peers`).
+- `examples/four-node/prep-host.sh` masks display managers, cups,
+  bluetooth, upower and power-profiles-daemon, sets `multi-user.target`
+  and tells logind to ignore lid/idle/suspend — a repurposed desktop
+  otherwise goes to sleep under the cluster.
+
 ## [0.12.0] - 2026-11-12
 
 ### Security

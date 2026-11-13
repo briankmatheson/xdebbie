@@ -32,6 +32,16 @@ pub struct Config {
     pub tls_cert: Option<PathBuf>,
     #[serde(default)]
     pub tls_key: Option<PathBuf>,
+    /// CA certificate this box's API cert chains to (bootstrap writes
+    /// `/etc/xdebbie/api-ca.pem`). Trusted by this daemon when it forwards
+    /// to the leader, and exported as `XDEBBIE_CA` for xdctl.
+    #[serde(default = "d_ca_file")]
+    pub ca_file: PathBuf,
+    /// Directory of `*.pem` CA certificates for other boxes
+    /// (`/etc/xdebbie/peers/<host>.pem`). Every file in it is trusted in
+    /// addition to `ca_file`, so a follower can verify the leader's cert.
+    #[serde(default = "d_peer_ca_dir")]
+    pub peer_ca_dir: PathBuf,
     #[serde(default)]
     pub policy: PlacementPolicy,
     #[serde(default = "d_interval")]
@@ -96,6 +106,12 @@ fn d_multicast() -> String {
 }
 fn d_state() -> PathBuf {
     "/var/lib/xdebbie/state.json".into()
+}
+fn d_ca_file() -> PathBuf {
+    "/etc/xdebbie/api-ca.pem".into()
+}
+fn d_peer_ca_dir() -> PathBuf {
+    "/etc/xdebbie/peers".into()
 }
 fn d_interval() -> u64 {
     5
@@ -248,6 +264,25 @@ impl Config {
             listen.ip()
         };
         format!("{scheme}://{}", SocketAddr::new(ip, listen.port()))
+    }
+
+    /// HTTP client for talking to other boxes (leader forwarding, token
+    /// distribution): system roots plus `ca_file` and every `*.pem` in
+    /// `peer_ca_dir`, so self-signed bootstrap certs verify.
+    pub fn http_client(&self, timeout: std::time::Duration) -> reqwest::Client {
+        use crate::bootstrap::api_tls::{load_ca_cert, load_ca_dir};
+        let mut b = reqwest::Client::builder().timeout(timeout);
+        let mut n = 0;
+        if let Some(c) = load_ca_cert(&self.ca_file) {
+            b = b.add_root_certificate(c);
+            n += 1;
+        }
+        for c in load_ca_dir(&self.peer_ca_dir) {
+            b = b.add_root_certificate(c);
+            n += 1;
+        }
+        tracing::info!(cas = n, ca_file = %self.ca_file.display(), peer_ca_dir = %self.peer_ca_dir.display(), "trusted xdebbie CA certificates");
+        b.build().expect("reqwest client")
     }
 
     /// Directory holding `state.json`, `mesh.json`, ...

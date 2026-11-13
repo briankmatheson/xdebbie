@@ -5,6 +5,7 @@
 //! discovery/creation, configuration generation, and token generation to
 //! enable single-binary deployment on stock Debian systems.
 
+pub mod api_tls;
 pub mod config_gen;
 pub mod deps;
 pub mod firewall;
@@ -65,9 +66,106 @@ impl Default for BootstrapOptions {
     }
 }
 
+/// Ensure the `xdebbie` system group exists, creating it if necessary.
+/// Members of this group can read `/etc/xdebbie/xdebbie_env` and
+/// `/etc/xdebbie/xdebbied.toml` without sudo.
+pub fn ensure_xdebbie_group() -> Result<()> {
+    if crate::token::xdebbie_gid().is_some() {
+        info!("Group 'xdebbie' already exists");
+        return Ok(());
+    }
+    info!("Creating system group 'xdebbie'");
+    let status = std::process::Command::new("groupadd")
+        .args(["--system", "xdebbie"])
+        .status()
+        .context("running groupadd")?;
+    if !status.success() {
+        anyhow::bail!("groupadd --system xdebbie failed: {status}");
+    }
+    info!("Group 'xdebbie' created");
+    Ok(())
+}
+
+/// Set ownership and permissions on the config directory and every file in it:
+///   /etc/xdebbie/          root:xdebbie 0750  (group can enter + read)
+///   xdebbied.toml          root:xdebbie 0440
+///   xdebbie_env            root:xdebbie 0440
+///   api-ca.pem, api-cert.pem  root:xdebbie 0440
+///   peers/                 root:xdebbie 0750
+///   token, token.previous  root:root    0400  (never group-readable)
+///   api-key.pem            root:root    0400
+///
+/// Non-fatal: a warning is logged for each failure so a partial install
+/// doesn't abort an otherwise successful bootstrap.
+fn chown_config_dir(cfg_dir: &Path) {
+    let gid = match crate::token::xdebbie_gid() {
+        Some(g) => g,
+        None => {
+            warn!("xdebbie group not found; skipping config dir ownership fixup");
+            return;
+        }
+    };
+
+    // Helper: chown + chmod a path, log on error.
+    let fix = |path: &Path, mode: u32, owner_gid: u32| {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Err(e) = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)) {
+                warn!("chmod {:o} {}: {e}", mode, path.display());
+            }
+            let cstr = match std::ffi::CString::new(path.as_os_str().as_encoded_bytes()) {
+                Ok(c) => c,
+                Err(_) => return,
+            };
+            // SAFETY: standard libc call; cstr lives for the duration.
+            let rc = unsafe { libc::chown(cstr.as_ptr(), 0, owner_gid) };
+            if rc != 0 {
+                warn!(
+                    "chown root:{} {}: {}",
+                    owner_gid,
+                    path.display(),
+                    std::io::Error::last_os_error()
+                );
+            }
+        }
+    };
+
+    // The directory itself: group-executable so members can cd into it.
+    fix(cfg_dir, 0o750, gid);
+
+    // Walk immediate children only — no recursion needed.
+    let rd = match std::fs::read_dir(cfg_dir) {
+        Ok(r) => r,
+        Err(e) => { warn!("read_dir {}: {e}", cfg_dir.display()); return; }
+    };
+    for entry in rd.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        match name.as_ref() {
+            "token" | "token.previous" | "api-key.pem" => fix(&path, 0o400, 0), // root:root
+            "xdebbied.toml" | "xdebbie_env" | "api-ca.pem" | "api-cert.pem" => fix(&path, 0o440, gid), // root:xdebbie
+            "peers" => fix(&path, 0o750, gid),
+            _ => {} // backups etc. — leave alone
+        }
+    }
+
+    info!(
+        "Config dir {}: root:xdebbie 0750; toml+env: 0440; token: 0400",
+        cfg_dir.display()
+    );
+}
+
 /// Perform full bootstrap process
 pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     info!("=== xdebbied Bootstrap ===");
+
+    // Step 0: Ensure the xdebbie system group exists before writing any files
+    // so that write_group_readable() gets the right gid on the first run.
+    if let Err(e) = ensure_xdebbie_group() {
+        warn!("Could not create xdebbie group: {e:#}; config files will be root:root 0400");
+    }
 
     // Step 1: Check dependencies
     info!("Step 1/8: Checking dependencies");
@@ -215,9 +313,20 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     // Create state directory
     std::fs::create_dir_all(&opts.state_dir).context("creating state directory")?;
 
-    // Step 7: Generate TLS certificates for multi-host libvirt connections
+    // Step 7a: Generate API TLS certificates (CA + server cert, pure Rust).
+    // These are written before the firewall step so the config already has
+    // the right tls_cert/tls_key paths when it is loaded for the firewall.
+    info!("Step 7/8: Generating API TLS certificates");
+    let api_tls_paths = api_tls::ApiTlsPaths::default();
+    let hostname = libvirt_setup::get_hostname();
+    if let Err(e) = api_tls::ensure_api_tls(&hostname, opts.force, &api_tls_paths) {
+        warn!("Failed to generate API TLS certs: {e:#}");
+        warn!("xdebbied will serve plain HTTP until certs are fixed; re-run bootstrap");
+    }
+
+    // Step 7b: Generate libvirt TLS certificates for multi-host connections.
     if let Err(e) = tls_certs::ensure_tls_certificates(opts.force) {
-        warn!("Failed to generate TLS certificates: {}", e);
+        warn!("Failed to generate libvirt TLS certificates: {}", e);
         warn!("Multi-host libvirt connections may not work until certificates are set up manually");
     }
 
@@ -234,30 +343,89 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
         warn!("Failed to configure firewall: {:#}", e);
     }
 
-    // Write environment file to /etc/xdebbie/ (system-wide)
+    // Write environment file to /etc/xdebbie/ (system-wide). The URL is the
+    // one the config advertises (same thing peers see in discovery), never
+    // the 0.0.0.0 listen address; the CA lets xdctl verify the cert.
     let cfg_dir = opts.config_path.parent().unwrap_or_else(|| Path::new(DEFAULT_CONFIG_DIR));
     let env_path = cfg_dir.join("xdebbie_env");
-    let url = format!("http://{}", opts.listen_addr);
-    if let Err(e) = token::write_env_file(&env_path, &url, &token) {
+    let (advertise_url, ca) = match crate::config::Config::load(&opts.config_path) {
+        Ok(cfg) => {
+            let ca = cfg.tls_cert.is_some().then(|| cfg.ca_file.clone());
+            (cfg.advertise_url(cfg.effective_listen()), ca)
+        }
+        Err(_) => (derive_advertise_url(&opts.listen_addr), None),
+    };
+    if let Err(e) = token::write_env_file(&env_path, &advertise_url, &token, ca.as_deref()) {
         warn!("Failed to write environment file: {}", e);
         info!("You can manually create it later with:");
-        info!("  echo 'export XDEBBIE_URL={}' > /etc/xdebbie/xdebbie_env", url);
+        info!("  echo 'export XDEBBIE_URL={}' > /etc/xdebbie/xdebbie_env", advertise_url);
         info!("  echo 'export XDEBBIE_TOKEN=<token>' >> /etc/xdebbie/xdebbie_env");
     }
+    // Peer CA drop directory: `scp other:/etc/xdebbie/api-ca.pem /etc/xdebbie/peers/other.pem`
+    if let Err(e) = std::fs::create_dir_all(cfg_dir.join("peers")) {
+        warn!("creating {}/peers: {e}", cfg_dir.display());
+    }
+
+    // Final ownership pass: set root:xdebbie 0440 on config+env,
+    // root:root 0400 on token, root:xdebbie 0750 on the directory.
+    // Done last so every file exists before we walk the directory.
+    chown_config_dir(cfg_dir);
 
     info!("=== Bootstrap Complete ===");
     info!("Configuration: {}", opts.config_path.display());
-    info!("Token: {}", opts.token_path.display());
-    info!("State: {}", opts.state_dir.display());
+    info!("Token:         {}", opts.token_path.display());
+    info!("State:         {}", opts.state_dir.display());
+    info!("Env file:      {}", env_path.display());
     info!("");
     info!("To start xdebbied:");
-    info!("  sudo xdebbied serve");
+    info!("  sudo systemctl enable --now xdebbied");
     info!("");
-    info!("To use xdctl:");
-    info!("  source /etc/xdebbie/{}", DEFAULT_ENV_FILE);
+    info!("To use xdctl without sudo, add yourself to the xdebbie group");
+    info!("(log out and back in after running this):");
+    info!("  sudo usermod -aG xdebbie $USER");
+    info!("");
+    info!("Then source the env file once per shell (or add to ~/.bashrc):");
+    info!("  source {}", env_path.display());
     info!("  xdctl host ls");
+    info!("");
+    info!("Or add this line to ~/.bashrc for permanent access:");
+    info!("  [ -r {} ] && source {}", env_path.display(), env_path.display());
+    if let Some(ca) = &ca {
+        info!("");
+        info!("The API serves HTTPS with a cert from this box's own CA ({}).", ca.display());
+        info!("Before meshing with another box, exchange CA certs so each side can");
+        info!("verify the other (xdctl and leader forwarding both check them):");
+        info!("  scp {} other:/tmp/{}.pem", ca.display(), hostname);
+        info!("  ssh other sudo install -m 0440 -g xdebbie /tmp/{}.pem {}/peers/", hostname, cfg_dir.display());
+        info!("  ... and the same in the other direction; then restart xdebbied on both.");
+    }
 
     Ok(())
+}
+
+/// Build a usable advertise URL from the listen address.
+///
+/// If the listen address binds to a wildcard (`0.0.0.0` or `[::]`) we
+/// replace it with the system's fully-qualified hostname so that peers and
+/// xdctl on other machines can actually reach this box.  A literal IP in
+/// the listen address is kept as-is.
+fn derive_advertise_url(listen_addr: &str) -> String {
+    // Split off the port — listen_addr is "host:port" or "[::]:port".
+    let port = listen_addr
+        .rsplit(':')
+        .next()
+        .unwrap_or("7443");
+
+    let host = if listen_addr.starts_with("0.0.0.0:") || listen_addr.starts_with("[::]:") || listen_addr == "0.0.0.0" {
+        // Wildcard: use the FQDN so remote clients can resolve us.
+        libvirt_setup::get_hostname()
+    } else {
+        // Literal IP or hostname already specified — strip the port.
+        let h = listen_addr.rsplit_once(':').map(|(h, _)| h).unwrap_or(listen_addr);
+        h.trim_matches(|c| c == '[' || c == ']').to_string()
+    };
+
+    format!("https://{}:{}", host, port)
 }
 
 #[cfg(test)]
@@ -269,5 +437,20 @@ mod tests {
         let opts = BootstrapOptions::default();
         assert_eq!(opts.config_path, PathBuf::from(DEFAULT_CONFIG_FILE));
         assert_eq!(opts.libvirt_uri, DEFAULT_LIBVIRT_URI);
+    }
+
+    #[test]
+    fn test_derive_advertise_url_wildcard() {
+        let url = derive_advertise_url("0.0.0.0:7443");
+        // Should not contain 0.0.0.0
+        assert!(!url.contains("0.0.0.0"), "got: {url}");
+        assert!(url.starts_with("https://"), "got: {url}");
+        assert!(url.ends_with(":7443"), "got: {url}");
+    }
+
+    #[test]
+    fn test_derive_advertise_url_literal_ip() {
+        let url = derive_advertise_url("192.168.1.10:7443");
+        assert_eq!(url, "https://192.168.1.10:7443");
     }
 }

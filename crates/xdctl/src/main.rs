@@ -35,10 +35,18 @@ fn format_age(created: DateTime<Utc>) -> String {
 struct Cli {
     /// Any xdebbied in the cluster (comma-separated to try several). xdctl
     /// asks it who the leader is and talks to the leader from then on.
-    #[arg(long, env = "XDEBBIE_URL", default_value = "http://127.0.0.1:7443")]
+    #[arg(long, env = "XDEBBIE_URL", default_value = "https://127.0.0.1:7443")]
     url: String,
     #[arg(long, env = "XDEBBIE_TOKEN", hide_env_values = true)]
     token: Option<String>,
+    /// PEM CA certificate(s) to trust for https:// (comma-separated files
+    /// or directories of *.pem). Bootstrap writes /etc/xdebbie/api-ca.pem
+    /// and exports it as XDEBBIE_CA; peer CAs live in /etc/xdebbie/peers.
+    #[arg(long, env = "XDEBBIE_CA", default_value = "/etc/xdebbie/api-ca.pem,/etc/xdebbie/peers")]
+    ca: String,
+    /// Skip TLS certificate verification (lab use only).
+    #[arg(long, env = "XDEBBIE_INSECURE")]
+    insecure: bool,
     /// Print raw JSON.
     #[arg(short, long, global = true)]
     json: bool,
@@ -307,6 +315,31 @@ fn kv(s: &str) -> Result<(String, String), String> {
 
 /// How long `xdctl` waits for an election to settle before giving up.
 const LEADER_WAIT_SECS: u32 = 20;
+
+/// Blocking client trusting the system roots plus every PEM in `ca`
+/// (comma-separated files or directories). Missing paths are skipped: a
+/// box that still serves plain http has no CA and must keep working.
+fn http_client(ca: &str, insecure: bool) -> Result<Client> {
+    let mut b = Client::builder().danger_accept_invalid_certs(insecure);
+    for entry in ca.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let p = std::path::Path::new(entry);
+        let files: Vec<std::path::PathBuf> = if p.is_dir() {
+            std::fs::read_dir(p)
+                .map(|rd| rd.flatten().map(|e| e.path()).filter(|f| f.extension().is_some_and(|x| x == "pem")).collect())
+                .unwrap_or_default()
+        } else if p.is_file() {
+            vec![p.to_path_buf()]
+        } else {
+            vec![]
+        };
+        for f in files {
+            let pem = std::fs::read(&f).with_context(|| format!("reading CA {}", f.display()))?;
+            let cert = reqwest::Certificate::from_pem(&pem).with_context(|| format!("parsing CA {}", f.display()))?;
+            b = b.add_root_certificate(cert);
+        }
+    }
+    b.build().context("building HTTP client")
+}
 
 struct Api {
     c: Client,
@@ -609,7 +642,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
     let mut api = Api {
-        c: Client::new(),
+        c: http_client(&cli.ca, cli.insecure)?,
         url: cli.url.clone(),
         token: cli.token.clone(),
     };

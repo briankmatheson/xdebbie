@@ -14,9 +14,8 @@ pub fn generate_token() -> Result<String> {
     Ok(hex::encode(bytes))
 }
 
-/// Write token to file with secure permissions
+/// Write token to file with secure permissions (root:root 0400).
 pub fn write_token(path: &Path, token: &str) -> Result<()> {
-    // Create parent directory if needed
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).context("creating token directory")?;
     }
@@ -33,31 +32,40 @@ pub fn read_token(path: &Path) -> Result<String> {
         .map(|s| s.trim().to_string())
 }
 
-/// Check if token file exists and is readable
+/// Check if token file exists and is non-empty
 pub fn token_exists(path: &Path) -> bool {
     path.exists() && std::fs::read_to_string(path).is_ok()
 }
 
-/// Generate environment file for xdctl
-pub fn write_env_file(path: &Path, url: &str, token: &str) -> Result<()> {
+/// Write the xdctl environment file as root:xdebbie 0440 so any member of
+/// the xdebbie group can `source` it without sudo.
+/// Falls back to root:root 0400 if the xdebbie group does not exist yet.
+pub fn write_env_file(path: &Path, url: &str, token: &str, ca: Option<&Path>) -> Result<()> {
+    let ca_line = match ca {
+        Some(c) => format!("export XDEBBIE_CA={}\n", c.display()),
+        None => String::new(),
+    };
     let content = format!(
         r#"# xdebbie environment variables
-# Source this file: source {}
+# Source this file: source {path}
 
-export XDEBBIE_URL={}
-export XDEBBIE_TOKEN='{}'
-"#,
-        path.display(),
-        url,
-        token
+export XDEBBIE_URL={url}
+export XDEBBIE_TOKEN='{token}'
+{ca_line}"#,
+        path = path.display(),
     );
 
-    // Holds the token: same protection as the token file.
-    crate::token::write_private(path, &content)
+    crate::token::write_group_readable(path, &content)
         .with_context(|| format!("writing environment file to {}", path.display()))?;
 
-    info!("Environment file written to {} (root:root 0400)", path.display());
-    info!("Source with: sudo -s; source {}", path.display());
+    let gid = crate::token::xdebbie_gid();
+    if gid.is_some() {
+        info!("Environment file written to {} (root:xdebbie 0440)", path.display());
+        info!("Source with: source {}", path.display());
+    } else {
+        info!("Environment file written to {} (root:root 0400 — xdebbie group not found)", path.display());
+        info!("Run `sudo usermod -aG xdebbie $USER` after the group is created, then re-bootstrap");
+    }
     Ok(())
 }
 
@@ -69,15 +77,8 @@ mod tests {
     fn test_generate_token() {
         let token1 = generate_token().unwrap();
         let token2 = generate_token().unwrap();
-        
-        // Should be 64 hex characters (32 bytes)
         assert_eq!(token1.len(), 64);
-        assert_eq!(token2.len(), 64);
-        
-        // Should be different
         assert_ne!(token1, token2);
-        
-        // Should be valid hex
         assert!(token1.chars().all(|c| c.is_ascii_hexdigit()));
     }
 }

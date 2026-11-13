@@ -3,17 +3,26 @@ set -e
 
 case "$1" in
     configure)
+        # Operators who may read the config/env (and so drive xdctl without
+        # sudo) are members of this group. bootstrap creates it too; doing it
+        # here means a config shipped by hand before first bootstrap is owned
+        # correctly.
+        getent group xdebbie >/dev/null || groupadd --system xdebbie
+
         # Create directories
-        mkdir -p /etc/xdebbie
+        mkdir -p /etc/xdebbie /etc/xdebbie/peers
         mkdir -p /var/lib/xdebbie
-        
-        # Set permissions (root owned for libvirt access)
-        chmod 755 /etc/xdebbie
-        chmod 755 /var/lib/xdebbie
-        # Files holding the API token are root:root 0400 (older releases
-        # left xdebbie_env world-readable).
-        for f in /etc/xdebbie/token /etc/xdebbie/token.previous /etc/xdebbie/xdebbie_env; do
+        chown root:xdebbie /etc/xdebbie /etc/xdebbie/peers
+        chmod 0750 /etc/xdebbie /etc/xdebbie/peers
+        chmod 0755 /var/lib/xdebbie
+
+        # Secrets: root:root 0400. Operator-readable: root:xdebbie 0440.
+        # (Older releases left xdebbie_env world-readable, or root-only.)
+        for f in /etc/xdebbie/token /etc/xdebbie/token.previous /etc/xdebbie/api-key.pem; do
             [ -e "$f" ] && chown root:root "$f" && chmod 0400 "$f" || true
+        done
+        for f in /etc/xdebbie/xdebbied.toml /etc/xdebbie/xdebbie_env /etc/xdebbie/api-ca.pem /etc/xdebbie/api-cert.pem /etc/xdebbie/peers/*.pem; do
+            [ -e "$f" ] && chown root:xdebbie "$f" && chmod 0440 "$f" || true
         done
         
         # Geneve kernel module for the optional overlay mesh (also listed in
@@ -69,13 +78,15 @@ EOF
         echo "View logs:"
         echo "  journalctl -u xdebbied -f"
         echo ""
-        echo "Configure client (run as your user):"
-        echo "  export XDEBBIE_URL=http://127.0.0.1:7443"
-        echo "  export XDEBBIE_TOKEN=\$(sudo cat /etc/xdebbie/token)"
+        echo "Configure client: add yourself to the xdebbie group (log in again),"
+        echo "then source the env file (URL, token and CA):"
+        echo "  sudo usermod -aG xdebbie \$USER"
+        echo "  source /etc/xdebbie/xdebbie_env"
         echo "  xdctl host ls"
         echo ""
-        echo "Or, from a root shell (the file is root:root 0400):"
-        echo "  source /etc/xdebbie/xdebbie_env"
+        echo "The API serves HTTPS with a cert from /etc/xdebbie/api-ca.pem."
+        echo "Before meshing, copy each box's api-ca.pem into /etc/xdebbie/peers/"
+        echo "on the other (see /usr/share/doc/xdebbie/BOOTSTRAP.md)."
         echo ""
         ;;
         

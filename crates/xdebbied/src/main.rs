@@ -301,10 +301,9 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(rec.run());
     tokio::spawn(mesh.clone().run());
 
-    let http = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(300))
-        .build()
-        .expect("reqwest client");
+    // Trusts this box's CA and every peer CA in `peer_ca_dir`, so forwarding
+    // to the leader over its self-signed bootstrap cert verifies.
+    let http = cfg.http_client(std::time::Duration::from_secs(300));
     if let Some(t) = &token {
         tokio::spawn(
             token::Distributor { tokens: t.clone(), leadership: leadership.clone(), http: http.clone() }.run(),
