@@ -26,24 +26,39 @@ mod tests {
     use super::*;
 
     fn golden(name: &str) -> String {
-        std::fs::read_to_string(format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
+        std::fs::read_to_string(format!(
+            "{}/tests/fixtures/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap()
     }
 
     #[test]
     fn golden_wg_underlay() {
-        let s = MeshSpec { underlay: "wg-flock".into(), ..Default::default() };
+        let s = MeshSpec {
+            underlay: "wg-flock".into(),
+            ..Default::default()
+        };
         assert_eq!(render(&s), golden("nft-wg-flock.golden"));
     }
 
     #[test]
     fn golden_plain_underlay() {
-        let s = MeshSpec { underlay: "ul0".into(), allow_plain_underlay: true, dstport: 6081, ..Default::default() };
+        let s = MeshSpec {
+            underlay: "ul0".into(),
+            allow_plain_underlay: true,
+            dstport: 6081,
+            ..Default::default()
+        };
         assert_eq!(render(&s), golden("nft-plain-ul0.golden"));
     }
 
     #[test]
     fn custom_port_appears() {
-        let s = MeshSpec { dstport: 7000, ..Default::default() };
+        let s = MeshSpec {
+            dstport: 7000,
+            ..Default::default()
+        };
         assert!(render(&s).contains("udp dport 7000 iifname != \"wg-flock\""));
     }
 }

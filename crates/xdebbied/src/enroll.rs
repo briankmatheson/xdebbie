@@ -55,11 +55,18 @@ impl Enrollments {
     /// `reserved`: box ids already taken on this box (own id, config peers).
     pub fn load(path: PathBuf, signer: Option<CaSigner>, reserved: Vec<u8>) -> Result<Self> {
         let recs = match std::fs::read(&path) {
-            Ok(b) => serde_json::from_slice(&b).with_context(|| format!("parsing {}", path.display()))?,
+            Ok(b) => {
+                serde_json::from_slice(&b).with_context(|| format!("parsing {}", path.display()))?
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => vec![],
             Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
         };
-        Ok(Self { path, recs: RwLock::new(recs), signer, reserved })
+        Ok(Self {
+            path,
+            recs: RwLock::new(recs),
+            signer,
+            reserved,
+        })
     }
 
     /// Pick a box id for `hostname`: the one it had when last approved, else
@@ -75,7 +82,9 @@ impl Enrollments {
         }
         let taken = |b: u8| {
             self.reserved.contains(&b)
-                || recs.iter().any(|r| r.view.status != EnrollStatus::Denied && r.view.box_id == b)
+                || recs
+                    .iter()
+                    .any(|r| r.view.status != EnrollStatus::Denied && r.view.box_id == b)
         };
         if let Some(w) = want {
             if w > MAX_BOX {
@@ -86,7 +95,9 @@ impl Enrollments {
             }
             return Ok(w);
         }
-        (0..=MAX_BOX).find(|b| !taken(*b)).ok_or_else(|| anyhow::anyhow!("no free box id left (0-{MAX_BOX})"))
+        (0..=MAX_BOX)
+            .find(|b| !taken(*b))
+            .ok_or_else(|| anyhow::anyhow!("no free box id left (0-{MAX_BOX})"))
     }
 
     /// This box holds the CA key.
@@ -121,8 +132,15 @@ impl Enrollments {
         if let Some(r) = recs.iter().find(|r| r.view.fingerprint == fingerprint) {
             return Ok(r.view.clone());
         }
-        recs.retain(|r| !(r.view.status == EnrollStatus::Pending && r.view.hostname == req.hostname));
-        if recs.iter().filter(|r| r.view.status == EnrollStatus::Pending).count() >= MAX_PENDING {
+        recs.retain(|r| {
+            !(r.view.status == EnrollStatus::Pending && r.view.hostname == req.hostname)
+        });
+        if recs
+            .iter()
+            .filter(|r| r.view.status == EnrollStatus::Pending)
+            .count()
+            >= MAX_PENDING
+        {
             bail!("too many pending enrolments ({MAX_PENDING}); deny some first");
         }
         let box_id = self.allocate(&recs, &req.hostname, req.box_id)?;
@@ -139,26 +157,39 @@ impl Enrollments {
             cert: None,
             ca: None,
         };
-        recs.push(Record { view: view.clone(), csr: req.csr });
+        recs.push(Record {
+            view: view.clone(),
+            csr: req.csr,
+        });
         self.persist(&recs)?;
         Ok(view)
     }
 
     pub async fn get(&self, id: &str) -> Option<Enrollment> {
-        self.recs.read().await.iter().find(|r| r.view.id == id).map(|r| r.view.clone())
+        self.recs
+            .read()
+            .await
+            .iter()
+            .find(|r| r.view.id == id)
+            .map(|r| r.view.clone())
     }
 
     /// Approve or deny by id or hostname (pending ones first; an exact id
     /// always wins).
     pub async fn decide(&self, key: &str, d: Decision) -> Result<Enrollment> {
         let Some(signer) = &self.signer else {
-            bail!("this box does not hold the cluster CA key; approve on the box that was bootstrapped first");
+            bail!(
+                "this box does not hold the cluster CA key; approve on the box that was bootstrapped first"
+            );
         };
         let mut recs = self.recs.write().await;
         let idx = recs
             .iter()
             .position(|r| r.view.id == key)
-            .or_else(|| recs.iter().position(|r| r.view.hostname == key && r.view.status == EnrollStatus::Pending))
+            .or_else(|| {
+                recs.iter()
+                    .position(|r| r.view.hostname == key && r.view.status == EnrollStatus::Pending)
+            })
             .or_else(|| recs.iter().position(|r| r.view.hostname == key))
             .ok_or_else(|| anyhow::anyhow!("no enrolment {key:?}"))?;
         let r = &mut recs[idx];
@@ -189,8 +220,10 @@ impl Enrollments {
             std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         }
         let tmp = self.path.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(recs)?).with_context(|| format!("writing {}", tmp.display()))?;
-        std::fs::rename(&tmp, &self.path).with_context(|| format!("renaming to {}", self.path.display()))?;
+        std::fs::write(&tmp, serde_json::to_vec_pretty(recs)?)
+            .with_context(|| format!("writing {}", tmp.display()))?;
+        std::fs::rename(&tmp, &self.path)
+            .with_context(|| format!("renaming to {}", self.path.display()))?;
         Ok(())
     }
 }
@@ -208,14 +241,22 @@ mod tests {
             server_key: dir.join("key.pem"),
         };
         api_tls::ensure_api_tls("ca-box", false, &paths).unwrap();
-        let signer = CaSigner::load(&paths.ca_cert, &paths.ca_key).unwrap().unwrap();
+        let signer = CaSigner::load(&paths.ca_cert, &paths.ca_key)
+            .unwrap()
+            .unwrap();
         (paths, signer)
     }
 
     fn req(host: &str) -> (EnrollRequest, String) {
         let csr = api_tls::make_csr(host).unwrap();
         (
-            EnrollRequest { hostname: host.into(), box_id: None, api_url: format!("https://{host}:7443"), csr: csr.csr_pem, wg_pubkey: None },
+            EnrollRequest {
+                hostname: host.into(),
+                box_id: None,
+                api_url: format!("https://{host}:7443"),
+                csr: csr.csr_pem,
+                wg_pubkey: None,
+            },
             csr.fingerprint,
         )
     }
@@ -243,8 +284,20 @@ mod tests {
 
         let approved = e.decide("joiner", Decision::Approve).await.unwrap();
         assert_eq!(approved.status, EnrollStatus::Approved);
-        assert!(approved.cert.as_deref().unwrap().contains("BEGIN CERTIFICATE"));
-        assert!(approved.ca.as_deref().unwrap().contains("BEGIN CERTIFICATE"));
+        assert!(
+            approved
+                .cert
+                .as_deref()
+                .unwrap()
+                .contains("BEGIN CERTIFICATE")
+        );
+        assert!(
+            approved
+                .ca
+                .as_deref()
+                .unwrap()
+                .contains("BEGIN CERTIFICATE")
+        );
         assert!(e.list(false).await.is_empty());
         assert_eq!(e.list(true).await.len(), 1);
 
@@ -271,7 +324,8 @@ mod tests {
     async fn box_ids_are_allocated_and_kept() {
         let dir = tempfile::tempdir().unwrap();
         let (_, signer) = ca_in(dir.path());
-        let e = Enrollments::load(dir.path().join("enroll.json"), Some(signer), vec![0, 2]).unwrap();
+        let e =
+            Enrollments::load(dir.path().join("enroll.json"), Some(signer), vec![0, 2]).unwrap();
         // Lowest free, skipping reserved.
         let a = e.submit(req("a").0).await.unwrap();
         assert_eq!(a.box_id, 1);
@@ -283,7 +337,13 @@ mod tests {
         assert_eq!(e.submit(r).await.unwrap().box_id, 7);
         let mut r = req("d").0;
         r.box_id = Some(2);
-        assert!(e.submit(r).await.unwrap_err().to_string().contains("already in use"));
+        assert!(
+            e.submit(r)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("already in use")
+        );
         // A denied request frees its id; a re-enrolling approved host keeps its own.
         e.decide("b", Decision::Deny).await.unwrap();
         e.decide("a", Decision::Approve).await.unwrap();

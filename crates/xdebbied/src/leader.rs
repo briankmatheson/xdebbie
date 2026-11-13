@@ -116,12 +116,18 @@ impl Leadership {
 
     /// Every peer this box currently sees (none when standalone).
     pub async fn peers(&self) -> Vec<LeaderRef> {
-        let Some(c) = &self.cluster else { return vec![] };
+        let Some(c) = &self.cluster else {
+            return vec![];
+        };
         c.peers
             .read()
             .await
             .peers()
-            .map(|p| LeaderRef { node_id: Some(p.node_id), hostname: p.hostname.clone(), api_url: p.api_url.clone() })
+            .map(|p| LeaderRef {
+                node_id: Some(p.node_id),
+                hostname: p.hostname.clone(),
+                api_url: p.api_url.clone(),
+            })
             .collect()
     }
 

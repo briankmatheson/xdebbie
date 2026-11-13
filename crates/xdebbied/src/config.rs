@@ -4,9 +4,9 @@ use std::{
     path::PathBuf,
 };
 
-use xdebbie_core::{Host, PlacementPolicy};
 use serde::Deserialize;
 use tracing::warn;
+use xdebbie_core::{Host, PlacementPolicy};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -156,13 +156,13 @@ fn default_route_ip() -> Option<Ipv4Addr> {
     let iface = table.lines().skip(1).find_map(|line| {
         let mut cols = line.split_whitespace();
         let iface = cols.next()?;
-        let dest  = cols.next()?;
+        let dest = cols.next()?;
         // skip flags, refcnt, use, metric
-        let _flags  = cols.next()?;
-        let _refs   = cols.next()?;
-        let _use    = cols.next()?;
+        let _flags = cols.next()?;
+        let _refs = cols.next()?;
+        let _use = cols.next()?;
         let _metric = cols.next()?;
-        let mask    = cols.next()?;
+        let mask = cols.next()?;
         if dest == "00000000" && mask == "00000000" {
             Some(iface.to_string())
         } else {
@@ -183,8 +183,7 @@ fn default_route_ip() -> Option<Ipv4Addr> {
         while !cursor.is_null() {
             let ifa = &*cursor;
             if !ifa.ifa_name.is_null() && !ifa.ifa_addr.is_null() {
-                let name = std::ffi::CStr::from_ptr(ifa.ifa_name)
-                    .to_string_lossy();
+                let name = std::ffi::CStr::from_ptr(ifa.ifa_name).to_string_lossy();
                 if name == iface {
                     let sa = &*(ifa.ifa_addr as *const libc::sockaddr_in);
                     if (*ifa.ifa_addr).sa_family as i32 == libc::AF_INET {
@@ -207,7 +206,8 @@ impl Config {
     pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
         let cfg: Self = toml::from_str(&std::fs::read_to_string(path)?)?;
         if let Some(n) = &cfg.network {
-            n.validate().map_err(|e| anyhow::anyhow!("[network]: {e}"))?;
+            n.validate()
+                .map_err(|e| anyhow::anyhow!("[network]: {e}"))?;
         }
         Ok(cfg)
     }
@@ -228,7 +228,9 @@ impl Config {
     /// (which itself defaults to the first configured host's bridge).
     pub fn dhcp_bridge(&self) -> Option<String> {
         let n = self.network.as_ref()?;
-        n.bridge.clone().or_else(|| Some(self.mesh_config().bridge()))
+        n.bridge
+            .clone()
+            .or_else(|| Some(self.mesh_config().bridge()))
     }
 
     /// Resolve the effective listen address.
@@ -268,9 +270,15 @@ impl Config {
         if let Some(u) = &self.advertise_url {
             return u.trim_end_matches('/').to_string();
         }
-        let scheme = if self.tls_cert.is_some() { "https" } else { "http" };
+        let scheme = if self.tls_cert.is_some() {
+            "https"
+        } else {
+            "http"
+        };
         let ip = if listen.ip().is_unspecified() {
-            default_route_ip().map(IpAddr::V4).unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST))
+            default_route_ip()
+                .map(IpAddr::V4)
+                .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST))
         } else {
             listen.ip()
         };
@@ -305,10 +313,18 @@ impl Config {
                             b = b.identity(id);
                             ident = true;
                         }
-                        Err(e) => tracing::warn!("client identity from {}/{}: {e}", c.display(), k.display()),
+                        Err(e) => tracing::warn!(
+                            "client identity from {}/{}: {e}",
+                            c.display(),
+                            k.display()
+                        ),
                     }
                 }
-                (Err(e), _) | (_, Err(e)) => tracing::warn!("reading {}/{} for client identity: {e}", c.display(), k.display()),
+                (Err(e), _) | (_, Err(e)) => tracing::warn!(
+                    "reading {}/{} for client identity: {e}",
+                    c.display(),
+                    k.display()
+                ),
             }
         }
         tracing::info!(cas = n, client_cert = ident, ca_file = %self.ca_file.display(), peer_ca_dir = %self.peer_ca_dir.display(), "trusted xdebbie CA certificates");
@@ -344,14 +360,20 @@ storage_pool = "boot"
         assert!(s.enabled);
         assert_eq!(s.bridge(), "virbr-xdebbie");
         assert_eq!(s.underlay, "wg-flock");
-        assert!(s.wireguard.is_some(), "WireGuard underlay is managed by default");
+        assert!(
+            s.wireguard.is_some(),
+            "WireGuard underlay is managed by default"
+        );
         assert_eq!(cfg.dhcp_bridge(), None, "no [network] => no responder");
 
         let cfg: Config = toml::from_str(&format!("{base}\n[mesh]\nenabled = false\n")).unwrap();
         assert!(!cfg.mesh_config().to_spec().enabled);
 
         // bringing your own underlay switches managed WireGuard off
-        let cfg: Config = toml::from_str(&format!("{base}\n[mesh]\nunderlay = \"ul0\"\nallow_plain_underlay = true\n")).unwrap();
+        let cfg: Config = toml::from_str(&format!(
+            "{base}\n[mesh]\nunderlay = \"ul0\"\nallow_plain_underlay = true\n"
+        ))
+        .unwrap();
         let s = cfg.mesh_config().to_spec();
         assert!(s.enabled && s.wireguard.is_none());
         assert_eq!(s.bridge(), "virbr-xdebbie");
@@ -360,16 +382,30 @@ storage_pool = "boot"
     #[test]
     fn advertise_url_follows_listen_unless_set() {
         let c: Config = toml::from_str("state_file = 'x'").unwrap();
-        assert_eq!(c.advertise_url("10.0.0.5:7443".parse().unwrap()), "http://10.0.0.5:7443");
+        assert_eq!(
+            c.advertise_url("10.0.0.5:7443".parse().unwrap()),
+            "http://10.0.0.5:7443"
+        );
 
         let c: Config = toml::from_str("state_file = 'x'\ntls_cert = 'c'\ntls_key = 'k'").unwrap();
-        assert_eq!(c.advertise_url("10.0.0.5:7443".parse().unwrap()), "https://10.0.0.5:7443");
+        assert_eq!(
+            c.advertise_url("10.0.0.5:7443".parse().unwrap()),
+            "https://10.0.0.5:7443"
+        );
 
-        let c: Config = toml::from_str("state_file = 'x'\nadvertise_url = 'https://node0.example.net:7443/'").unwrap();
-        assert_eq!(c.advertise_url("0.0.0.0:7443".parse().unwrap()), "https://node0.example.net:7443");
+        let c: Config =
+            toml::from_str("state_file = 'x'\nadvertise_url = 'https://node0.example.net:7443/'")
+                .unwrap();
+        assert_eq!(
+            c.advertise_url("0.0.0.0:7443".parse().unwrap()),
+            "https://node0.example.net:7443"
+        );
 
         // 0.0.0.0 is never advertised.
         let c: Config = toml::from_str("state_file = 'x'").unwrap();
-        assert!(!c.advertise_url("0.0.0.0:7443".parse().unwrap()).contains("0.0.0.0"));
+        assert!(
+            !c.advertise_url("0.0.0.0:7443".parse().unwrap())
+                .contains("0.0.0.0")
+        );
     }
 }

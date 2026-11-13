@@ -110,7 +110,10 @@ impl Request {
     }
     pub fn mac(&self) -> String {
         let m = self.chaddr;
-        format!("{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", m[0], m[1], m[2], m[3], m[4], m[5])
+        format!(
+            "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+            m[0], m[1], m[2], m[3], m[4], m[5]
+        )
     }
 }
 
@@ -190,7 +193,9 @@ pub fn parse(buf: &[u8]) -> Result<Request, ParseError> {
             opt::REQUESTED_IP if len == 4 => req.requested_ip = Some(ip4(v)),
             opt::SERVER_ID if len == 4 => req.server_id = Some(ip4(v)),
             opt::HOSTNAME => {
-                let s = String::from_utf8_lossy(v).trim_end_matches('\0').to_string();
+                let s = String::from_utf8_lossy(v)
+                    .trim_end_matches('\0')
+                    .to_string();
                 if !s.is_empty() {
                     req.hostname = Some(s);
                 }
@@ -270,7 +275,12 @@ pub fn u16_opt(v: u16) -> Vec<u8> {
 }
 
 #[cfg(test)]
-pub(crate) fn build_request(msg: MsgType, chaddr: [u8; 6], xid: u32, extra: &[(u8, Vec<u8>)]) -> Vec<u8> {
+pub(crate) fn build_request(
+    msg: MsgType,
+    chaddr: [u8; 6],
+    xid: u32,
+    extra: &[(u8, Vec<u8>)],
+) -> Vec<u8> {
     let mut b = vec![0u8; 240];
     b[0] = 1;
     b[1] = 1;
@@ -343,7 +353,10 @@ mod tests {
             giaddr: Ipv4Addr::UNSPECIFIED,
             chaddr: MAC,
             server_id: Ipv4Addr::new(10, 23, 0, 1),
-            options: vec![(opt::SUBNET_MASK, ip_opt(Ipv4Addr::new(255, 255, 0, 0))), (opt::MTU, u16_opt(1370))],
+            options: vec![
+                (opt::SUBNET_MASK, ip_opt(Ipv4Addr::new(255, 255, 0, 0))),
+                (opt::MTU, u16_opt(1370)),
+            ],
         };
         let b = rep.to_bytes();
         assert_eq!(b.len(), 300);

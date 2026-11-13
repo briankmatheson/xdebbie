@@ -57,26 +57,57 @@ pub struct PlanInput<'a> {
     pub route_bad: &'a BTreeSet<u8>,
 }
 
-fn create_sequence(dev: &str, spec: &MeshSpec, p: &PeerSpec, mtu: u16, bridge: &str) -> Vec<Action> {
+fn create_sequence(
+    dev: &str,
+    spec: &MeshSpec,
+    p: &PeerSpec,
+    mtu: u16,
+    bridge: &str,
+) -> Vec<Action> {
     vec![
-        Action::CreateTunnel { dev: dev.into(), vni: spec.vni(), remote: p.remote, dstport: spec.dstport },
+        Action::CreateTunnel {
+            dev: dev.into(),
+            vni: spec.vni(),
+            remote: p.remote,
+            dstport: spec.dstport,
+        },
         Action::SetAlias { dev: dev.into() },
-        Action::SetMtu { dev: dev.into(), mtu },
-        Action::SetMaster { dev: dev.into(), bridge: bridge.into() },
-        Action::SetPortFlags { dev: dev.into(), flags: port_flags(&spec.fdb) },
+        Action::SetMtu {
+            dev: dev.into(),
+            mtu,
+        },
+        Action::SetMaster {
+            dev: dev.into(),
+            bridge: bridge.into(),
+        },
+        Action::SetPortFlags {
+            dev: dev.into(),
+            flags: port_flags(&spec.fdb),
+        },
         Action::SetUp { dev: dev.into() },
     ]
 }
 
 fn needs_recreate(l: &Link, spec: &MeshSpec, p: &PeerSpec) -> bool {
     match l.geneve() {
-        Some(g) => g.vni != spec.vni() || g.remote != Some(p.remote) || g.dstport != spec.dstport || g.ttl != 64 || !g.df_set,
+        Some(g) => {
+            g.vni != spec.vni()
+                || g.remote != Some(p.remote)
+                || g.dstport != spec.dstport
+                || g.ttl != 64
+                || !g.df_set
+        }
         None => true, // mesh name + alias but not geneve: treat as broken, rebuild
     }
 }
 
 pub fn diff(input: PlanInput<'_>) -> Plan {
-    let PlanInput { spec, observed, mtu, route_bad } = input;
+    let PlanInput {
+        spec,
+        observed,
+        mtu,
+        route_bad,
+    } = input;
     let bridge = spec.bridge();
     let flags = port_flags(&spec.fdb);
 
@@ -99,12 +130,18 @@ pub fn diff(input: PlanInput<'_>) -> Plan {
         if let Some(l) = existing
             && !l.mesh_owned()
         {
-            excluded.push(Excluded { box_id: p.box_id, reason: "NameConflict" });
+            excluded.push(Excluded {
+                box_id: p.box_id,
+                reason: "NameConflict",
+            });
             continue;
         }
 
         if route_bad.contains(&p.box_id) {
-            excluded.push(Excluded { box_id: p.box_id, reason: "UnderlayRouteMismatch" });
+            excluded.push(Excluded {
+                box_id: p.box_id,
+                reason: "UnderlayRouteMismatch",
+            });
             // Keep the device, but make sure it is down (section 6.3).
             if let Some(l) = existing
                 && l.up
@@ -125,15 +162,27 @@ pub fn diff(input: PlanInput<'_>) -> Plan {
             }
             Some(l) => {
                 if l.mtu != mtu as u32 {
-                    link_changes.push(Action::SetMtu { dev: dev.clone(), mtu });
+                    link_changes.push(Action::SetMtu {
+                        dev: dev.clone(),
+                        mtu,
+                    });
                 }
                 let port = observed.port(&dev);
                 let enslaved = l.master.as_deref() == Some(bridge.as_str()) && port.is_some();
                 if !enslaved {
-                    link_changes.push(Action::SetMaster { dev: dev.clone(), bridge: bridge.clone() });
-                    link_changes.push(Action::SetPortFlags { dev: dev.clone(), flags });
+                    link_changes.push(Action::SetMaster {
+                        dev: dev.clone(),
+                        bridge: bridge.clone(),
+                    });
+                    link_changes.push(Action::SetPortFlags {
+                        dev: dev.clone(),
+                        flags,
+                    });
                 } else if port.map(|pt| pt.flags != flags).unwrap_or(true) {
-                    link_changes.push(Action::SetPortFlags { dev: dev.clone(), flags });
+                    link_changes.push(Action::SetPortFlags {
+                        dev: dev.clone(),
+                        flags,
+                    });
                 }
                 if !l.up {
                     link_changes.push(Action::SetUp { dev: dev.clone() });
@@ -147,7 +196,9 @@ pub fn diff(input: PlanInput<'_>) -> Plan {
     let wanted: BTreeSet<String> = spec.peers.iter().map(|p| tunnel_name(p.box_id)).collect();
     for l in observed.links.iter().filter(|l| l.mesh_owned()) {
         if !wanted.contains(&l.name) {
-            deletes.push(Action::DeleteTunnel { dev: l.name.clone() });
+            deletes.push(Action::DeleteTunnel {
+                dev: l.name.clone(),
+            });
         }
     }
 
@@ -160,8 +211,12 @@ pub fn diff(input: PlanInput<'_>) -> Plan {
             }
         }
     }
-    let owned_existing: BTreeSet<String> =
-        observed.links.iter().filter(|l| l.mesh_owned() && wanted.contains(&l.name)).map(|l| l.name.clone()).collect();
+    let owned_existing: BTreeSet<String> = observed
+        .links
+        .iter()
+        .filter(|l| l.mesh_owned() && wanted.contains(&l.name))
+        .map(|l| l.name.clone())
+        .collect();
     let present: BTreeSet<(String, String)> = observed
         .fdb
         .iter()
@@ -169,20 +224,33 @@ pub fn diff(input: PlanInput<'_>) -> Plan {
         .map(|e| (e.mac.clone(), e.dev.clone()))
         .collect();
     for (mac, dev) in present.difference(&desired_fdb) {
-        fdb_dels.push(Action::FdbDel { mac: mac.clone(), dev: dev.clone(), bridge: bridge.clone() });
+        fdb_dels.push(Action::FdbDel {
+            mac: mac.clone(),
+            dev: dev.clone(),
+            bridge: bridge.clone(),
+        });
     }
     for (mac, dev) in desired_fdb.difference(&present) {
-        fdb_adds.push(Action::FdbAdd { mac: mac.clone(), dev: dev.clone(), bridge: bridge.clone() });
+        fdb_adds.push(Action::FdbAdd {
+            mac: mac.clone(),
+            dev: dev.clone(),
+            bridge: bridge.clone(),
+        });
     }
 
     // Bridge MTU and STP (always off on a mesh bridge; see Action docs).
     let mut bridge_mtu = Vec::new();
     if let Some(b) = observed.link(&bridge) {
         if b.mtu != mtu as u32 {
-            bridge_mtu.push(Action::SetBridgeMtu { bridge: bridge.clone(), mtu });
+            bridge_mtu.push(Action::SetBridgeMtu {
+                bridge: bridge.clone(),
+                mtu,
+            });
         }
         if matches!(&b.kind, super::kernel::LinkKind::Bridge(bi) if bi.stp_enabled) {
-            bridge_mtu.push(Action::SetBridgeStpOff { bridge: bridge.clone() });
+            bridge_mtu.push(Action::SetBridgeStpOff {
+                bridge: bridge.clone(),
+            });
         }
     }
 
@@ -201,7 +269,9 @@ pub fn teardown(observed: &Observed) -> Vec<Action> {
         .links
         .iter()
         .filter(|l| l.mesh_owned())
-        .map(|l| Action::DeleteTunnel { dev: l.name.clone() })
+        .map(|l| Action::DeleteTunnel {
+            dev: l.name.clone(),
+        })
         .collect()
 }
 
@@ -232,7 +302,12 @@ mod tests {
     }
     fn plan_for(f: &FakeNetOps, s: &MeshSpec) -> Plan {
         let obs = f.observe(&s.bridge(), None).unwrap();
-        diff(PlanInput { spec: s, observed: &obs, mtu: 1370, route_bad: &BTreeSet::new() })
+        diff(PlanInput {
+            spec: s,
+            observed: &obs,
+            mtu: 1370,
+            route_bad: &BTreeSet::new(),
+        })
     }
     fn apply_all(f: &FakeNetOps, p: &Plan) {
         for a in &p.actions {
@@ -259,9 +334,21 @@ mod tests {
         assert_eq!(count(&p, "delete_tunnel"), 0);
         // Sequence for the first peer.
         let kinds: Vec<_> = p.actions.iter().take(6).map(|a| a.kind()).collect();
-        assert_eq!(kinds, ["create_tunnel", "set_alias", "set_mtu", "set_master", "set_port_flags", "set_up"]);
+        assert_eq!(
+            kinds,
+            [
+                "create_tunnel",
+                "set_alias",
+                "set_mtu",
+                "set_master",
+                "set_port_flags",
+                "set_up"
+            ]
+        );
         // Derived mode: learning and flood off, isolated on.
-        let Action::SetPortFlags { flags, .. } = &p.actions[4] else { panic!() };
+        let Action::SetPortFlags { flags, .. } = &p.actions[4] else {
+            panic!()
+        };
         assert!(flags.isolated && !flags.learning && !flags.flood && flags.bcast_flood);
         // Ordering: all FDB adds come after link changes and before bridge MTU.
         let last = p.actions.last().unwrap();
@@ -274,7 +361,11 @@ mod tests {
         let s = spec(3);
         converge(&f, &s);
         let again = plan_for(&f, &s);
-        assert!(again.is_empty(), "second plan must be empty: {:?}", again.actions);
+        assert!(
+            again.is_empty(),
+            "second plan must be empty: {:?}",
+            again.actions
+        );
     }
 
     #[test]
@@ -286,8 +377,17 @@ mod tests {
         let p = plan_for(&f, &s);
         assert_eq!(count(&p, "delete_tunnel"), 1);
         assert_eq!(count(&p, "create_tunnel"), 1);
-        assert_eq!(p.actions[0], Action::DeleteTunnel { dev: "gnv-b2".into() });
-        assert!(p.actions.iter().all(|a| a.dev() == "gnv-b2"), "{:?}", p.actions);
+        assert_eq!(
+            p.actions[0],
+            Action::DeleteTunnel {
+                dev: "gnv-b2".into()
+            }
+        );
+        assert!(
+            p.actions.iter().all(|a| a.dev() == "gnv-b2"),
+            "{:?}",
+            p.actions
+        );
         // 17 FDB entries re-added for gnv-b2 (its old ones vanish with the device).
         assert_eq!(count(&p, "fdb_add"), 17);
         assert_eq!(count(&p, "fdb_del"), 0);
@@ -303,7 +403,12 @@ mod tests {
         let idx_b1 = f.snapshot().links["gnv-b1"].ifindex;
         s.peers.retain(|p| p.box_id != 3);
         let p = plan_for(&f, &s);
-        assert_eq!(p.actions, vec![Action::DeleteTunnel { dev: "gnv-b3".into() }]);
+        assert_eq!(
+            p.actions,
+            vec![Action::DeleteTunnel {
+                dev: "gnv-b3".into()
+            }]
+        );
         apply_all(&f, &p);
         assert!(plan_for(&f, &s).is_empty());
         assert_eq!(f.snapshot().links["gnv-b1"].ifindex, idx_b1);
@@ -321,12 +426,28 @@ mod tests {
             master: None,
             alias: None,
             address: None,
-            kind: LinkKind::Geneve(GeneveInfo { vni: 23, remote: Some(Ipv4Addr::new(10, 22, 1, 1)), dstport: 6081, ttl: 64, df_set: true }),
+            kind: LinkKind::Geneve(GeneveInfo {
+                vni: 23,
+                remote: Some(Ipv4Addr::new(10, 22, 1, 1)),
+                dstport: 6081,
+                ttl: 64,
+                df_set: true,
+            }),
         });
         let s = spec(2);
         let p = plan_for(&f, &s);
-        assert_eq!(p.excluded, vec![Excluded { box_id: 1, reason: "NameConflict" }]);
-        assert!(p.actions.iter().all(|a| a.dev() != "gnv-b1"), "{:?}", p.actions);
+        assert_eq!(
+            p.excluded,
+            vec![Excluded {
+                box_id: 1,
+                reason: "NameConflict"
+            }]
+        );
+        assert!(
+            p.actions.iter().all(|a| a.dev() != "gnv-b1"),
+            "{:?}",
+            p.actions
+        );
         assert_eq!(count(&p, "create_tunnel"), 1);
         assert_eq!(count(&p, "fdb_add"), 17);
     }
@@ -345,13 +466,21 @@ mod tests {
         apply_all(&f, &p);
         assert!(plan_for(&f, &s).is_empty());
         // Learned (non-static) entries are left alone in learn mode.
-        f.state.lock().unwrap().fdb.push(FdbEntry { mac: "aa:bb:cc:dd:ee:ff".into(), dev: "gnv-b1".into(), is_static: false });
+        f.state.lock().unwrap().fdb.push(FdbEntry {
+            mac: "aa:bb:cc:dd:ee:ff".into(),
+            dev: "gnv-b1".into(),
+            is_static: false,
+        });
         assert!(plan_for(&f, &s).is_empty());
         // And back to derived re-adds the 34.
         s.fdb = FdbMode::Derived;
         let p = plan_for(&f, &s);
         assert_eq!(count(&p, "fdb_add"), 34);
-        assert_eq!(count(&p, "fdb_del"), 0, "learned entries are not ours to delete");
+        assert_eq!(
+            count(&p, "fdb_del"),
+            0,
+            "learned entries are not ours to delete"
+        );
     }
 
     #[test]
@@ -360,7 +489,12 @@ mod tests {
         let s = spec(3);
         converge(&f, &s);
         let obs = f.observe("br-int", None).unwrap();
-        let p = diff(PlanInput { spec: &s, observed: &obs, mtu: 1300, route_bad: &BTreeSet::new() });
+        let p = diff(PlanInput {
+            spec: &s,
+            observed: &obs,
+            mtu: 1300,
+            route_bad: &BTreeSet::new(),
+        });
         assert_eq!(count(&p, "set_mtu"), 3);
         assert_eq!(count(&p, "set_bridge_mtu"), 1);
         assert_eq!(p.actions.len(), 4);
@@ -373,19 +507,42 @@ mod tests {
         converge(&f, &s);
         let obs = f.observe("br-int", None).unwrap();
         let bad: BTreeSet<u8> = [2].into();
-        let p = diff(PlanInput { spec: &s, observed: &obs, mtu: 1370, route_bad: &bad });
-        assert_eq!(p.excluded, vec![Excluded { box_id: 2, reason: "UnderlayRouteMismatch" }]);
-        assert!(p.actions.contains(&Action::SetDown { dev: "gnv-b2".into() }));
+        let p = diff(PlanInput {
+            spec: &s,
+            observed: &obs,
+            mtu: 1370,
+            route_bad: &bad,
+        });
+        assert_eq!(
+            p.excluded,
+            vec![Excluded {
+                box_id: 2,
+                reason: "UnderlayRouteMismatch"
+            }]
+        );
+        assert!(p.actions.contains(&Action::SetDown {
+            dev: "gnv-b2".into()
+        }));
         assert_eq!(count(&p, "delete_tunnel"), 0);
         // Its 17 static entries are pruned while it is excluded...
         assert_eq!(count(&p, "fdb_del"), 17);
         apply_all(&f, &p);
         // ...and nothing more happens while the route stays bad.
         let obs = f.observe("br-int", None).unwrap();
-        assert!(diff(PlanInput { spec: &s, observed: &obs, mtu: 1370, route_bad: &bad }).is_empty());
+        assert!(
+            diff(PlanInput {
+                spec: &s,
+                observed: &obs,
+                mtu: 1370,
+                route_bad: &bad
+            })
+            .is_empty()
+        );
         // Route fixed: back up, entries back.
         let p = plan_for(&f, &s);
-        assert!(p.actions.contains(&Action::SetUp { dev: "gnv-b2".into() }));
+        assert!(p.actions.contains(&Action::SetUp {
+            dev: "gnv-b2".into()
+        }));
         assert_eq!(count(&p, "fdb_add"), 17);
     }
 
@@ -394,9 +551,20 @@ mod tests {
         let f = fake();
         let s = spec(1);
         converge(&f, &s);
-        f.state.lock().unwrap().fdb.push(FdbEntry { mac: "52:54:00:23:09:01".into(), dev: "gnv-b1".into(), is_static: true });
+        f.state.lock().unwrap().fdb.push(FdbEntry {
+            mac: "52:54:00:23:09:01".into(),
+            dev: "gnv-b1".into(),
+            is_static: true,
+        });
         let p = plan_for(&f, &s);
-        assert_eq!(p.actions, vec![Action::FdbDel { mac: "52:54:00:23:09:01".into(), dev: "gnv-b1".into(), bridge: "br-int".into() }]);
+        assert_eq!(
+            p.actions,
+            vec![Action::FdbDel {
+                mac: "52:54:00:23:09:01".into(),
+                dev: "gnv-b1".into(),
+                bridge: "br-int".into()
+            }]
+        );
     }
 
     #[test]
@@ -428,7 +596,13 @@ mod tests {
             master: Some("br-int".into()),
             alias: None,
             address: None,
-            kind: LinkKind::Geneve(GeneveInfo { vni: 23, remote: Some(Ipv4Addr::new(10, 22, 9, 1)), dstport: 6081, ttl: 64, df_set: true }),
+            kind: LinkKind::Geneve(GeneveInfo {
+                vni: 23,
+                remote: Some(Ipv4Addr::new(10, 22, 9, 1)),
+                dstport: 6081,
+                ttl: 64,
+                df_set: true,
+            }),
         });
         f.add_link(Link {
             ifindex: 0,

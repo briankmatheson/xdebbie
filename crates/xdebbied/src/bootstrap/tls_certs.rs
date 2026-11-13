@@ -49,14 +49,20 @@ pub struct LibvirtTls {
 impl LibvirtTls {
     /// The URI other boxes use to reach this libvirt.
     pub fn uri(&self, hostname: &str) -> String {
-        format!("qemu+tls://{}/system", self.listen_addr.as_deref().unwrap_or(hostname))
+        format!(
+            "qemu+tls://{}/system",
+            self.listen_addr.as_deref().unwrap_or(hostname)
+        )
     }
 }
 
 /// Write `content` to `path` (mode `mode`, parents created) unless it is
 /// already there byte for byte. Returns whether anything changed.
 fn put(path: &str, content: &str, mode: u32) -> Result<bool> {
-    if fs::read_to_string(path).map(|c| c == content).unwrap_or(false) {
+    if fs::read_to_string(path)
+        .map(|c| c == content)
+        .unwrap_or(false)
+    {
         fs::set_permissions(path, fs::Permissions::from_mode(mode)).ok();
         return Ok(false);
     }
@@ -67,16 +73,20 @@ fn put(path: &str, content: &str, mode: u32) -> Result<bool> {
         }
     }
     fs::write(path, content).with_context(|| format!("writing {path}"))?;
-    fs::set_permissions(path, fs::Permissions::from_mode(mode)).with_context(|| format!("chmod {path}"))?;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
+        .with_context(|| format!("chmod {path}"))?;
     Ok(true)
 }
 
 /// Install the cluster CA and this box's certificate for libvirt, point
 /// libvirtd at them, and (re)start its TLS listener when anything moved.
 pub fn ensure_tls_certificates(api: &ApiTlsPaths) -> Result<LibvirtTls> {
-    let ca = fs::read_to_string(&api.ca_cert).with_context(|| format!("reading {} (API TLS not set up?)", api.ca_cert.display()))?;
-    let cert = fs::read_to_string(&api.server_cert).with_context(|| format!("reading {}", api.server_cert.display()))?;
-    let key = fs::read_to_string(&api.server_key).with_context(|| format!("reading {}", api.server_key.display()))?;
+    let ca = fs::read_to_string(&api.ca_cert)
+        .with_context(|| format!("reading {} (API TLS not set up?)", api.ca_cert.display()))?;
+    let cert = fs::read_to_string(&api.server_cert)
+        .with_context(|| format!("reading {}", api.server_cert.display()))?;
+    let key = fs::read_to_string(&api.server_key)
+        .with_context(|| format!("reading {}", api.server_key.display()))?;
 
     let mut changed = false;
     changed |= put(CA_CERT, &ca, 0o644)?;
@@ -86,7 +96,9 @@ pub fn ensure_tls_certificates(api: &ApiTlsPaths) -> Result<LibvirtTls> {
     changed |= put(CLIENT_CERT, &cert, 0o644)?;
     changed |= put(CLIENT_KEY, &key, 0o600)?;
     if changed {
-        info!("  Installed the cluster CA and this box's certificate for libvirt (server + client)");
+        info!(
+            "  Installed the cluster CA and this box's certificate for libvirt (server + client)"
+        );
     } else {
         info!("  ✓ libvirt uses the cluster CA and this box's certificate");
     }
@@ -108,7 +120,10 @@ pub fn ensure_tls_certificates(api: &ApiTlsPaths) -> Result<LibvirtTls> {
     if changed || conf_changed || !tls_socket_active() {
         restart_libvirtd_tls()?;
     }
-    Ok(LibvirtTls { listen_addr, san_covers_listen })
+    Ok(LibvirtTls {
+        listen_addr,
+        san_covers_listen,
+    })
 }
 
 /// Address libvirtd listens on for TLS, per `listen_addr` in libvirtd.conf.
@@ -117,7 +132,12 @@ pub fn libvirtd_listen_addr() -> Option<String> {
     conf.lines()
         .filter_map(|l| l.trim().strip_prefix("listen_addr"))
         .filter_map(|rest| rest.trim().strip_prefix('='))
-        .filter_map(|v| v.trim().strip_prefix('"').and_then(|v| v.strip_suffix('"')).map(str::to_string))
+        .filter_map(|v| {
+            v.trim()
+                .strip_prefix('"')
+                .and_then(|v| v.strip_suffix('"'))
+                .map(str::to_string)
+        })
         .next_back()
 }
 
@@ -137,12 +157,15 @@ fn cert_has_ip_san(cert_pem: &str, ip: &str) -> bool {
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(cert_pem.as_bytes());
     }
-    let Ok(out) = child.wait_with_output() else { return true };
+    let Ok(out) = child.wait_with_output() else {
+        return true;
+    };
     if !out.status.success() {
         return true;
     }
     let text = String::from_utf8_lossy(&out.stdout);
-    text.split(',').any(|s| s.trim() == format!("IP Address:{ip}"))
+    text.split(',')
+        .any(|s| s.trim() == format!("IP Address:{ip}"))
 }
 
 fn tls_socket_active() -> bool {
@@ -157,24 +180,43 @@ fn tls_socket_active() -> bool {
 /// enable+start it, then restart the service to pick it up. Running VMs
 /// are separate processes and are not affected.
 fn restart_libvirtd_tls() -> Result<()> {
-    let _ = Command::new("systemctl").args(["reset-failed", "libvirtd-tls.socket"]).status();
-    let sock = Command::new("systemctl").args(["enable", "--now", "libvirtd-tls.socket"]).output().context("systemctl")?;
+    let _ = Command::new("systemctl")
+        .args(["reset-failed", "libvirtd-tls.socket"])
+        .status();
+    let sock = Command::new("systemctl")
+        .args(["enable", "--now", "libvirtd-tls.socket"])
+        .output()
+        .context("systemctl")?;
     if !sock.status.success() {
-        warn!("  Could not enable libvirtd-tls.socket: {}", String::from_utf8_lossy(&sock.stderr).trim());
+        warn!(
+            "  Could not enable libvirtd-tls.socket: {}",
+            String::from_utf8_lossy(&sock.stderr).trim()
+        );
         return Ok(());
     }
-    let svc = Command::new("systemctl").args(["restart", "libvirtd.service"]).output().context("systemctl")?;
+    let svc = Command::new("systemctl")
+        .args(["restart", "libvirtd.service"])
+        .output()
+        .context("systemctl")?;
     if svc.status.success() {
-        info!("  ✓ libvirtd restarted with TLS on {}", libvirtd_listen_addr().unwrap_or_else(|| "all addresses".into()));
+        info!(
+            "  ✓ libvirtd restarted with TLS on {}",
+            libvirtd_listen_addr().unwrap_or_else(|| "all addresses".into())
+        );
     } else {
-        warn!("  libvirtd restart failed: {}", String::from_utf8_lossy(&svc.stderr).trim());
+        warn!(
+            "  libvirtd restart failed: {}",
+            String::from_utf8_lossy(&svc.stderr).trim()
+        );
     }
     Ok(())
 }
 
 fn get_mesh_ip() -> Option<String> {
     for iface in &["virbr-xdebbie", "virbr-int", "br-int"] {
-        let output = Command::new("ip").args(["-4", "-o", "addr", "show", iface]).output();
+        let output = Command::new("ip")
+            .args(["-4", "-o", "addr", "show", iface])
+            .output();
         if let Ok(output) = output
             && output.status.success()
         {
@@ -232,7 +274,10 @@ auth_tls = "none"
     content.push_str(&tls_config);
     fs::write(LIBVIRTD_CONF, content).context("writing libvirtd.conf")?;
     // libvirtd uses socket activation; make sure no stale --listen remains.
-    let _ = fs::write("/etc/default/libvirtd", "# libvirtd uses systemd socket activation\n");
+    let _ = fs::write(
+        "/etc/default/libvirtd",
+        "# libvirtd uses systemd socket activation\n",
+    );
     Ok(true)
 }
 
@@ -242,9 +287,15 @@ mod tests {
 
     #[test]
     fn uri_prefers_listen_addr() {
-        let t = LibvirtTls { listen_addr: Some("10.23.0.2".into()), san_covers_listen: true };
+        let t = LibvirtTls {
+            listen_addr: Some("10.23.0.2".into()),
+            san_covers_listen: true,
+        };
         assert_eq!(t.uri("gram.example"), "qemu+tls://10.23.0.2/system");
-        let t = LibvirtTls { listen_addr: None, san_covers_listen: true };
+        let t = LibvirtTls {
+            listen_addr: None,
+            san_covers_listen: true,
+        };
         assert_eq!(t.uri("gram.example"), "qemu+tls://gram.example/system");
     }
 

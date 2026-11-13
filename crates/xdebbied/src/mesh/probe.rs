@@ -24,7 +24,13 @@ pub struct Hysteresis {
 
 impl Hysteresis {
     pub fn new(up_after: u32, down_after: u32) -> Self {
-        Self { up_after: up_after.max(1), down_after: down_after.max(1), state: PeerState::Pending, ok_streak: 0, miss_streak: 0 }
+        Self {
+            up_after: up_after.max(1),
+            down_after: down_after.max(1),
+            state: PeerState::Pending,
+            ok_streak: 0,
+            miss_streak: 0,
+        }
     }
 
     /// Feed one probe result. Returns the new state if it changed.
@@ -40,8 +46,12 @@ impl Hysteresis {
             self.ok_streak = 0;
         }
         let next = match self.state {
-            PeerState::Pending | PeerState::Down if self.ok_streak >= self.up_after => PeerState::Up,
-            PeerState::Pending | PeerState::Up if self.miss_streak >= self.down_after => PeerState::Down,
+            PeerState::Pending | PeerState::Down if self.ok_streak >= self.up_after => {
+                PeerState::Up
+            }
+            PeerState::Pending | PeerState::Up if self.miss_streak >= self.down_after => {
+                PeerState::Down
+            }
             s => s,
         };
         if next != self.state {
@@ -109,7 +119,10 @@ pub fn spawn_prober(
     tx: mpsc::Sender<ProbeEvent>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let mut pinger = client.0.pinger(IpAddr::V4(target), PingIdentifier(0x2300 | box_id as u16)).await;
+        let mut pinger = client
+            .0
+            .pinger(IpAddr::V4(target), PingIdentifier(0x2300 | box_id as u16))
+            .await;
         pinger.timeout(params.timeout);
         let mut tick = tokio::time::interval(params.interval);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -118,8 +131,16 @@ pub fn spawn_prober(
         loop {
             tick.tick().await;
             let ev = match pinger.ping(PingSequence(seq), &payload).await {
-                Ok((_pkt, rtt)) => ProbeEvent { box_id, ok: true, rtt_ms: Some(rtt.as_secs_f64() * 1000.0) },
-                Err(_) => ProbeEvent { box_id, ok: false, rtt_ms: None },
+                Ok((_pkt, rtt)) => ProbeEvent {
+                    box_id,
+                    ok: true,
+                    rtt_ms: Some(rtt.as_secs_f64() * 1000.0),
+                },
+                Err(_) => ProbeEvent {
+                    box_id,
+                    ok: false,
+                    rtt_ms: None,
+                },
             };
             seq = seq.wrapping_add(1);
             if tx.send(ev).await.is_err() {

@@ -7,7 +7,10 @@
 //! to join them, otherwise it asks for a URL and, failing that, starts a
 //! new cluster (this box becomes the CA).
 
-use std::{collections::BTreeMap, time::{Duration, Instant}};
+use std::{
+    collections::BTreeMap,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Result, bail};
 use tracing::info;
@@ -40,18 +43,40 @@ pub fn listen(multicast_addr: &str, timeout: Duration, own_hostname: &str) -> Re
     let mut leaders: Vec<Uuid> = vec![];
     while start.elapsed() < timeout {
         match sock.recv()? {
-            Some((DiscoveryMessage::Announce { node_id, hostname, api_url, addrs, .. }, src)) => {
+            Some((
+                DiscoveryMessage::Announce {
+                    node_id,
+                    hostname,
+                    api_url,
+                    addrs,
+                    ..
+                },
+                src,
+            )) => {
                 if hostname != own_hostname {
                     nodes.entry(node_id).or_insert_with(|| {
-                        let candidates = crate::discovery::reach::source_ip(src).into_iter().chain(addrs);
+                        let candidates = crate::discovery::reach::source_ip(src)
+                            .into_iter()
+                            .chain(addrs);
                         let api_url = crate::discovery::reach::reachable_url(&api_url, candidates);
                         info!(host = %hostname, url = %api_url, "heard a running xdebbied");
-                        Found { hostname, api_url, is_leader: false }
+                        Found {
+                            hostname,
+                            api_url,
+                            is_leader: false,
+                        }
                     });
                     first_heard.get_or_insert_with(Instant::now);
                 }
             }
-            Some((DiscoveryMessage::Heartbeat { node_id, is_leader: true, .. }, _)) => {
+            Some((
+                DiscoveryMessage::Heartbeat {
+                    node_id,
+                    is_leader: true,
+                    ..
+                },
+                _,
+            )) => {
                 if !leaders.contains(&node_id) {
                     leaders.push(node_id);
                 }
@@ -121,13 +146,20 @@ pub fn choose(multicast_addr: &str, timeout: Duration, own_hostname: &str) -> Re
         eprintln!();
         eprintln!("Found a running cluster:");
         for f in &found {
-            eprintln!("  {:<28} {}{}", f.hostname, f.api_url, if f.is_leader { "  (leader)" } else { "" });
+            eprintln!(
+                "  {:<28} {}{}",
+                f.hostname,
+                f.api_url,
+                if f.is_leader { "  (leader)" } else { "" }
+            );
         }
         if !tty {
             bail!(
                 "a cluster is already running ({} at {}). Re-run with `xdebbied bootstrap --join {}` to enrol \
                  this box, or `--standalone` to start a separate cluster anyway",
-                best.hostname, best.api_url, best.api_url
+                best.hostname,
+                best.api_url,
+                best.api_url
             );
         }
         let a = ask(&format!("Join it via {}? [Y/n/other URL] ", best.api_url))?;
@@ -167,22 +199,78 @@ mod tests {
         let addr = "239.0.0.43:7442";
         let tx = MulticastSocket::new(addr, "0.0.0.0:7442").unwrap();
         let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
-        let cap = NodeCapacity { total_cpus: 1, total_memory_mib: 1, available_cpus: 1.0, available_memory_mib: 1, vm_count: 0, control_plane_eligible: false };
+        let cap = NodeCapacity {
+            total_cpus: 1,
+            total_memory_mib: 1,
+            available_cpus: 1.0,
+            available_memory_mib: 1,
+            vm_count: 0,
+            control_plane_eligible: false,
+        };
         let sender = std::thread::spawn(move || {
             for _ in 0..30 {
-                let _ = tx.send(&DiscoveryMessage::Announce { node_id: a, hostname: "alpha".into(), api_url: "https://192.0.2.1:7443".into(), addrs: vec![], capacity: cap.clone(), score: 1.0, sequence: 1 });
-                let _ = tx.send(&DiscoveryMessage::Announce { node_id: b, hostname: "beta".into(), api_url: "https://192.0.2.2:7443".into(), addrs: vec![], capacity: cap.clone(), score: 1.0, sequence: 1 });
-                let _ = tx.send(&DiscoveryMessage::Announce { node_id: Uuid::new_v4(), hostname: "me".into(), api_url: "https://me:7443".into(), addrs: vec![], capacity: cap.clone(), score: 1.0, sequence: 1 });
-                let _ = tx.send(&DiscoveryMessage::Heartbeat { node_id: b, score: 1.0, is_leader: true, sequence: 2 });
+                let _ = tx.send(&DiscoveryMessage::Announce {
+                    node_id: a,
+                    hostname: "alpha".into(),
+                    api_url: "https://192.0.2.1:7443".into(),
+                    addrs: vec![],
+                    capacity: cap.clone(),
+                    score: 1.0,
+                    sequence: 1,
+                });
+                let _ = tx.send(&DiscoveryMessage::Announce {
+                    node_id: b,
+                    hostname: "beta".into(),
+                    api_url: "https://192.0.2.2:7443".into(),
+                    addrs: vec![],
+                    capacity: cap.clone(),
+                    score: 1.0,
+                    sequence: 1,
+                });
+                let _ = tx.send(&DiscoveryMessage::Announce {
+                    node_id: Uuid::new_v4(),
+                    hostname: "me".into(),
+                    api_url: "https://me:7443".into(),
+                    addrs: vec![],
+                    capacity: cap.clone(),
+                    score: 1.0,
+                    sequence: 1,
+                });
+                let _ = tx.send(&DiscoveryMessage::Heartbeat {
+                    node_id: b,
+                    score: 1.0,
+                    is_leader: true,
+                    sequence: 2,
+                });
                 std::thread::sleep(Duration::from_millis(200));
             }
         });
         let found = listen(addr, Duration::from_secs(10), "me").unwrap();
         sender.join().unwrap();
-        let get = |h: &str| found.iter().find(|f| f.hostname == h).unwrap_or_else(|| panic!("{h} not heard: {found:?}")).clone();
+        let get = |h: &str| {
+            found
+                .iter()
+                .find(|f| f.hostname == h)
+                .unwrap_or_else(|| panic!("{h} not heard: {found:?}"))
+                .clone()
+        };
         assert!(!found.iter().any(|f| f.hostname == "me"));
-        assert_eq!(get("beta"), Found { hostname: "beta".into(), api_url: "https://192.0.2.2:7443".into(), is_leader: true });
-        assert_eq!(get("alpha"), Found { hostname: "alpha".into(), api_url: "https://192.0.2.1:7443".into(), is_leader: false });
+        assert_eq!(
+            get("beta"),
+            Found {
+                hostname: "beta".into(),
+                api_url: "https://192.0.2.2:7443".into(),
+                is_leader: true
+            }
+        );
+        assert_eq!(
+            get("alpha"),
+            Found {
+                hostname: "alpha".into(),
+                api_url: "https://192.0.2.1:7443".into(),
+                is_leader: false
+            }
+        );
         // Leaders sort first.
         let bi = found.iter().position(|f| f.hostname == "beta").unwrap();
         let ai = found.iter().position(|f| f.hostname == "alpha").unwrap();
@@ -191,6 +279,9 @@ mod tests {
 
     #[test]
     fn zero_timeout_means_first_box() {
-        assert_eq!(choose("239.0.0.42:17443", Duration::ZERO, "me").unwrap(), Choice::First);
+        assert_eq!(
+            choose("239.0.0.42:17443", Duration::ZERO, "me").unwrap(),
+            Choice::First
+        );
     }
 }

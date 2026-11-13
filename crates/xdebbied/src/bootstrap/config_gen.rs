@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Configuration file generation for xdebbied.
 
-use std::net::Ipv4Addr;
 use anyhow::{Context, Result};
+use std::net::Ipv4Addr;
 use std::path::Path;
 use tracing::info;
 
-use super::libvirt_setup::{get_hostname, LibvirtResources};
+use super::libvirt_setup::{LibvirtResources, get_hostname};
 
 /// Generate default configuration TOML from discovered resources
 /// `created_subnet`: the subnet of the libvirt network bootstrap created
@@ -15,8 +15,25 @@ use super::libvirt_setup::{get_hostname, LibvirtResources};
 /// turning on a second DHCP server on a bridge that already has one is
 /// exactly the mistake we want operators to make on purpose, not by default.
 #[cfg(test)]
-pub fn generate_config(resources: &LibvirtResources, uri: &str, created_subnet: Option<&str>, box_id: u8, join: Option<&str>) -> String {
-    generate_config_for(resources, uri, created_subnet, box_id, join, super::DEFAULT_NETWORK_NAME, super::DEFAULT_POOL_NAME, None, &get_hostname(), &[])
+pub fn generate_config(
+    resources: &LibvirtResources,
+    uri: &str,
+    created_subnet: Option<&str>,
+    box_id: u8,
+    join: Option<&str>,
+) -> String {
+    generate_config_for(
+        resources,
+        uri,
+        created_subnet,
+        box_id,
+        join,
+        super::DEFAULT_NETWORK_NAME,
+        super::DEFAULT_POOL_NAME,
+        None,
+        &get_hostname(),
+        &[],
+    )
 }
 
 /// `advertise_host`: what other boxes put in a URL to reach this one — the
@@ -82,13 +99,36 @@ pub fn generate_config_for(
             // no room for this box the lines are left commented, as
             // placeholders (the daemon's defaults then apply).
             let (gw, start, end, q) = match super::addr::box_block_str(&net_cidr, box_id) {
-                Ok(b) => (b.bridge.to_string(), b.pool_start.to_string(), b.pool_end.to_string(), net_prefix),
-                Err(_) => ("<this bridge's address>".into(), "<first VM address>".into(), "<last VM address>".into(), "# "),
+                Ok(b) => (
+                    b.bridge.to_string(),
+                    b.pool_start.to_string(),
+                    b.pool_end.to_string(),
+                    net_prefix,
+                ),
+                Err(_) => (
+                    "<this bridge's address>".into(),
+                    "<first VM address>".into(),
+                    "<last VM address>".into(),
+                    "# ",
+                ),
             };
             let (upstream, up_note) = if upstream_dns.is_empty() {
-                ("[]".to_string(), "  # none found in resolv.conf: VMs get no DNS until set")
+                (
+                    "[]".to_string(),
+                    "  # none found in resolv.conf: VMs get no DNS until set",
+                )
             } else {
-                (format!("[{}]", upstream_dns.iter().map(|d| format!("\"{d}\"")).collect::<Vec<_>>().join(", ")), "")
+                (
+                    format!(
+                        "[{}]",
+                        upstream_dns
+                            .iter()
+                            .map(|d| format!("\"{d}\""))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    "",
+                )
             };
             format!(
                 "{net_note}\n{p}[network]\n{p}cidr = \"{net_cidr}\"\n\
@@ -225,13 +265,17 @@ pub fn write_config(path: &Path, content: &str) -> Result<()> {
     }
     crate::token::write_group_readable(path, content)
         .with_context(|| format!("writing config to {}", path.display()))?;
-    info!("Configuration written to {} (root:xdebbie 0440)", path.display());
+    info!(
+        "Configuration written to {} (root:xdebbie 0440)",
+        path.display()
+    );
     Ok(())
 }
 
 /// Does the existing config parse? `Err` carries the TOML error.
 pub fn config_parses(path: &Path) -> Result<()> {
-    let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     toml::from_str::<toml::Value>(&text).with_context(|| format!("parsing {}", path.display()))?;
     Ok(())
 }
@@ -242,7 +286,8 @@ pub fn back_up(path: &Path) -> Result<std::path::PathBuf> {
     let mut bak = path.as_os_str().to_owned();
     bak.push(format!(".bak-{stamp}"));
     let bak = std::path::PathBuf::from(bak);
-    std::fs::copy(path, &bak).with_context(|| format!("backing up {} to {}", path.display(), bak.display()))?;
+    std::fs::copy(path, &bak)
+        .with_context(|| format!("backing up {} to {}", path.display(), bak.display()))?;
     Ok(bak)
 }
 
@@ -322,17 +367,36 @@ pub fn set_mesh_box(content: &str, box_id: u8) -> String {
 /// replaced; otherwise the line is inserted before the first table.
 pub fn set_top_level(content: &str, key: &str, value: &str) -> String {
     let line = format!("{key} = {value}");
-    let key_of = |l: &str| l.trim_start().trim_start_matches('#').trim_start().split(['=', ' ', '\t']).next().unwrap_or("").to_string();
+    let key_of = |l: &str| {
+        l.trim_start()
+            .trim_start_matches('#')
+            .trim_start()
+            .split(['=', ' ', '\t'])
+            .next()
+            .unwrap_or("")
+            .to_string()
+    };
     let lines: Vec<&str> = content.lines().collect();
-    let top_end = lines.iter().position(|l| table_header(l).is_some()).unwrap_or(lines.len());
-    let live = lines[..top_end].iter().position(|l| !l.trim_start().starts_with('#') && key_of(l) == key);
-    let commented = lines[..top_end].iter().position(|l| l.trim_start().starts_with('#') && key_of(l) == key);
+    let top_end = lines
+        .iter()
+        .position(|l| table_header(l).is_some())
+        .unwrap_or(lines.len());
+    let live = lines[..top_end]
+        .iter()
+        .position(|l| !l.trim_start().starts_with('#') && key_of(l) == key);
+    let commented = lines[..top_end]
+        .iter()
+        .position(|l| l.trim_start().starts_with('#') && key_of(l) == key);
     let mut out: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
     match (live, commented) {
         (Some(i), _) => {
             let l = lines[i];
             let comment = l.find('#').map(|c| &l[c..]).unwrap_or("");
-            out[i] = if comment.is_empty() { line } else { format!("{line}   {comment}") };
+            out[i] = if comment.is_empty() {
+                line
+            } else {
+                format!("{line}   {comment}")
+            };
         }
         (None, Some(i)) => out[i] = line,
         (None, None) => out.insert(top_end, line),
@@ -430,16 +494,26 @@ pub fn carry_over_except(old: &str, generated: &str, fresh: &[&str]) -> Result<S
 /// Returns the block and any warnings: the cluster's pool overlapping this
 /// box's /24 means the other box was set up by hand on a different scheme
 /// and the operator has to narrow it, or two allocators will collide.
-pub fn network_block(n: &crate::dhcp::NetworkStatus, box_id: u8, bridge: &str) -> (String, Vec<String>) {
+pub fn network_block(
+    n: &crate::dhcp::NetworkStatus,
+    box_id: u8,
+    bridge: &str,
+) -> (String, Vec<String>) {
     let mut warnings = vec![];
     let block = match super::addr::box_block(&n.cidr, box_id) {
         Ok(b) => b,
         Err(e) => {
             // No room for this box: emit something the daemon rejects loudly
             // rather than a pool that collides with another box's.
-            warnings.push(format!("{e:#}; [network] left without a pool — fix cidr on every box"));
+            warnings.push(format!(
+                "{e:#}; [network] left without a pool — fix cidr on every box"
+            ));
             let first = n.cidr.first_host();
-            super::addr::BoxBlock { bridge: first, pool_start: first, pool_end: first }
+            super::addr::BoxBlock {
+                bridge: first,
+                pool_start: first,
+                pool_end: first,
+            }
         }
     };
     let (gw, start, end) = (block.bridge, block.pool_start, block.pool_end);
@@ -453,15 +527,36 @@ pub fn network_block(n: &crate::dhcp::NetworkStatus, box_id: u8, bridge: &str) -
             Ipv4Addr::from(u32::from(n.cidr.network) + 254),
         ));
     }
-    let dns_list: Vec<Ipv4Addr> = if n.dns.is_empty() || n.dns == [n.gateway] { vec![gw] } else { n.dns.clone() };
-    let dns = dns_list.iter().map(|d| format!("\"{d}\"")).collect::<Vec<_>>().join(", ");
-    let upstream = n.upstream_dns.iter().map(|d| format!("\"{d}\"")).collect::<Vec<_>>().join(", ");
-    let reserved_s = n.reserved.iter().map(|d| format!("\"{d}\"")).collect::<Vec<_>>().join(", ");
+    let dns_list: Vec<Ipv4Addr> = if n.dns.is_empty() || n.dns == [n.gateway] {
+        vec![gw]
+    } else {
+        n.dns.clone()
+    };
+    let dns = dns_list
+        .iter()
+        .map(|d| format!("\"{d}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let upstream = n
+        .upstream_dns
+        .iter()
+        .map(|d| format!("\"{d}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let reserved_s = n
+        .reserved
+        .iter()
+        .map(|d| format!("\"{d}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
     let domain = match &n.domain {
         Some(d) => format!("domain = {d:?}\n"),
         None => String::new(),
     };
-    let warn_lines = warnings.iter().map(|w| format!("# WARNING: {w}\n")).collect::<String>();
+    let warn_lines = warnings
+        .iter()
+        .map(|w| format!("# WARNING: {w}\n"))
+        .collect::<String>();
     let block = format!(
         "# Copied from the cluster at join time (`xdebbied bootstrap --join`): same\n\
          # overlay as every other box; box {box_id} owns its /24 of it (bridge .1, VMs .2-.254).\n\
@@ -525,32 +620,113 @@ mod tests {
 
         // the network bootstrap ensured wins over whatever sorts first
         let mut multi = resources.clone();
-        multi.networks.insert(0, super::super::libvirt_setup::NetworkInfo { name: "default".into(), bridge: "virbr0".into() });
-        multi.networks.push(super::super::libvirt_setup::NetworkInfo { name: "xdebbie".into(), bridge: "virbr-xdebbie".into() });
-        let named = generate_config_for(&multi, "qemu:///system", None, 1, None, "xdebbie", "nope", None, "box.example", &[]);
+        multi.networks.insert(
+            0,
+            super::super::libvirt_setup::NetworkInfo {
+                name: "default".into(),
+                bridge: "virbr0".into(),
+            },
+        );
+        multi
+            .networks
+            .push(super::super::libvirt_setup::NetworkInfo {
+                name: "xdebbie".into(),
+                bridge: "virbr-xdebbie".into(),
+            });
+        let named = generate_config_for(
+            &multi,
+            "qemu:///system",
+            None,
+            1,
+            None,
+            "xdebbie",
+            "nope",
+            None,
+            "box.example",
+            &[],
+        );
         let parsed: crate::config::Config = toml::from_str(&named).unwrap();
-        assert_eq!(parsed.mesh_config().to_spec().bridge(), "virbr-xdebbie", "{named}");
+        assert_eq!(
+            parsed.mesh_config().to_spec().bridge(),
+            "virbr-xdebbie",
+            "{named}"
+        );
         assert!(named.contains("bridge = \"virbr-xdebbie\""), "{named}");
         // the advertise host is what was passed in, the host's name is still the hostname
-        assert_eq!(parsed.advertise_url.as_deref(), Some("https://box.example:7443"), "{named}");
-        let by_addr = generate_config_for(&multi, "qemu:///system", Some("10.23.0.0/16"), 1, None, "xdebbie", "nope", None, "192.168.1.164", &["192.168.1.1".parse().unwrap()]);
+        assert_eq!(
+            parsed.advertise_url.as_deref(),
+            Some("https://box.example:7443"),
+            "{named}"
+        );
+        let by_addr = generate_config_for(
+            &multi,
+            "qemu:///system",
+            Some("10.23.0.0/16"),
+            1,
+            None,
+            "xdebbie",
+            "nope",
+            None,
+            "192.168.1.164",
+            &["192.168.1.1".parse().unwrap()],
+        );
         let parsed: crate::config::Config = toml::from_str(&by_addr).unwrap();
-        assert_eq!(parsed.advertise_url.as_deref(), Some("https://192.168.1.164:7443"), "{by_addr}");
-        assert_eq!(parsed.hosts.first().map(|h| h.name.as_str()), Some(get_hostname().as_str()), "{by_addr}");
+        assert_eq!(
+            parsed.advertise_url.as_deref(),
+            Some("https://192.168.1.164:7443"),
+            "{by_addr}"
+        );
+        assert_eq!(
+            parsed.hosts.first().map(|h| h.name.as_str()),
+            Some(get_hostname().as_str()),
+            "{by_addr}"
+        );
         let net = parsed.network.as_ref().unwrap();
-        assert_eq!(net.upstream_dns.iter().map(|d| d.to_string()).collect::<Vec<_>>(), ["192.168.1.1"], "{by_addr}");
-        assert_eq!(net.gateway.map(|g| g.to_string()).as_deref(), Some("10.23.1.1"), "{by_addr}");
+        assert_eq!(
+            net.upstream_dns
+                .iter()
+                .map(|d| d.to_string())
+                .collect::<Vec<_>>(),
+            ["192.168.1.1"],
+            "{by_addr}"
+        );
+        assert_eq!(
+            net.gateway.map(|g| g.to_string()).as_deref(),
+            Some("10.23.1.1"),
+            "{by_addr}"
+        );
         net.validate().unwrap();
 
         let config = generate_config(&resources, "qemu:///system", Some("10.23.0.0/16"), 2, None);
-        assert!(config.contains("\n[network]\ncidr = \"10.23.0.0/16\""), "{config}");
+        assert!(
+            config.contains("\n[network]\ncidr = \"10.23.0.0/16\""),
+            "{config}"
+        );
         assert!(config.contains("\ngateway = \"10.23.2.1\""), "{config}");
-        assert!(config.contains("\npool_start = \"10.23.2.2\"\npool_end = \"10.23.2.254\""), "{config}");
+        assert!(
+            config.contains("\npool_start = \"10.23.2.2\"\npool_end = \"10.23.2.254\""),
+            "{config}"
+        );
         // no room on a /24 for box 2: block lines stay commented, file still parses
-        let narrow = generate_config(&resources, "qemu:///system", Some("192.168.100.0/24"), 2, None);
-        assert!(narrow.contains("\n# gateway = \"<this bridge's address>\""), "{narrow}");
+        let narrow = generate_config(
+            &resources,
+            "qemu:///system",
+            Some("192.168.100.0/24"),
+            2,
+            None,
+        );
+        assert!(
+            narrow.contains("\n# gateway = \"<this bridge's address>\""),
+            "{narrow}"
+        );
         let _: crate::config::Config = toml::from_str(&narrow).unwrap();
-        let adopted = generate_config(&resources, "qemu:///system", None, 0, Some("https://ca:7443/"));
+        let adopted = generate_config(
+            &resources,
+            "qemu:///system",
+            None,
+            0,
+            Some("https://ca:7443/"),
+        );
         assert!(adopted.contains("\n# [network]\n# cidr = "), "{adopted}");
         // both must parse as config
         let parsed: crate::config::Config = toml::from_str(&config).unwrap();
@@ -561,19 +737,29 @@ mod tests {
         let rejoined = carry_over_except(&adopted, &config, &["ca_url"]).unwrap();
         let rejoined: crate::config::Config = toml::from_str(&rejoined).unwrap();
         assert_eq!(rejoined.ca_url, None);
-        let kept: crate::config::Config = toml::from_str(&carry_over(&adopted, &config).unwrap()).unwrap();
+        let kept: crate::config::Config =
+            toml::from_str(&carry_over(&adopted, &config).unwrap()).unwrap();
         assert_eq!(kept.ca_url.as_deref(), Some("https://ca:7443"));
         // the generated [mesh] is live, on the discovered bridge, with managed WireGuard
         let mesh = parsed.mesh_config().to_spec();
-        assert!(mesh.enabled && mesh.bridge() == "virbr0" && mesh.wireguard.is_some(), "{config}");
+        assert!(
+            mesh.enabled && mesh.bridge() == "virbr0" && mesh.wireguard.is_some(),
+            "{config}"
+        );
         assert_eq!(mesh.box_id, 2);
         assert!(config.contains("listen = \"0.0.0.0:7443\""));
         assert!(config.contains("bridge = \"virbr0\""));
         assert!(config.contains("storage_pool = \"default\""));
         // advertise_url must be live (not commented out) and use https://
-        assert!(config.contains("\nadvertise_url = \"https://"), "advertise_url not set in generated config:\n{config}");
+        assert!(
+            config.contains("\nadvertise_url = \"https://"),
+            "advertise_url not set in generated config:\n{config}"
+        );
         // tls_cert and tls_key must be live (not commented out)
-        assert!(config.contains("\ntls_cert = \"/etc/xdebbie/api-cert.pem\""), "tls_cert not set:\n{config}");
+        assert!(
+            config.contains("\ntls_cert = \"/etc/xdebbie/api-cert.pem\""),
+            "tls_cert not set:\n{config}"
+        );
         assert!(config.contains("\ntls_key"), "tls_key not set:\n{config}");
     }
 
@@ -581,12 +767,18 @@ mod tests {
     fn set_mesh_box_rewrites_only_the_box_line() {
         let c = "listen = \"0.0.0.0:7443\"\n\n[mesh]\nenabled = true\nbox = 0   # old comment\nvni = 23\n\n[[mesh.peers]]\nbox = 7\n";
         let out = set_mesh_box(c, 3);
-        assert_eq!(out, "listen = \"0.0.0.0:7443\"\n\n[mesh]\nenabled = true\nbox = 3   # old comment\nvni = 23\n\n[[mesh.peers]]\nbox = 7\n");
+        assert_eq!(
+            out,
+            "listen = \"0.0.0.0:7443\"\n\n[mesh]\nenabled = true\nbox = 3   # old comment\nvni = 23\n\n[[mesh.peers]]\nbox = 7\n"
+        );
         let t: toml::Table = toml::from_str(&out).unwrap();
         assert_eq!(t["mesh"]["box"].as_integer(), Some(3));
 
         // [mesh] without a box line gets one; no [mesh] at all gets a section.
-        let out = set_mesh_box("[mesh]\nenabled = true\n\n[network]\ncidr = \"10.0.0.0/16\"\n", 5);
+        let out = set_mesh_box(
+            "[mesh]\nenabled = true\n\n[network]\ncidr = \"10.0.0.0/16\"\n",
+            5,
+        );
         let t: toml::Table = toml::from_str(&out).unwrap();
         assert_eq!(t["mesh"]["box"].as_integer(), Some(5));
         assert_eq!(t["network"]["cidr"].as_str(), Some("10.0.0.0/16"));
@@ -596,7 +788,10 @@ mod tests {
         assert_eq!(t["listen"].as_str(), Some("0.0.0.0:7443"));
 
         // The generated template round-trips.
-        let resources = LibvirtResources { networks: vec![], pools: vec![] };
+        let resources = LibvirtResources {
+            networks: vec![],
+            pools: vec![],
+        };
         let g = generate_config(&resources, "qemu:///system", None, 0, None);
         let t: toml::Table = toml::from_str(&set_mesh_box(&g, 4)).unwrap();
         assert_eq!(t["mesh"]["box"].as_integer(), Some(4));
@@ -607,9 +802,15 @@ mod tests {
         // Live line keeps its comment.
         let c = "listen = \"0.0.0.0:7443\"\nca_url = \"https://old:7443\"   # the CA\n\n[mesh]\nbox = 0\n";
         let out = set_top_level(c, "ca_url", "\"https://new:7443\"");
-        assert_eq!(out, "listen = \"0.0.0.0:7443\"\nca_url = \"https://new:7443\"   # the CA\n\n[mesh]\nbox = 0\n");
+        assert_eq!(
+            out,
+            "listen = \"0.0.0.0:7443\"\nca_url = \"https://new:7443\"   # the CA\n\n[mesh]\nbox = 0\n"
+        );
         // The template's commented-out line is replaced in place.
-        let resources = LibvirtResources { networks: vec![], pools: vec![] };
+        let resources = LibvirtResources {
+            networks: vec![],
+            pools: vec![],
+        };
         let g = generate_config(&resources, "qemu:///system", None, 0, None);
         assert!(g.contains("\n# ca_url = "));
         let out = set_top_level(&g, "ca_url", "\"https://ca:7443\"");
@@ -618,7 +819,11 @@ mod tests {
         assert_eq!(t["ca_url"].as_str(), Some("https://ca:7443"));
         assert_eq!(out.lines().count(), g.lines().count());
         // No such line at all: inserted before the first table, not inside one.
-        let out = set_top_level("listen = \"0.0.0.0:7443\"\n\n[mesh]\nbox = 0\n", "ca_url", "\"https://ca:7443\"");
+        let out = set_top_level(
+            "listen = \"0.0.0.0:7443\"\n\n[mesh]\nbox = 0\n",
+            "ca_url",
+            "\"https://ca:7443\"",
+        );
         let t: toml::Table = toml::from_str(&out).unwrap();
         assert_eq!(t["ca_url"].as_str(), Some("https://ca:7443"));
         assert_eq!(t["mesh"]["box"].as_integer(), Some(0));
@@ -628,8 +833,13 @@ mod tests {
     #[test]
     fn regeneration_keeps_operator_settings() {
         let resources = LibvirtResources {
-            networks: vec![super::super::libvirt_setup::NetworkInfo { name: "default".to_string(), bridge: "virbr0".to_string() }],
-            pools: vec![super::super::libvirt_setup::StoragePoolInfo { name: "default".to_string() }],
+            networks: vec![super::super::libvirt_setup::NetworkInfo {
+                name: "default".to_string(),
+                bridge: "virbr0".to_string(),
+            }],
+            pools: vec![super::super::libvirt_setup::StoragePoolInfo {
+                name: "default".to_string(),
+            }],
         };
         let old = r#"
 listen = "0.0.0.0:7443"
@@ -664,18 +874,31 @@ abe = "http://10.22.0.1:80"
 cpu_overcommit = 4.0
 "#;
         // The template emits its own [network] (created subnet) and [[hosts]].
-        let generated = generate_config(&resources, "qemu:///system", Some("192.168.100.0/24"), 0, None);
+        let generated = generate_config(
+            &resources,
+            "qemu:///system",
+            Some("192.168.100.0/24"),
+            0,
+            None,
+        );
         let merged = carry_over(old, &generated).unwrap();
-        let cfg: crate::config::Config = toml::from_str(&merged).unwrap_or_else(|e| panic!("{e}\n{merged}"));
+        let cfg: crate::config::Config =
+            toml::from_str(&merged).unwrap_or_else(|e| panic!("{e}\n{merged}"));
 
         assert_eq!(cfg.volume_group.as_deref(), Some("timesink-vg"));
         assert_eq!(cfg.thin_pool.as_deref(), Some("abe"));
-        assert_eq!(cfg.advertise_url.as_deref(), Some("https://timesink.example:7443"));
+        assert_eq!(
+            cfg.advertise_url.as_deref(),
+            Some("https://timesink.example:7443")
+        );
         assert!(merged.contains("policy = \"pack\"") && !merged.contains("policy = \"spread\""));
         let net = cfg.network.unwrap();
         assert_eq!(net.cidr.to_string(), "10.23.0.0/16");
         assert!(net.leader_only);
-        assert!(!merged.contains("192.168.100.0/24"), "template's [network] dropped:\n{merged}");
+        assert!(
+            !merged.contains("192.168.100.0/24"),
+            "template's [network] dropped:\n{merged}"
+        );
         let mesh = cfg.mesh.unwrap();
         assert!(mesh.enabled);
         assert_eq!(mesh.peers.len(), 1);
@@ -686,7 +909,10 @@ cpu_overcommit = 4.0
         assert!(merged.contains("token_file = \"/etc/xdebbie/token\""));
 
         // Nothing to keep: untouched.
-        assert_eq!(carry_over("listen = \"1.2.3.4:7443\"\n", &generated).unwrap(), generated);
+        assert_eq!(
+            carry_over("listen = \"1.2.3.4:7443\"\n", &generated).unwrap(),
+            generated
+        );
         assert!(carry_over("not = [toml", &generated).is_err());
     }
 
@@ -711,17 +937,29 @@ cpu_overcommit = 4.0
         assert_eq!(net["cidr"].as_str(), Some("10.23.0.0/16"));
         // box 2's own bridge is its VMs' gateway and DNS (the cluster's DNS was just box 0's bridge)
         assert_eq!(net["gateway"].as_str(), Some("10.23.2.1"));
-        assert_eq!(net["dns"].as_array().unwrap()[0].as_str(), Some("10.23.2.1"));
+        assert_eq!(
+            net["dns"].as_array().unwrap()[0].as_str(),
+            Some("10.23.2.1")
+        );
         assert_eq!(net["pool_start"].as_str(), Some("10.23.2.2"));
         assert_eq!(net["pool_end"].as_str(), Some("10.23.2.254"));
         assert_eq!(net["domain"].as_str(), Some("vm.example"));
         // the cluster's reservations are kept as-is; nothing is added
-        let reserved: Vec<&str> = net["reserved"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+        let reserved: Vec<&str> = net["reserved"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
         assert_eq!(reserved, ["10.23.0.9"]);
         // the cluster's upstream resolver comes along: every box's VMs ask box 0's server
-        assert_eq!(net["upstream_dns"].as_array().unwrap()[0].as_str(), Some("192.168.1.1"));
+        assert_eq!(
+            net["upstream_dns"].as_array().unwrap()[0].as_str(),
+            Some("192.168.1.1")
+        );
         // and it is a valid [network] for the daemon
-        let cfg: crate::config::Config = toml::from_str(&format!("state_file = \"/x\"\n{block}")).unwrap();
+        let cfg: crate::config::Config =
+            toml::from_str(&format!("state_file = \"/x\"\n{block}")).unwrap();
         cfg.network.unwrap().validate().unwrap();
 
         // a real DNS server is kept
@@ -729,18 +967,28 @@ cpu_overcommit = 4.0
         named.dns = vec!["10.23.0.53".parse().unwrap()];
         let (block, _) = network_block(&named, 1, "br");
         let t: toml::Value = toml::from_str(&block).unwrap();
-        assert_eq!(t["network"]["dns"].as_array().unwrap()[0].as_str(), Some("10.23.0.53"));
+        assert_eq!(
+            t["network"]["dns"].as_array().unwrap()[0].as_str(),
+            Some("10.23.0.53")
+        );
 
         // the first box still allocating from the whole range is flagged
         let wide = cluster_net("10.23.0.0/16", ("10.23.0.16", "10.23.255.254"));
         let (_, warnings) = network_block(&wide, 1, "br");
         assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("10.23.0.2-10.23.0.254"), "{}", warnings[0]);
+        assert!(
+            warnings[0].contains("10.23.0.2-10.23.0.254"),
+            "{}",
+            warnings[0]
+        );
 
         // no room for this box on a narrow overlay
         let small = cluster_net("192.168.100.0/24", ("192.168.100.2", "192.168.100.254"));
         let (_, warnings) = network_block(&small, 1, "br");
-        assert!(warnings.iter().any(|w| w.contains("room for 1 box")), "{warnings:?}");
+        assert!(
+            warnings.iter().any(|w| w.contains("room for 1 box")),
+            "{warnings:?}"
+        );
     }
 
     #[test]
@@ -759,17 +1007,40 @@ cpu_overcommit = 4.0
     #[test]
     fn generated_join_config_carries_cluster_network() {
         let resources = LibvirtResources {
-            networks: vec![super::super::libvirt_setup::NetworkInfo { name: "xdebbie".into(), bridge: "virbr-xdebbie".into() }],
+            networks: vec![super::super::libvirt_setup::NetworkInfo {
+                name: "xdebbie".into(),
+                bridge: "virbr-xdebbie".into(),
+            }],
             pools: vec![],
         };
         let n = cluster_net("10.23.0.0/16", ("10.23.0.2", "10.23.0.254"));
-        let g = generate_config_for(&resources, "qemu:///system", None, 3, Some("https://ca:7443"), "xdebbie", "xdebbie", Some(&n), "box.example", &[]);
+        let g = generate_config_for(
+            &resources,
+            "qemu:///system",
+            None,
+            3,
+            Some("https://ca:7443"),
+            "xdebbie",
+            "xdebbie",
+            Some(&n),
+            "box.example",
+            &[],
+        );
         let cfg: crate::config::Config = toml::from_str(&g).unwrap();
         let net = cfg.network.unwrap();
         assert_eq!(net.cidr.to_string(), "10.23.0.0/16");
-        assert_eq!(net.pool_start.map(|p| p.to_string()).as_deref(), Some("10.23.3.2"));
-        assert_eq!(net.pool_end.map(|p| p.to_string()).as_deref(), Some("10.23.3.254"));
-        assert_eq!(net.gateway.map(|p| p.to_string()).as_deref(), Some("10.23.3.1"));
+        assert_eq!(
+            net.pool_start.map(|p| p.to_string()).as_deref(),
+            Some("10.23.3.2")
+        );
+        assert_eq!(
+            net.pool_end.map(|p| p.to_string()).as_deref(),
+            Some("10.23.3.254")
+        );
+        assert_eq!(
+            net.gateway.map(|p| p.to_string()).as_deref(),
+            Some("10.23.3.1")
+        );
         assert!(!g.contains("# [network]"), "{g}");
     }
 }

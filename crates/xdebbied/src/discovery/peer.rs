@@ -15,12 +15,7 @@ pub struct PeerInfo {
 }
 
 impl PeerInfo {
-    pub fn new(
-        node_id: Uuid,
-        hostname: String,
-        api_url: String,
-        score: f64,
-    ) -> Self {
+    pub fn new(node_id: Uuid, hostname: String, api_url: String, score: f64) -> Self {
         Self {
             node_id,
             hostname,

@@ -60,10 +60,16 @@ export XDEBBIE_TOKEN='{token}'
 
     let gid = crate::token::xdebbie_gid();
     if gid.is_some() {
-        info!("Environment file written to {} (root:xdebbie 0440)", path.display());
+        info!(
+            "Environment file written to {} (root:xdebbie 0440)",
+            path.display()
+        );
         info!("Source with: source {}", path.display());
     } else {
-        info!("Environment file written to {} (root:root 0400 — xdebbie group not found)", path.display());
+        info!(
+            "Environment file written to {} (root:root 0400 — xdebbie group not found)",
+            path.display()
+        );
         info!("Run `sudo usermod -aG xdebbie $USER` after the group is created, then re-bootstrap");
     }
     Ok(())

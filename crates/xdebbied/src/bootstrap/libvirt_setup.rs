@@ -90,7 +90,9 @@ pub fn discover_storage_pools(uri: &str) -> Result<Vec<StoragePoolInfo>> {
             continue;
         }
 
-        pools.push(StoragePoolInfo { name: name.to_string() });
+        pools.push(StoragePoolInfo {
+            name: name.to_string(),
+        });
     }
 
     Ok(pools)
@@ -131,8 +133,17 @@ pub fn discover_libvirt(uri: &str) -> Result<LibvirtResources> {
 pub fn bridge_ip(subnet: &str, box_id: u8) -> Result<(String, String)> {
     use std::net::Ipv4Addr;
     let block = super::addr::box_block_str(subnet, box_id)?;
-    let prefix = subnet.split_once('/').map(|(_, p)| p).unwrap_or("24").parse::<u32>().context("prefix length")?;
-    let mask = if prefix == 0 { 0 } else { u32::MAX << (32 - prefix) };
+    let prefix = subnet
+        .split_once('/')
+        .map(|(_, p)| p)
+        .unwrap_or("24")
+        .parse::<u32>()
+        .context("prefix length")?;
+    let mask = if prefix == 0 {
+        0
+    } else {
+        u32::MAX << (32 - prefix)
+    };
     Ok((block.bridge.to_string(), Ipv4Addr::from(mask).to_string()))
 }
 
@@ -176,15 +187,18 @@ pub fn ensure_network(
         return Ok(bridge);
     }
 
-    let (gateway, netmask) = bridge_ip(subnet, box_id)
-        .with_context(|| format!("invalid network subnet {subnet:?}"))?;
-    info!("Creating network '{}' on subnet {} (bridge address {gateway}, box {box_id})", name, subnet);
+    let (gateway, netmask) =
+        bridge_ip(subnet, box_id).with_context(|| format!("invalid network subnet {subnet:?}"))?;
+    info!(
+        "Creating network '{}' on subnet {} (bridge address {gateway}, box {box_id})",
+        name, subnet
+    );
 
     let bridge_name = format!("virbr-{}", name);
 
     // Disable DNS by default to avoid conflicts with CoreDNS or other DNS servers
     let enable_dns = false;
-    
+
     // Only include DHCP if both start and end are provided
     let enable_dhcp = !dhcp_start.is_empty() && !dhcp_end.is_empty();
 
@@ -194,7 +208,7 @@ pub fn ensure_network(
     } else {
         "  <dns enable='no'/>\n".to_string()
     };
-    
+
     let dhcp_section = if enable_dhcp {
         format!(
             "    <dhcp>\n      <range start='{}' end='{}'/>\n    </dhcp>\n",
@@ -252,13 +266,19 @@ pub fn ensure_network(
         .args(["-c", uri, "net-autostart", name])
         .status();
 
-    info!("Network '{}' created and started (bridge: {})", name, bridge_name);
+    info!(
+        "Network '{}' created and started (bridge: {})",
+        name, bridge_name
+    );
     Ok(bridge_name)
 }
 
 /// The `<mac address>` of a defined network, if any.
 pub fn network_mac(uri: &str, name: &str) -> Option<String> {
-    let out = Command::new("virsh").args(["-q", "-c", uri, "net-dumpxml", name]).output().ok()?;
+    let out = Command::new("virsh")
+        .args(["-q", "-c", uri, "net-dumpxml", name])
+        .output()
+        .ok()?;
     let xml = String::from_utf8_lossy(&out.stdout);
     let i = xml.find("<mac address='")? + "<mac address='".len();
     let rest = &xml[i..];
@@ -281,7 +301,10 @@ pub struct NetworkShape {
 }
 
 pub fn network_shape(uri: &str, name: &str) -> Option<NetworkShape> {
-    let out = Command::new("virsh").args(["-q", "-c", uri, "net-dumpxml", name]).output().ok()?;
+    let out = Command::new("virsh")
+        .args(["-q", "-c", uri, "net-dumpxml", name])
+        .output()
+        .ok()?;
     if !out.status.success() {
         return None;
     }
@@ -306,12 +329,29 @@ pub fn parse_network_shape(xml: &str) -> NetworkShape {
             (None, Some(p)) => p.parse().ok()?,
             (None, None) => return None,
         };
-        let mask = if prefix == 0 { 0 } else { u32::MAX << (32 - prefix) };
-        Some(format!("{}/{}", std::net::Ipv4Addr::from(u32::from(addr) & mask), prefix))
+        let mask = if prefix == 0 {
+            0
+        } else {
+            u32::MAX << (32 - prefix)
+        };
+        Some(format!(
+            "{}/{}",
+            std::net::Ipv4Addr::from(u32::from(addr) & mask),
+            prefix
+        ))
     })();
     let address = attr("ip", "address").and_then(|a| a.parse().ok());
-    let forward = if xml.contains("<forward") { Some(attr("forward", "mode").unwrap_or_else(|| "nat".into())) } else { None };
-    NetworkShape { has_dhcp: xml.contains("<dhcp"), subnet, address, forward }
+    let forward = if xml.contains("<forward") {
+        Some(attr("forward", "mode").unwrap_or_else(|| "nat".into()))
+    } else {
+        None
+    };
+    NetworkShape {
+        has_dhcp: xml.contains("<dhcp"),
+        subnet,
+        address,
+        forward,
+    }
 }
 
 /// Create a directory-based storage pool if it doesn't exist
@@ -393,12 +433,13 @@ pub fn ensure_storage_pool(uri: &str, name: &str, path: &str) -> Result<()> {
 /// instead of trusting whichever form /etc/hostname happens to hold.
 pub fn get_hostname() -> String {
     if let Ok(out) = Command::new("hostname").arg("-f").output()
-        && out.status.success() {
-            let fqdn = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !fqdn.is_empty() {
-                return fqdn;
-            }
+        && out.status.success()
+    {
+        let fqdn = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !fqdn.is_empty() {
+            return fqdn;
         }
+    }
     hostname::get()
         .ok()
         .and_then(|h| h.into_string().ok())
@@ -411,13 +452,31 @@ mod gateway_tests {
 
     #[test]
     fn bridge_is_dot_one_of_the_boxs_slash_24() {
-        assert_eq!(bridge_ip("192.168.100.0/24", 0).unwrap(), ("192.168.100.1".into(), "255.255.255.0".into()));
-        assert_eq!(bridge_ip("10.23.0.0/16", 0).unwrap(), ("10.23.0.1".into(), "255.255.0.0".into()));
-        assert_eq!(bridge_ip("10.23.0.0/16", 1).unwrap(), ("10.23.1.1".into(), "255.255.0.0".into()));
-        assert_eq!(bridge_ip("10.23.0.0/16", 42).unwrap(), ("10.23.42.1".into(), "255.255.0.0".into()));
+        assert_eq!(
+            bridge_ip("192.168.100.0/24", 0).unwrap(),
+            ("192.168.100.1".into(), "255.255.255.0".into())
+        );
+        assert_eq!(
+            bridge_ip("10.23.0.0/16", 0).unwrap(),
+            ("10.23.0.1".into(), "255.255.0.0".into())
+        );
+        assert_eq!(
+            bridge_ip("10.23.0.0/16", 1).unwrap(),
+            ("10.23.1.1".into(), "255.255.0.0".into())
+        );
+        assert_eq!(
+            bridge_ip("10.23.0.0/16", 42).unwrap(),
+            ("10.23.42.1".into(), "255.255.0.0".into())
+        );
         // a host address inside the subnet still yields the network's block
-        assert_eq!(bridge_ip("192.168.100.37/24", 0).unwrap().0, "192.168.100.1");
-        assert!(bridge_ip("192.168.100.0/24", 1).is_err(), "a /24 holds one box");
+        assert_eq!(
+            bridge_ip("192.168.100.37/24", 0).unwrap().0,
+            "192.168.100.1"
+        );
+        assert!(
+            bridge_ip("192.168.100.0/24", 1).is_err(),
+            "a /24 holds one box"
+        );
         assert!(bridge_ip("192.168.100.0/31", 0).is_err());
         assert!(bridge_ip("nope/24", 0).is_err());
     }
@@ -430,17 +489,42 @@ mod shape_tests {
     #[test]
     fn shape_of_our_own_network() {
         let xml = "<network>\n  <name>xdebbie</name>\n  <bridge name='virbr-xdebbie' stp='off' delay='0'/>\n  <mac address='52:54:00:23:01:fe'/>\n  <dns enable='no'/>\n  <ip address='10.23.0.2' netmask='255.255.0.0'/>\n</network>";
-        assert_eq!(parse_network_shape(xml), NetworkShape { has_dhcp: false, subnet: Some("10.23.0.0/16".into()), address: Some("10.23.0.2".parse().unwrap()), forward: None });
+        assert_eq!(
+            parse_network_shape(xml),
+            NetworkShape {
+                has_dhcp: false,
+                subnet: Some("10.23.0.0/16".into()),
+                address: Some("10.23.0.2".parse().unwrap()),
+                forward: None
+            }
+        );
         let routed = "<network>\n  <name>xdebbie</name>\n  <forward mode='route'/>\n  <bridge name='virbr-xdebbie' stp='off' delay='0'/>\n  <ip address='10.23.1.1' netmask='255.255.0.0'>\n  </ip>\n</network>";
-        assert_eq!(parse_network_shape(routed).forward.as_deref(), Some("route"));
+        assert_eq!(
+            parse_network_shape(routed).forward.as_deref(),
+            Some("route")
+        );
     }
 
     #[test]
     fn shape_of_libvirt_default() {
         let xml = "<network>\n  <name>default</name>\n  <forward mode='nat'/>\n  <bridge name='virbr0' stp='on' delay='0'/>\n  <ip address='192.168.122.1' netmask='255.255.255.0'>\n    <dhcp>\n      <range start='192.168.122.2' end='192.168.122.254'/>\n    </dhcp>\n  </ip>\n</network>";
-        assert_eq!(parse_network_shape(xml), NetworkShape { has_dhcp: true, subnet: Some("192.168.122.0/24".into()), address: Some("192.168.122.1".parse().unwrap()), forward: Some("nat".into()) });
+        assert_eq!(
+            parse_network_shape(xml),
+            NetworkShape {
+                has_dhcp: true,
+                subnet: Some("192.168.122.0/24".into()),
+                address: Some("192.168.122.1".parse().unwrap()),
+                forward: Some("nat".into())
+            }
+        );
         let bare = "<network><name>x</name><bridge name='br'/><ip address='10.0.0.1' prefix='8'/></network>";
-        assert_eq!(parse_network_shape(bare).subnet.as_deref(), Some("10.0.0.0/8"));
-        assert_eq!(parse_network_shape("<network><name>x</name></network>").subnet, None);
+        assert_eq!(
+            parse_network_shape(bare).subnet.as_deref(),
+            Some("10.0.0.0/8")
+        );
+        assert_eq!(
+            parse_network_shape("<network><name>x</name></network>").subnet,
+            None
+        );
     }
 }

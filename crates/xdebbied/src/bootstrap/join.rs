@@ -73,7 +73,11 @@ fn save_state(state_dir: &Path, st: &JoinState) -> Result<()> {
 /// Fetch the CA from `ca_url` without verifying anything, and decide
 /// whether to trust it: pinned fingerprint, a fingerprint accepted on an
 /// earlier run, or the operator at the terminal.
-fn fetch_and_pin_ca(ca_url: &str, expect: Option<&str>, prior: Option<&JoinState>) -> Result<(String, String)> {
+fn fetch_and_pin_ca(
+    ca_url: &str,
+    expect: Option<&str>,
+    prior: Option<&JoinState>,
+) -> Result<(String, String)> {
     let insecure = Client::builder()
         .use_rustls_tls()
         .danger_accept_invalid_certs(true)
@@ -84,7 +88,10 @@ fn fetch_and_pin_ca(ca_url: &str, expect: Option<&str>, prior: Option<&JoinState
         .send()
         .with_context(|| format!("contacting {ca_url} (is xdebbied running there, over https?)"))?;
     if !r.status().is_success() {
-        bail!("{ca_url}/v1/ca: {} — is that the box bootstrapped first (it holds the CA key)?", r.status());
+        bail!(
+            "{ca_url}/v1/ca: {} — is that the box bootstrapped first (it holds the CA key)?",
+            r.status()
+        );
     }
     let pem = r.text()?;
     let fp = api_tls::cert_fingerprint(&pem).context("CA certificate from the CA box")?;
@@ -134,11 +141,17 @@ fn trusted_client(ca_pem: &str, identity: Option<reqwest::Identity>) -> Result<C
 }
 
 fn get_enrollment(c: &Client, ca_url: &str, id: &str) -> Result<Option<Enrollment>> {
-    let r = c.get(format!("{ca_url}/v1/enroll/{id}")).send().context("polling enrolment")?;
+    let r = c
+        .get(format!("{ca_url}/v1/enroll/{id}"))
+        .send()
+        .context("polling enrolment")?;
     match r.status() {
         s if s.is_success() => Ok(Some(r.json()?)),
         reqwest::StatusCode::NOT_FOUND => Ok(None),
-        s => bail!("{ca_url}/v1/enroll/{id}: {s}: {}", r.text().unwrap_or_default()),
+        s => bail!(
+            "{ca_url}/v1/enroll/{id}: {s}: {}",
+            r.text().unwrap_or_default()
+        ),
     }
 }
 
@@ -153,7 +166,9 @@ pub struct Joined {
 pub fn join(o: &JoinOptions<'_>) -> Result<Joined> {
     let ca_url = o.ca_url.trim_end_matches('/');
     if !ca_url.starts_with("https://") {
-        bail!("--join must be an https:// URL (got {ca_url}); enrolment never runs over plain http");
+        bail!(
+            "--join must be an https:// URL (got {ca_url}); enrolment never runs over plain http"
+        );
     }
     let prior = load_state(o.state_dir);
     let (ca_pem, ca_fp) = fetch_and_pin_ca(ca_url, o.expect_fingerprint, prior.as_ref())?;
@@ -196,17 +211,34 @@ pub fn join(o: &JoinOptions<'_>) -> Result<Joined> {
                 csr: csr.csr_pem,
                 wg_pubkey: None,
             };
-            let r = c.post(format!("{ca_url}/v1/enroll")).json(&req).send().context("submitting enrolment")?;
+            let r = c
+                .post(format!("{ca_url}/v1/enroll"))
+                .json(&req)
+                .send()
+                .context("submitting enrolment")?;
             if !r.status().is_success() {
-                bail!("{ca_url}/v1/enroll: {}: {}", r.status(), r.text().unwrap_or_default());
+                bail!(
+                    "{ca_url}/v1/enroll: {}: {}",
+                    r.status(),
+                    r.text().unwrap_or_default()
+                );
             }
             let e: Enrollment = r.json().context("parsing enrolment reply")?;
             if e.fingerprint != csr.fingerprint {
-                bail!("CA box echoed key fingerprint {} for our {}: not continuing", e.fingerprint, csr.fingerprint);
+                bail!(
+                    "CA box echoed key fingerprint {} for our {}: not continuing",
+                    e.fingerprint,
+                    csr.fingerprint
+                );
             }
             save_state(
                 o.state_dir,
-                &JoinState { ca_url: ca_url.into(), ca_fingerprint: ca_fp.clone(), enrollment_id: e.id.clone(), key_fingerprint: e.fingerprint.clone() },
+                &JoinState {
+                    ca_url: ca_url.into(),
+                    ca_fingerprint: ca_fp.clone(),
+                    enrollment_id: e.id.clone(),
+                    key_fingerprint: e.fingerprint.clone(),
+                },
             )?;
             e
         }
@@ -214,12 +246,17 @@ pub fn join(o: &JoinOptions<'_>) -> Result<Joined> {
 
     if e.status == EnrollStatus::Pending {
         eprintln!();
-        eprintln!("Enrolment {} is waiting for approval. On the CA box (or any member) run:", e.id);
+        eprintln!(
+            "Enrolment {} is waiting for approval. On the CA box (or any member) run:",
+            e.id
+        );
         eprintln!();
         eprintln!("    xdctl approve {}", o.hostname);
         eprintln!();
         eprintln!("  key fingerprint {}", e.fingerprint);
-        eprintln!("(Ctrl-C and re-run `xdebbied bootstrap --join` later to pick up where this left off.)");
+        eprintln!(
+            "(Ctrl-C and re-run `xdebbied bootstrap --join` later to pick up where this left off.)"
+        );
         let mut n = 0u32;
         loop {
             std::thread::sleep(POLL);
@@ -231,52 +268,89 @@ pub fn join(o: &JoinOptions<'_>) -> Result<Joined> {
                         break;
                     }
                 }
-                Ok(None) => bail!("enrolment {} disappeared on {ca_url}; re-run with --force", e.id),
+                Ok(None) => bail!(
+                    "enrolment {} disappeared on {ca_url}; re-run with --force",
+                    e.id
+                ),
                 Err(err) => warn!("{err:#}; retrying"),
             }
             if n % REMIND_EVERY == 0 {
-                info!("still waiting for `xdctl approve {}` ({}s)", o.hostname, n as u64 * POLL.as_secs());
+                info!(
+                    "still waiting for `xdctl approve {}` ({}s)",
+                    o.hostname,
+                    n as u64 * POLL.as_secs()
+                );
             }
         }
     }
     match e.status {
         EnrollStatus::Approved => {}
-        EnrollStatus::Denied => bail!("enrolment {} was denied on {ca_url}; re-run with --force to ask again", e.id),
+        EnrollStatus::Denied => bail!(
+            "enrolment {} was denied on {ca_url}; re-run with --force to ask again",
+            e.id
+        ),
         EnrollStatus::Pending => unreachable!(),
     }
     let (Some(cert), Some(ca)) = (&e.cert, &e.ca) else {
-        bail!("enrolment {} approved but no certificate was returned", e.id);
+        bail!(
+            "enrolment {} approved but no certificate was returned",
+            e.id
+        );
     };
     if api_tls::cert_fingerprint(ca)? != ca_fp {
         bail!("CA returned with the approval differs from the one pinned; not installing");
     }
     api_tls::install_issued(o.paths, cert, ca)?;
-    info!("Enrolment {} approved as box {}; certificate installed", e.id, e.box_id);
+    info!(
+        "Enrolment {} approved as box {}; certificate installed",
+        e.id, e.box_id
+    );
 
     // Now we are a member: fetch the token with our certificate.
     let key = std::fs::read_to_string(&o.paths.server_key)?;
-    let identity = reqwest::Identity::from_pem(format!("{cert}\n{key}").as_bytes()).context("client identity")?;
+    let identity = reqwest::Identity::from_pem(format!("{cert}\n{key}").as_bytes())
+        .context("client identity")?;
     let m = trusted_client(&ca_pem, Some(identity))?;
-    let r = m.get(format!("{ca_url}/v1/enroll/token")).send().context("fetching cluster token")?;
+    let r = m
+        .get(format!("{ca_url}/v1/enroll/token"))
+        .send()
+        .context("fetching cluster token")?;
     if !r.status().is_success() {
-        bail!("{ca_url}/v1/enroll/token: {}: {}", r.status(), r.text().unwrap_or_default());
+        bail!(
+            "{ca_url}/v1/enroll/token: {}: {}",
+            r.status(),
+            r.text().unwrap_or_default()
+        );
     }
     let set: TokenSet = r.json().context("parsing token")?;
-    info!("Received the cluster token ({})", crate::token::fingerprint(&set.current));
-    Ok(Joined { tokens: set, box_id: e.box_id })
+    info!(
+        "Received the cluster token ({})",
+        crate::token::fingerprint(&set.current)
+    );
+    Ok(Joined {
+        tokens: set,
+        box_id: e.box_id,
+    })
 }
 
 /// The CA box's `[network]` as it serves it (`GET /v1/network`), for a
 /// joiner to copy the overlay from. `None` when that box has no `[network]`.
 /// Uses the certificate installed by [`join`]; call after it.
-pub fn fetch_network(ca_url: &str, paths: &ApiTlsPaths) -> Result<Option<crate::dhcp::NetworkStatus>> {
+pub fn fetch_network(
+    ca_url: &str,
+    paths: &ApiTlsPaths,
+) -> Result<Option<crate::dhcp::NetworkStatus>> {
     let ca_url = ca_url.trim_end_matches('/');
     let ca_pem = std::fs::read_to_string(&paths.ca_cert)?;
     let cert = std::fs::read_to_string(&paths.server_cert)?;
     let key = std::fs::read_to_string(&paths.server_key)?;
-    let identity = reqwest::Identity::from_pem(format!("{cert}\n{key}").as_bytes()).context("client identity")?;
+    let identity = reqwest::Identity::from_pem(format!("{cert}\n{key}").as_bytes())
+        .context("client identity")?;
     let c = trusted_client(&ca_pem, Some(identity))?;
-    let r = c.get(format!("{ca_url}/v1/network")).send().context("fetching the cluster network")?;
+    let r = c
+        .get(format!("{ca_url}/v1/network"))
+        .send()
+        .context("fetching the cluster network")?;
     match r.status() {
         s if s.is_success() => Ok(Some(r.json().context("parsing /v1/network")?)),
         reqwest::StatusCode::NOT_FOUND => Ok(None),
@@ -293,7 +367,8 @@ pub fn register_host(ca_url: &str, paths: &ApiTlsPaths, host: &xdebbie_core::Hos
     let ca_pem = std::fs::read_to_string(&paths.ca_cert)?;
     let cert = std::fs::read_to_string(&paths.server_cert)?;
     let key = std::fs::read_to_string(&paths.server_key)?;
-    let identity = reqwest::Identity::from_pem(format!("{cert}\n{key}").as_bytes()).context("client identity")?;
+    let identity = reqwest::Identity::from_pem(format!("{cert}\n{key}").as_bytes())
+        .context("client identity")?;
     let c = trusted_client(&ca_pem, Some(identity))?;
     let url = format!("{ca_url}/v1/hosts/{}", host.name);
     // A follower answers 503 while an election settles; give it a moment.

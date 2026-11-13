@@ -1067,8 +1067,10 @@ mod compat_tests {
                 .get("origin")
                 .is_none()
         );
-        assert!(again["volumes"]["00a108b720bd4d3ab4113ebbfeee1f64"]
-            .get("deleting")
-            .is_none());
+        assert!(
+            again["volumes"]["00a108b720bd4d3ab4113ebbfeee1f64"]
+                .get("deleting")
+                .is_none()
+        );
     }
 }

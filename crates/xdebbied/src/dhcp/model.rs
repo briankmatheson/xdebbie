@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
 use std::str::FromStr;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use xdebbie_core::model::Vm;
@@ -29,7 +29,10 @@ impl Cidr {
             bail!("prefix length {prefix} not in 8..=30");
         }
         let m = Self::mask_bits(prefix);
-        Ok(Self { network: Ipv4Addr::from(u32::from(addr) & m), prefix })
+        Ok(Self {
+            network: Ipv4Addr::from(u32::from(addr) & m),
+            prefix,
+        })
     }
     fn mask_bits(prefix: u8) -> u32 {
         u32::MAX << (32 - prefix)
@@ -58,7 +61,10 @@ impl Cidr {
 impl FromStr for Cidr {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self> {
-        let (a, p) = s.trim().split_once('/').ok_or_else(|| anyhow!("`{s}`: expected a.b.c.d/n"))?;
+        let (a, p) = s
+            .trim()
+            .split_once('/')
+            .ok_or_else(|| anyhow!("`{s}`: expected a.b.c.d/n"))?;
         let addr: Ipv4Addr = a.parse().map_err(|e| anyhow!("`{s}`: {e}"))?;
         let prefix: u8 = p.parse().map_err(|e| anyhow!("`{s}`: {e}"))?;
         Self::new(addr, prefix)
@@ -142,7 +148,11 @@ impl NetworkConfig {
         self.gateway.unwrap_or_else(|| self.cidr.first_host())
     }
     pub fn dns(&self) -> Vec<Ipv4Addr> {
-        if self.dns.is_empty() { vec![self.gateway()] } else { self.dns.clone() }
+        if self.dns.is_empty() {
+            vec![self.gateway()]
+        } else {
+            self.dns.clone()
+        }
     }
     pub fn pool(&self) -> (Ipv4Addr, Ipv4Addr) {
         let start = self
@@ -155,7 +165,10 @@ impl NetworkConfig {
     pub fn validate(&self) -> Result<()> {
         let gw = self.gateway();
         if !self.cidr.contains_host(gw) {
-            bail!("network.gateway {gw} is not a host address in {}", self.cidr);
+            bail!(
+                "network.gateway {gw} is not a host address in {}",
+                self.cidr
+            );
         }
         let (start, end) = self.pool();
         if !self.cidr.contains_host(start) || !self.cidr.contains_host(end) {
@@ -192,7 +205,11 @@ impl NetworkConfig {
     /// Pick the address for a new VM. `requested` must be a free host address
     /// in the subnet (it may sit outside the pool — that is how operators pin
     /// infrastructure addresses). Otherwise the lowest free pool address.
-    pub fn allocate(&self, requested: Option<Ipv4Addr>, in_use: &BTreeSet<Ipv4Addr>) -> Result<Ipv4Addr> {
+    pub fn allocate(
+        &self,
+        requested: Option<Ipv4Addr>,
+        in_use: &BTreeSet<Ipv4Addr>,
+    ) -> Result<Ipv4Addr> {
         let blocked = self.blocked();
         if let Some(r) = requested {
             if !self.cidr.contains_host(r) {
@@ -226,7 +243,11 @@ impl NetworkConfig {
         let mut in_use = Self::in_use(vms.values());
         let blocked = self.blocked();
         let mut out = Vec::new();
-        let ids: Vec<Uuid> = vms.iter().filter(|(_, v)| v.ip.is_none()).map(|(id, _)| *id).collect();
+        let ids: Vec<Uuid> = vms
+            .iter()
+            .filter(|(_, v)| v.ip.is_none())
+            .map(|(id, _)| *id)
+            .collect();
         for id in ids {
             let vm = &vms[&id];
             let known = vm
@@ -234,7 +255,9 @@ impl NetworkConfig {
                 .iter()
                 .filter(|a| a.kind == "InternalIP")
                 .filter_map(|a| a.address.parse::<Ipv4Addr>().ok())
-                .find(|ip| self.cidr.contains_host(*ip) && !blocked.contains(ip) && !in_use.contains(ip));
+                .find(|ip| {
+                    self.cidr.contains_host(*ip) && !blocked.contains(ip) && !in_use.contains(ip)
+                });
             let ip = match known {
                 Some(ip) => ip,
                 None => match self.allocate(None, &in_use) {
@@ -292,7 +315,13 @@ mod tests {
         let n = cfg("10.23.0.0/16");
         assert_eq!(n.gateway(), Ipv4Addr::new(10, 23, 0, 1));
         assert_eq!(n.dns(), vec![Ipv4Addr::new(10, 23, 0, 1)]);
-        assert_eq!(n.pool(), (Ipv4Addr::new(10, 23, 0, 16), Ipv4Addr::new(10, 23, 255, 254)));
+        assert_eq!(
+            n.pool(),
+            (
+                Ipv4Addr::new(10, 23, 0, 16),
+                Ipv4Addr::new(10, 23, 255, 254)
+            )
+        );
         n.validate().unwrap();
         let mut bad = cfg("10.23.0.0/16");
         bad.gateway = Some(Ipv4Addr::new(10, 24, 0, 1));
@@ -300,7 +329,12 @@ mod tests {
         let mut bad = cfg("10.23.0.0/16");
         bad.pool_start = Some(Ipv4Addr::new(10, 23, 1, 0));
         bad.pool_end = Some(Ipv4Addr::new(10, 23, 0, 200));
-        assert!(bad.validate().unwrap_err().to_string().contains("pool_start"));
+        assert!(
+            bad.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("pool_start")
+        );
     }
 
     #[test]
@@ -308,16 +342,35 @@ mod tests {
         let mut n = cfg("10.23.0.0/24");
         n.reserved = vec![Ipv4Addr::new(10, 23, 0, 16)];
         let mut used = BTreeSet::new();
-        assert_eq!(n.allocate(None, &used).unwrap(), Ipv4Addr::new(10, 23, 0, 17));
+        assert_eq!(
+            n.allocate(None, &used).unwrap(),
+            Ipv4Addr::new(10, 23, 0, 17)
+        );
         used.insert(Ipv4Addr::new(10, 23, 0, 17));
-        assert_eq!(n.allocate(None, &used).unwrap(), Ipv4Addr::new(10, 23, 0, 18));
+        assert_eq!(
+            n.allocate(None, &used).unwrap(),
+            Ipv4Addr::new(10, 23, 0, 18)
+        );
         // pinned outside the pool is fine
-        assert_eq!(n.allocate(Some(Ipv4Addr::new(10, 23, 0, 5)), &used).unwrap(), Ipv4Addr::new(10, 23, 0, 5));
-        let e = n.allocate(Some(Ipv4Addr::new(10, 23, 0, 17)), &used).unwrap_err().to_string();
+        assert_eq!(
+            n.allocate(Some(Ipv4Addr::new(10, 23, 0, 5)), &used)
+                .unwrap(),
+            Ipv4Addr::new(10, 23, 0, 5)
+        );
+        let e = n
+            .allocate(Some(Ipv4Addr::new(10, 23, 0, 17)), &used)
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("already bound"), "{e}");
-        let e = n.allocate(Some(Ipv4Addr::new(10, 23, 0, 1)), &used).unwrap_err().to_string();
+        let e = n
+            .allocate(Some(Ipv4Addr::new(10, 23, 0, 1)), &used)
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("reserved"), "{e}");
-        let e = n.allocate(Some(Ipv4Addr::new(10, 99, 0, 1)), &used).unwrap_err().to_string();
+        let e = n
+            .allocate(Some(Ipv4Addr::new(10, 99, 0, 1)), &used)
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("not a host address"), "{e}");
     }
 
@@ -344,7 +397,12 @@ mod tests {
             power: PowerIntent::On,
             host: Some("h".into()),
             addresses: reported
-                .map(|a| vec![Address { kind: "InternalIP".into(), address: a.into() }])
+                .map(|a| {
+                    vec![Address {
+                        kind: "InternalIP".into(),
+                        address: a.into(),
+                    }]
+                })
                 .unwrap_or_default(),
             ip,
             disks: Vec::new(),
@@ -365,7 +423,10 @@ mod tests {
         let fresh = vm("fresh", None, None);
         let done = vm("done", Some(Ipv4Addr::new(10, 23, 0, 16)), None);
         let mut vms: std::collections::BTreeMap<Uuid, Vm> =
-            [keep.clone(), foreign.clone(), fresh.clone(), done.clone()].into_iter().map(|v| (v.id, v)).collect();
+            [keep.clone(), foreign.clone(), fresh.clone(), done.clone()]
+                .into_iter()
+                .map(|v| (v.id, v))
+                .collect();
         let out = n.adopt(&mut vms);
         assert_eq!(out.len(), 3);
         assert_eq!(vms[&keep.id].ip, Some(Ipv4Addr::new(10, 23, 0, 142)));
@@ -373,7 +434,10 @@ mod tests {
         // the two allocations are .17 and .18 (.16 is taken, .142 is kept)
         let mut alloc: Vec<_> = [vms[&foreign.id].ip.unwrap(), vms[&fresh.id].ip.unwrap()].to_vec();
         alloc.sort();
-        assert_eq!(alloc, vec![Ipv4Addr::new(10, 23, 0, 17), Ipv4Addr::new(10, 23, 0, 18)]);
+        assert_eq!(
+            alloc,
+            vec![Ipv4Addr::new(10, 23, 0, 17), Ipv4Addr::new(10, 23, 0, 18)]
+        );
         // idempotent
         assert!(n.adopt(&mut vms).is_empty());
     }
@@ -386,6 +450,11 @@ mod tests {
         let mut used = BTreeSet::new();
         used.insert(n.allocate(None, &used).unwrap());
         used.insert(n.allocate(None, &used).unwrap());
-        assert!(n.allocate(None, &used).unwrap_err().to_string().contains("exhausted"));
+        assert!(
+            n.allocate(None, &used)
+                .unwrap_err()
+                .to_string()
+                .contains("exhausted")
+        );
     }
 }

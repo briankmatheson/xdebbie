@@ -31,11 +31,18 @@ pub fn calculate_score(
     let state_score = state_component(capacity.vm_count);
     let uuid_tiebreaker = uuid_component(node_id);
 
-    let score = uptime_score + capacity_score + load_score + leader_bonus + state_score + uuid_tiebreaker;
+    let score =
+        uptime_score + capacity_score + load_score + leader_bonus + state_score + uuid_tiebreaker;
 
     tracing::debug!(
         "Score calculation: uptime={:.1} capacity={:.1} load={:.1} leader_bonus={:.1} state={:.1} uuid={:.6} total={:.1}",
-        uptime_score, capacity_score, load_score, leader_bonus, state_score, uuid_tiebreaker, score
+        uptime_score,
+        capacity_score,
+        load_score,
+        leader_bonus,
+        state_score,
+        uuid_tiebreaker,
+        score
     );
 
     score
@@ -109,7 +116,11 @@ fn load_component(capacity: &NodeCapacity) -> f64 {
 /// VMs in its store still beats an empty incumbent that has been up for
 /// days. The graded part orders two non-empty stores.
 fn state_component(vm_count: usize) -> f64 {
-    if vm_count == 0 { 0.0 } else { 2000.0 + vm_count.min(10) as f64 * 200.0 }
+    if vm_count == 0 {
+        0.0
+    } else {
+        2000.0 + vm_count.min(10) as f64 * 200.0
+    }
 }
 
 /// UUID component: 0-1 tiebreaker for deterministic ordering
@@ -131,9 +142,10 @@ pub fn get_uptime() -> Duration {
     {
         if let Ok(content) = std::fs::read_to_string("/proc/uptime")
             && let Some(uptime_str) = content.split_whitespace().next()
-                && let Ok(uptime_secs) = uptime_str.parse::<f64>() {
-                    return Duration::from_secs_f64(uptime_secs);
-                }
+            && let Ok(uptime_secs) = uptime_str.parse::<f64>()
+        {
+            return Duration::from_secs_f64(uptime_secs);
+        }
     }
 
     // Fallback: assume we just started (will be overridden by process start time tracking)
@@ -168,9 +180,15 @@ mod tests {
         let id = Uuid::nil();
         let empty_incumbent = calculate_score(&cap(0), Duration::from_secs(3600 * 24), true, id);
         let holder_just_restarted = calculate_score(&cap(1), Duration::from_secs(0), false, id);
-        assert!(holder_just_restarted > empty_incumbent, "{holder_just_restarted} <= {empty_incumbent}");
+        assert!(
+            holder_just_restarted > empty_incumbent,
+            "{holder_just_restarted} <= {empty_incumbent}"
+        );
         // and a bigger store beats a smaller one, capped so it stays bounded
-        assert!(calculate_score(&cap(5), Duration::ZERO, false, id) > calculate_score(&cap(1), Duration::ZERO, false, id));
+        assert!(
+            calculate_score(&cap(5), Duration::ZERO, false, id)
+                > calculate_score(&cap(1), Duration::ZERO, false, id)
+        );
         assert_eq!(state_component(10), state_component(50));
     }
 

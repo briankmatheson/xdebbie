@@ -26,10 +26,12 @@ impl MulticastSocket {
         // box, as in testing) must be able to join while the old one runs.
         let socket = {
             use socket2::{Domain, Protocol, Socket, Type};
-            let s = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP)).context("Failed to create UDP socket")?;
+            let s = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))
+                .context("Failed to create UDP socket")?;
             s.set_reuse_address(true).context("SO_REUSEADDR")?;
             s.set_reuse_port(true).context("SO_REUSEPORT")?;
-            s.bind(&bind_addr.into()).context("Failed to bind UDP socket")?;
+            s.bind(&bind_addr.into())
+                .context("Failed to bind UDP socket")?;
             // Bound to 0.0.0.0, Linux would also hand us every other group
             // any socket on this box joins on the same port (IP_MULTICAST_ALL).
             // Only our own group: a test or another tool on a private group
@@ -120,8 +122,7 @@ impl MulticastSocket {
 
         match self.socket.recv_from(&mut buf) {
             Ok((len, addr)) => {
-                let json = std::str::from_utf8(&buf[..len])
-                    .context("Received non-UTF8 message")?;
+                let json = std::str::from_utf8(&buf[..len]).context("Received non-UTF8 message")?;
 
                 match DiscoveryMessage::from_json(json) {
                     Ok(msg) => {

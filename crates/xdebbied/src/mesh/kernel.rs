@@ -9,9 +9,9 @@ use std::{net::Ipv4Addr, path::PathBuf, process::Stdio, time::Duration};
 #[cfg(test)]
 use std::{collections::BTreeMap, sync::Mutex};
 
-use anyhow::{Context, Result, anyhow};
 #[cfg(test)]
 use anyhow::bail;
+use anyhow::{Context, Result, anyhow};
 use serde_json::Value;
 
 use super::model::{NFT_TABLE, OWNER_ALIAS, parse_tunnel_name};
@@ -106,7 +106,9 @@ impl Link {
     /// WireGuard-owned = the configured underlay name **and** our alias
     /// **and** kind wireguard.
     pub fn wg_owned(&self, dev: &str) -> bool {
-        self.name == dev && self.kind == LinkKind::Wireguard && self.alias.as_deref() == Some(OWNER_ALIAS)
+        self.name == dev
+            && self.kind == LinkKind::Wireguard
+            && self.alias.as_deref() == Some(OWNER_ALIAS)
     }
     pub fn is_bridge(&self) -> bool {
         matches!(self.kind, LinkKind::Bridge(_))
@@ -169,31 +171,87 @@ impl Observed {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
-    CreateTunnel { dev: String, vni: u32, remote: Ipv4Addr, dstport: u16 },
-    DeleteTunnel { dev: String },
-    SetAlias { dev: String },
-    SetMtu { dev: String, mtu: u16 },
-    SetMaster { dev: String, bridge: String },
-    SetPortFlags { dev: String, flags: PortFlags },
-    SetUp { dev: String },
-    SetDown { dev: String },
-    FdbAdd { mac: String, dev: String, bridge: String },
-    FdbDel { mac: String, dev: String, bridge: String },
-    SetBridgeMtu { bridge: String, mtu: u16 },
+    CreateTunnel {
+        dev: String,
+        vni: u32,
+        remote: Ipv4Addr,
+        dstport: u16,
+    },
+    DeleteTunnel {
+        dev: String,
+    },
+    SetAlias {
+        dev: String,
+    },
+    SetMtu {
+        dev: String,
+        mtu: u16,
+    },
+    SetMaster {
+        dev: String,
+        bridge: String,
+    },
+    SetPortFlags {
+        dev: String,
+        flags: PortFlags,
+    },
+    SetUp {
+        dev: String,
+    },
+    SetDown {
+        dev: String,
+    },
+    FdbAdd {
+        mac: String,
+        dev: String,
+        bridge: String,
+    },
+    FdbDel {
+        mac: String,
+        dev: String,
+        bridge: String,
+    },
+    SetBridgeMtu {
+        bridge: String,
+        mtu: u16,
+    },
     /// `ip link set <bridge> type bridge stp_state 0`: the mesh relies on
     /// isolated ports, and BPDUs leaking across tunnels would make STP
     /// block ports or storm topology changes. Always off.
-    SetBridgeStpOff { bridge: String },
+    SetBridgeStpOff {
+        bridge: String,
+    },
     // WireGuard underlay (0.5.0)
-    WgCreate { dev: String },
+    WgCreate {
+        dev: String,
+    },
     /// `wg set <dev> private-key <key_path> listen-port <port>`
-    WgSetIface { dev: String, key_path: PathBuf, listen_port: u16 },
+    WgSetIface {
+        dev: String,
+        key_path: PathBuf,
+        listen_port: u16,
+    },
     /// `wg set <dev> peer <pubkey> [endpoint E] allowed-ips A persistent-keepalive K`
-    WgPeerSet { dev: String, pubkey: String, endpoint: Option<String>, allowed_ips: String, keepalive: u16 },
-    WgPeerDel { dev: String, pubkey: String },
-    AddrAdd { dev: String, addr: Ipv4Addr, prefix: u8 },
+    WgPeerSet {
+        dev: String,
+        pubkey: String,
+        endpoint: Option<String>,
+        allowed_ips: String,
+        keepalive: u16,
+    },
+    WgPeerDel {
+        dev: String,
+        pubkey: String,
+    },
+    AddrAdd {
+        dev: String,
+        addr: Ipv4Addr,
+        prefix: u8,
+    },
     /// Delete a non-Geneve link we own (the WireGuard device).
-    DeleteLink { dev: String },
+    DeleteLink {
+        dev: String,
+    },
 }
 
 impl Action {
@@ -288,10 +346,18 @@ pub trait NetOps: Send + Sync {
             (vec![], vec![])
         };
         let (wg, wg_addrs) = match wg_dev {
-            Some(d) if links.iter().any(|l| l.wg_owned(d)) => (Some(self.wg_show(d)?), self.link_addrs(d)?),
+            Some(d) if links.iter().any(|l| l.wg_owned(d)) => {
+                (Some(self.wg_show(d)?), self.link_addrs(d)?)
+            }
             _ => (None, vec![]),
         };
-        Ok(Observed { links, ports, fdb, wg, wg_addrs })
+        Ok(Observed {
+            links,
+            ports,
+            fdb,
+            wg,
+            wg_addrs,
+        })
     }
 }
 
@@ -318,12 +384,20 @@ pub fn parse_links(json: &str) -> Result<Vec<Link>> {
         let flags: Vec<String> = v
             .get("flags")
             .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
             .unwrap_or_default();
         let li = v.get("linkinfo");
         let kind = match li.and_then(|l| l.get("info_kind")).and_then(Value::as_str) {
             Some("geneve") => {
-                let d = li.and_then(|l| l.get("info_data")).cloned().unwrap_or(Value::Null);
+                let d = li
+                    .and_then(|l| l.get("info_data"))
+                    .cloned()
+                    .unwrap_or(Value::Null);
                 match (u(&d, "id"), u(&d, "port")) {
                     (Some(id), Some(port)) => LinkKind::Geneve(GeneveInfo {
                         vni: id as u32,
@@ -339,7 +413,10 @@ pub fn parse_links(json: &str) -> Result<Vec<Link>> {
                 }
             }
             Some("bridge") => {
-                let d = li.and_then(|l| l.get("info_data")).cloned().unwrap_or(Value::Null);
+                let d = li
+                    .and_then(|l| l.get("info_data"))
+                    .cloned()
+                    .unwrap_or(Value::Null);
                 LinkKind::Bridge(BridgeInfo {
                     stp_enabled: u(&d, "stp_state").map(|x| x != 0).unwrap_or(false),
                 })
@@ -411,7 +488,9 @@ pub fn parse_fdb(json: &str) -> Result<Vec<FdbEntry>> {
 
 pub fn parse_route_get(json: &str) -> Result<RouteInfo> {
     let arr: Vec<Value> = serde_json::from_str(json).context("parsing `ip -j route get` output")?;
-    let v = arr.first().ok_or_else(|| anyhow!("empty route get result"))?;
+    let v = arr
+        .first()
+        .ok_or_else(|| anyhow!("empty route get result"))?;
     Ok(RouteInfo {
         dev: s(v, "dev").ok_or_else(|| anyhow!("route without dev: {v}"))?,
         prefsrc: s(v, "prefsrc").and_then(|p| p.parse().ok()),
@@ -423,10 +502,18 @@ pub fn parse_route_get(json: &str) -> Result<RouteInfo> {
 /// latest-handshake, rx, tx, keepalive. `(none)`/`off` mean absent.
 pub fn parse_wg_dump(text: &str) -> Result<WgIface> {
     let mut lines = text.lines().filter(|l| !l.trim().is_empty());
-    let Some(first) = lines.next() else { return Ok(WgIface::default()) };
+    let Some(first) = lines.next() else {
+        return Ok(WgIface::default());
+    };
     let f: Vec<&str> = first.split('\t').collect();
     anyhow::ensure!(f.len() >= 3, "unexpected `wg show dump` header: {first:?}");
-    let none = |v: &str| if v == "(none)" || v == "off" || v.is_empty() { None } else { Some(v.to_owned()) };
+    let none = |v: &str| {
+        if v == "(none)" || v == "off" || v.is_empty() {
+            None
+        } else {
+            Some(v.to_owned())
+        }
+    };
     let mut iface = WgIface {
         pubkey: none(f[1]),
         listen_port: f[2].parse().unwrap_or(0),
@@ -441,11 +528,17 @@ pub fn parse_wg_dump(text: &str) -> Result<WgIface> {
         iface.peers.push(WgPeer {
             pubkey: f[0].to_owned(),
             endpoint: none(f[2]),
-            allowed_ips: none(f[3]).map(|a| a.split(',').map(str::to_owned).collect()).unwrap_or_default(),
+            allowed_ips: none(f[3])
+                .map(|a| a.split(',').map(str::to_owned).collect())
+                .unwrap_or_default(),
             latest_handshake: f[4].parse().unwrap_or(0),
             rx_bytes: f[5].parse().unwrap_or(0),
             tx_bytes: f[6].parse().unwrap_or(0),
-            keepalive: if f[7] == "off" { 0 } else { f[7].parse().unwrap_or(0) },
+            keepalive: if f[7] == "off" {
+                0
+            } else {
+                f[7].parse().unwrap_or(0)
+            },
         });
     }
     Ok(iface)
@@ -456,12 +549,23 @@ pub fn parse_link_addrs(json: &str) -> Result<Vec<LinkAddr>> {
     let arr: Vec<Value> = serde_json::from_str(json).context("parsing `ip -j addr` output")?;
     let mut out = vec![];
     for v in &arr {
-        for a in v.get("addr_info").and_then(Value::as_array).into_iter().flatten() {
+        for a in v
+            .get("addr_info")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
             if s(a, "family").as_deref() != Some("inet") {
                 continue;
             }
-            if let (Some(addr), Some(p)) = (s(a, "local").and_then(|x| x.parse().ok()), u(a, "prefixlen")) {
-                out.push(LinkAddr { addr, prefix: p as u8 });
+            if let (Some(addr), Some(p)) = (
+                s(a, "local").and_then(|x| x.parse().ok()),
+                u(a, "prefixlen"),
+            ) {
+                out.push(LinkAddr {
+                    addr,
+                    prefix: p as u8,
+                });
             }
         }
     }
@@ -529,11 +633,19 @@ fn run(bin: &str, args: &[&str], stdin: Option<&str>) -> Result<String> {
     let cmdline = format!("{bin} {}", args.join(" "));
     let mut child = std::process::Command::new(bin)
         .args(args)
-        .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdin(if stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| CmdError { cmd: cmdline.clone(), status: None, stderr: e.to_string() })?;
+        .map_err(|e| CmdError {
+            cmd: cmdline.clone(),
+            status: None,
+            stderr: e.to_string(),
+        })?;
     if let Some(input) = stdin
         && let Some(mut si) = child.stdin.take()
     {
@@ -544,13 +656,27 @@ fn run(bin: &str, args: &[&str], stdin: Option<&str>) -> Result<String> {
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
-            Ok(None) if std::time::Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10))
+            }
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(CmdError { cmd: cmdline, status: None, stderr: "timed out after 5s".into() }.into());
+                return Err(CmdError {
+                    cmd: cmdline,
+                    status: None,
+                    stderr: "timed out after 5s".into(),
+                }
+                .into());
             }
-            Err(e) => return Err(CmdError { cmd: cmdline, status: None, stderr: e.to_string() }.into()),
+            Err(e) => {
+                return Err(CmdError {
+                    cmd: cmdline,
+                    status: None,
+                    stderr: e.to_string(),
+                }
+                .into());
+            }
         }
     }
     let out = child.wait_with_output()?;
@@ -600,11 +726,17 @@ impl NetOps for IpCliNetOps {
     }
     fn apply(&self, a: &Action) -> Result<()> {
         match a {
-            Action::CreateTunnel { dev, vni, remote, dstport } => {
-                let (vni, remote, dstport) = (vni.to_string(), remote.to_string(), dstport.to_string());
+            Action::CreateTunnel {
+                dev,
+                vni,
+                remote,
+                dstport,
+            } => {
+                let (vni, remote, dstport) =
+                    (vni.to_string(), remote.to_string(), dstport.to_string());
                 self.ip(&[
-                    "link", "add", dev, "type", "geneve", "id", &vni, "remote", &remote, "dstport", &dstport, "ttl",
-                    "64", "df", "set",
+                    "link", "add", dev, "type", "geneve", "id", &vni, "remote", &remote, "dstport",
+                    &dstport, "ttl", "64", "df", "set",
                 ])?;
             }
             Action::DeleteTunnel { dev } => {
@@ -621,13 +753,22 @@ impl NetOps for IpCliNetOps {
             }
             Action::SetPortFlags { dev, flags: f } => {
                 self.br(&[
-                    "link", "set", "dev", dev,
-                    "isolated", onoff(f.isolated),
-                    "learning", onoff(f.learning),
-                    "flood", onoff(f.flood),
-                    "mcast_flood", onoff(f.mcast_flood),
-                    "bcast_flood", onoff(f.bcast_flood),
-                    "neigh_suppress", onoff(f.neigh_suppress),
+                    "link",
+                    "set",
+                    "dev",
+                    dev,
+                    "isolated",
+                    onoff(f.isolated),
+                    "learning",
+                    onoff(f.learning),
+                    "flood",
+                    onoff(f.flood),
+                    "mcast_flood",
+                    onoff(f.mcast_flood),
+                    "bcast_flood",
+                    onoff(f.bcast_flood),
+                    "neigh_suppress",
+                    onoff(f.neigh_suppress),
                 ])?;
             }
             Action::SetUp { dev } => {
@@ -651,7 +792,11 @@ impl NetOps for IpCliNetOps {
             Action::WgCreate { dev } => {
                 self.ip(&["link", "add", dev, "type", "wireguard"])?;
             }
-            Action::WgSetIface { dev, key_path, listen_port } => {
+            Action::WgSetIface {
+                dev,
+                key_path,
+                listen_port,
+            } => {
                 // Debian ships an AppArmor profile for /usr/bin/wg that only
                 // lets it read keys under /etc/wireguard, so `wg` cannot open
                 // our key in /var/lib/xdebbie even as root ("fopen: Permission
@@ -659,21 +804,48 @@ impl NetOps for IpCliNetOps {
                 // pipe, which AppArmor does not path-mediate. The file path is
                 // kept as a fallback (the .deb also ships a local/wg override).
                 let port = listen_port.to_string();
-                let key = std::fs::read_to_string(key_path).map_err(|e| anyhow!("{}: {e}", key_path.display()))?;
+                let key = std::fs::read_to_string(key_path)
+                    .map_err(|e| anyhow!("{}: {e}", key_path.display()))?;
                 let key = format!("{}\n", key.trim());
-                if let Err(stdin_err) = run(&self.wg, &["set", dev, "private-key", "/dev/stdin", "listen-port", &port], Some(&key)) {
+                if let Err(stdin_err) = run(
+                    &self.wg,
+                    &[
+                        "set",
+                        dev,
+                        "private-key",
+                        "/dev/stdin",
+                        "listen-port",
+                        &port,
+                    ],
+                    Some(&key),
+                ) {
                     let kp = key_path.to_string_lossy().into_owned();
-                    run(&self.wg, &["set", dev, "private-key", &kp, "listen-port", &port], None)
-                        .map_err(|path_err| anyhow!("{stdin_err}; fallback {path_err}"))?;
+                    run(
+                        &self.wg,
+                        &["set", dev, "private-key", &kp, "listen-port", &port],
+                        None,
+                    )
+                    .map_err(|path_err| anyhow!("{stdin_err}; fallback {path_err}"))?;
                 }
             }
-            Action::WgPeerSet { dev, pubkey, endpoint, allowed_ips, keepalive } => {
+            Action::WgPeerSet {
+                dev,
+                pubkey,
+                endpoint,
+                allowed_ips,
+                keepalive,
+            } => {
                 let ka = keepalive.to_string();
                 let mut args = vec!["set", dev.as_str(), "peer", pubkey.as_str()];
                 if let Some(ep) = endpoint {
                     args.extend(["endpoint", ep.as_str()]);
                 }
-                args.extend(["allowed-ips", allowed_ips.as_str(), "persistent-keepalive", ka.as_str()]);
+                args.extend([
+                    "allowed-ips",
+                    allowed_ips.as_str(),
+                    "persistent-keepalive",
+                    ka.as_str(),
+                ]);
                 run(&self.wg, &args, None)?;
             }
             Action::WgPeerDel { dev, pubkey } => {
@@ -698,7 +870,13 @@ impl NetOps for IpCliNetOps {
         Ok(run(&self.wg, &["genkey"], None)?.trim().to_owned())
     }
     fn wg_pubkey(&self, private_key: &str) -> Result<String> {
-        Ok(run(&self.wg, &["pubkey"], Some(&format!("{}\n", private_key.trim())))?.trim().to_owned())
+        Ok(run(
+            &self.wg,
+            &["pubkey"],
+            Some(&format!("{}\n", private_key.trim())),
+        )?
+        .trim()
+        .to_owned())
     }
     fn link_addrs(&self, dev: &str) -> Result<Vec<LinkAddr>> {
         parse_link_addrs(&self.ip(&["-j", "-4", "addr", "show", "dev", dev])?)
@@ -706,7 +884,8 @@ impl NetOps for IpCliNetOps {
     fn nft_replace_table(&self, rendered: &str) -> Result<()> {
         // `nft -f` with a `table` block replaces the table's contents
         // atomically when preceded by a flush of that table only.
-        let script = format!("table inet {NFT_TABLE} {{}}\nflush table inet {NFT_TABLE}\n{rendered}");
+        let script =
+            format!("table inet {NFT_TABLE} {{}}\nflush table inet {NFT_TABLE}\n{rendered}");
         run(&self.nft, &["-f", "-"], Some(&script)).map(|_| ())
     }
     fn nft_delete_table(&self) -> Result<()> {
@@ -782,7 +961,11 @@ impl FakeNetOps {
     pub fn wg_handshake(&self, dev: &str, pubkey: &str, age: u64) {
         let mut st = self.state.lock().unwrap();
         let now = st.now;
-        if let Some(p) = st.wg.get_mut(dev).and_then(|w| w.peers.iter_mut().find(|p| p.pubkey == pubkey)) {
+        if let Some(p) = st
+            .wg
+            .get_mut(dev)
+            .and_then(|w| w.peers.iter_mut().find(|p| p.pubkey == pubkey))
+        {
             p.latest_handshake = now - age;
             p.rx_bytes += 1000;
             p.tx_bytes += 2000;
@@ -828,7 +1011,13 @@ impl FakeNetOps {
         st.default_route_dev = Some(name.into());
     }
     pub fn set_route(&self, dst: Ipv4Addr, dev: &str) {
-        self.state.lock().unwrap().routes.insert(dst, RouteInfo { dev: dev.into(), prefsrc: None });
+        self.state.lock().unwrap().routes.insert(
+            dst,
+            RouteInfo {
+                dev: dev.into(),
+                prefsrc: None,
+            },
+        );
     }
     pub fn applied(&self) -> Vec<Action> {
         self.state.lock().unwrap().applied.clone()
@@ -852,7 +1041,15 @@ impl NetOps for FakeNetOps {
         Ok(self.state.lock().unwrap().links.values().cloned().collect())
     }
     fn list_bridge_ports(&self, bridge: &str) -> Result<Vec<BridgePort>> {
-        Ok(self.state.lock().unwrap().ports.values().filter(|p| p.master == bridge).cloned().collect())
+        Ok(self
+            .state
+            .lock()
+            .unwrap()
+            .ports
+            .values()
+            .filter(|p| p.master == bridge)
+            .cloned()
+            .collect())
     }
     fn list_fdb(&self, bridge: &str) -> Result<Vec<FdbEntry>> {
         let st = self.state.lock().unwrap();
@@ -872,17 +1069,29 @@ impl NetOps for FakeNetOps {
         let mut best: Option<(u8, &str, Ipv4Addr)> = None;
         for (dev, addrs) in &st.addrs {
             for a in addrs {
-                let mask = if a.prefix == 0 { 0 } else { u32::MAX << (32 - a.prefix as u32) };
-                if u32::from(dst) & mask == u32::from(a.addr) & mask && best.map(|b| a.prefix > b.0).unwrap_or(true) {
+                let mask = if a.prefix == 0 {
+                    0
+                } else {
+                    u32::MAX << (32 - a.prefix as u32)
+                };
+                if u32::from(dst) & mask == u32::from(a.addr) & mask
+                    && best.map(|b| a.prefix > b.0).unwrap_or(true)
+                {
                     best = Some((a.prefix, dev.as_str(), a.addr));
                 }
             }
         }
         if let Some((_, dev, src)) = best {
-            return Ok(RouteInfo { dev: dev.to_owned(), prefsrc: Some(src) });
+            return Ok(RouteInfo {
+                dev: dev.to_owned(),
+                prefsrc: Some(src),
+            });
         }
         match &st.default_route_dev {
-            Some(d) => Ok(RouteInfo { dev: d.clone(), prefsrc: None }),
+            Some(d) => Ok(RouteInfo {
+                dev: d.clone(),
+                prefsrc: None,
+            }),
             None => bail!("no route to {dst}"),
         }
     }
@@ -899,7 +1108,12 @@ impl NetOps for FakeNetOps {
         }
         st.applied.push(a.clone());
         match a {
-            Action::CreateTunnel { dev, vni, remote, dstport } => {
+            Action::CreateTunnel {
+                dev,
+                vni,
+                remote,
+                dstport,
+            } => {
                 if st.links.contains_key(dev) {
                     bail!("RTNETLINK answers: File exists");
                 }
@@ -933,13 +1147,22 @@ impl NetOps for FakeNetOps {
                 st.fdb.retain(|e| &e.dev != dev);
             }
             Action::SetAlias { dev } => {
-                st.links.get_mut(dev).ok_or_else(|| anyhow!("no {dev}"))?.alias = Some(OWNER_ALIAS.into());
+                st.links
+                    .get_mut(dev)
+                    .ok_or_else(|| anyhow!("no {dev}"))?
+                    .alias = Some(OWNER_ALIAS.into());
             }
             Action::SetMtu { dev, mtu } => {
-                st.links.get_mut(dev).ok_or_else(|| anyhow!("no {dev}"))?.mtu = *mtu as u32;
+                st.links
+                    .get_mut(dev)
+                    .ok_or_else(|| anyhow!("no {dev}"))?
+                    .mtu = *mtu as u32;
             }
             Action::SetMaster { dev, bridge } => {
-                st.links.get_mut(dev).ok_or_else(|| anyhow!("no {dev}"))?.master = Some(bridge.clone());
+                st.links
+                    .get_mut(dev)
+                    .ok_or_else(|| anyhow!("no {dev}"))?
+                    .master = Some(bridge.clone());
                 st.ports.insert(
                     dev.clone(),
                     BridgePort {
@@ -957,7 +1180,10 @@ impl NetOps for FakeNetOps {
                 );
             }
             Action::SetPortFlags { dev, flags } => {
-                st.ports.get_mut(dev).ok_or_else(|| anyhow!("{dev} is not a bridge port"))?.flags = *flags;
+                st.ports
+                    .get_mut(dev)
+                    .ok_or_else(|| anyhow!("{dev} is not a bridge port"))?
+                    .flags = *flags;
             }
             Action::SetUp { dev } => {
                 st.links.get_mut(dev).ok_or_else(|| anyhow!("no {dev}"))?.up = true;
@@ -970,16 +1196,26 @@ impl NetOps for FakeNetOps {
                     bail!("no {dev}");
                 }
                 st.fdb.retain(|e| !(&e.mac == mac && &e.dev == dev));
-                st.fdb.push(FdbEntry { mac: mac.clone(), dev: dev.clone(), is_static: true });
+                st.fdb.push(FdbEntry {
+                    mac: mac.clone(),
+                    dev: dev.clone(),
+                    is_static: true,
+                });
             }
             Action::FdbDel { mac, dev, .. } => {
                 st.fdb.retain(|e| !(&e.mac == mac && &e.dev == dev));
             }
             Action::SetBridgeMtu { bridge, mtu } => {
-                st.links.get_mut(bridge).ok_or_else(|| anyhow!("no {bridge}"))?.mtu = *mtu as u32;
+                st.links
+                    .get_mut(bridge)
+                    .ok_or_else(|| anyhow!("no {bridge}"))?
+                    .mtu = *mtu as u32;
             }
             Action::SetBridgeStpOff { bridge } => {
-                let l = st.links.get_mut(bridge).ok_or_else(|| anyhow!("no {bridge}"))?;
+                let l = st
+                    .links
+                    .get_mut(bridge)
+                    .ok_or_else(|| anyhow!("no {bridge}"))?;
                 match &mut l.kind {
                     LinkKind::Bridge(b) => b.stp_enabled = false,
                     _ => bail!("{bridge} is not a bridge"),
@@ -1006,14 +1242,31 @@ impl NetOps for FakeNetOps {
                 );
                 st.wg.insert(dev.clone(), WgIface::default());
             }
-            Action::WgSetIface { dev, key_path, listen_port } => {
-                let key = std::fs::read_to_string(key_path).map_err(|e| anyhow!("{}: {e}", key_path.display()))?;
-                let w = st.wg.get_mut(dev).ok_or_else(|| anyhow!("Unable to access interface: No such device"))?;
+            Action::WgSetIface {
+                dev,
+                key_path,
+                listen_port,
+            } => {
+                let key = std::fs::read_to_string(key_path)
+                    .map_err(|e| anyhow!("{}: {e}", key_path.display()))?;
+                let w = st
+                    .wg
+                    .get_mut(dev)
+                    .ok_or_else(|| anyhow!("Unable to access interface: No such device"))?;
                 w.pubkey = Some(fake_pubkey(key.trim()));
                 w.listen_port = *listen_port;
             }
-            Action::WgPeerSet { dev, pubkey, endpoint, allowed_ips, keepalive } => {
-                let w = st.wg.get_mut(dev).ok_or_else(|| anyhow!("Unable to access interface: No such device"))?;
+            Action::WgPeerSet {
+                dev,
+                pubkey,
+                endpoint,
+                allowed_ips,
+                keepalive,
+            } => {
+                let w = st
+                    .wg
+                    .get_mut(dev)
+                    .ok_or_else(|| anyhow!("Unable to access interface: No such device"))?;
                 let mut ips: Vec<String> = allowed_ips.split(',').map(str::to_owned).collect();
                 ips.sort();
                 match w.peers.iter_mut().find(|p| &p.pubkey == pubkey) {
@@ -1036,7 +1289,10 @@ impl NetOps for FakeNetOps {
                 }
             }
             Action::WgPeerDel { dev, pubkey } => {
-                let w = st.wg.get_mut(dev).ok_or_else(|| anyhow!("Unable to access interface: No such device"))?;
+                let w = st
+                    .wg
+                    .get_mut(dev)
+                    .ok_or_else(|| anyhow!("Unable to access interface: No such device"))?;
                 w.peers.retain(|p| &p.pubkey != pubkey);
             }
             Action::AddrAdd { dev, addr, prefix } => {
@@ -1045,7 +1301,10 @@ impl NetOps for FakeNetOps {
                 }
                 let v = st.addrs.entry(dev.clone()).or_default();
                 v.retain(|a| a.addr != *addr);
-                v.push(LinkAddr { addr: *addr, prefix: *prefix });
+                v.push(LinkAddr {
+                    addr: *addr,
+                    prefix: *prefix,
+                });
             }
             Action::DeleteLink { dev } => {
                 if st.links.remove(dev).is_none() {
@@ -1061,7 +1320,13 @@ impl NetOps for FakeNetOps {
         self.state.lock().unwrap().wireguard_module
     }
     fn wg_show(&self, dev: &str) -> Result<WgIface> {
-        self.state.lock().unwrap().wg.get(dev).cloned().ok_or_else(|| anyhow!("Unable to access interface: No such device"))
+        self.state
+            .lock()
+            .unwrap()
+            .wg
+            .get(dev)
+            .cloned()
+            .ok_or_else(|| anyhow!("Unable to access interface: No such device"))
     }
     fn wg_genkey(&self) -> Result<String> {
         let mut st = self.state.lock().unwrap();
@@ -1072,7 +1337,14 @@ impl NetOps for FakeNetOps {
         Ok(fake_pubkey(private_key.trim()))
     }
     fn link_addrs(&self, dev: &str) -> Result<Vec<LinkAddr>> {
-        Ok(self.state.lock().unwrap().addrs.get(dev).cloned().unwrap_or_default())
+        Ok(self
+            .state
+            .lock()
+            .unwrap()
+            .addrs
+            .get(dev)
+            .cloned()
+            .unwrap_or_default())
     }
     fn now_unix(&self) -> u64 {
         self.state.lock().unwrap().now
@@ -1098,7 +1370,11 @@ mod tests {
     use super::*;
 
     fn fx(name: &str) -> String {
-        std::fs::read_to_string(format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
+        std::fs::read_to_string(format!(
+            "{}/tests/fixtures/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap()
     }
 
     /// The real `wg` on Debian runs under an AppArmor profile that cannot read
@@ -1115,29 +1391,54 @@ mod tests {
         let stub = dir.path().join("wg");
         std::fs::write(
             &stub,
-            format!("#!/bin/sh\necho \"argv: $*\" >> {0}\necho \"stdin: $(cat)\" >> {0}\n", log.display()),
+            format!(
+                "#!/bin/sh\necho \"argv: $*\" >> {0}\necho \"stdin: $(cat)\" >> {0}\n",
+                log.display()
+            ),
         )
         .unwrap();
         std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-        let ops = IpCliNetOps { wg: stub.to_string_lossy().into_owned(), ..IpCliNetOps::default() };
-        ops.apply(&Action::WgSetIface { dev: "wg-flock".into(), key_path: key_path.clone(), listen_port: 51820 }).unwrap();
+        let ops = IpCliNetOps {
+            wg: stub.to_string_lossy().into_owned(),
+            ..IpCliNetOps::default()
+        };
+        ops.apply(&Action::WgSetIface {
+            dev: "wg-flock".into(),
+            key_path: key_path.clone(),
+            listen_port: 51820,
+        })
+        .unwrap();
 
         let got = std::fs::read_to_string(&log).unwrap();
-        assert_eq!(got, "argv: set wg-flock private-key /dev/stdin listen-port 51820\nstdin: SECRETKEY=\n");
-        assert!(!got.contains(&key_path.to_string_lossy().into_owned()), "key path must not be passed to wg: {got}");
+        assert_eq!(
+            got,
+            "argv: set wg-flock private-key /dev/stdin listen-port 51820\nstdin: SECRETKEY=\n"
+        );
+        assert!(
+            !got.contains(&key_path.to_string_lossy().into_owned()),
+            "key path must not be passed to wg: {got}"
+        );
     }
 
     #[test]
     fn parses_wg_dump_and_addrs() {
         let w = parse_wg_dump(&fx("wg-dump.txt")).unwrap();
-        assert_eq!(w.pubkey.as_deref(), Some("/JqD6eqDLJXNLIMUmwHKSbNwBauGBHLeIKWIVQsg1SI="));
+        assert_eq!(
+            w.pubkey.as_deref(),
+            Some("/JqD6eqDLJXNLIMUmwHKSbNwBauGBHLeIKWIVQsg1SI=")
+        );
         assert_eq!(w.listen_port, 51820);
         assert_eq!(w.peers.len(), 2);
-        let p1 = w.peer("EtEvrro2LlkElPgm+ge5ndqtzL2o9ehIWwyIFnKsBQU=").unwrap();
+        let p1 = w
+            .peer("EtEvrro2LlkElPgm+ge5ndqtzL2o9ehIWwyIFnKsBQU=")
+            .unwrap();
         assert_eq!(p1.endpoint.as_deref(), Some("10.22.1.1:51820"));
         assert_eq!(p1.allowed_ips, vec!["10.22.1.1/32"]);
-        assert_eq!((p1.latest_handshake, p1.rx_bytes, p1.tx_bytes, p1.keepalive), (1762830000, 4096, 148, 25));
+        assert_eq!(
+            (p1.latest_handshake, p1.rx_bytes, p1.tx_bytes, p1.keepalive),
+            (1762830000, 4096, 148, 25)
+        );
         let p2 = &w.peers[1];
         assert_eq!(p2.endpoint, None);
         assert_eq!(p2.allowed_ips, vec!["10.22.2.1/32", "10.23.0.0/16"]);
@@ -1145,7 +1446,13 @@ mod tests {
         assert_eq!(parse_wg_dump("").unwrap(), WgIface::default());
 
         let a = parse_link_addrs(&fx("ip-addr-wg.json")).unwrap();
-        assert_eq!(a, vec![LinkAddr { addr: Ipv4Addr::new(10, 22, 0, 1), prefix: 16 }]);
+        assert_eq!(
+            a,
+            vec![LinkAddr {
+                addr: Ipv4Addr::new(10, 22, 0, 1),
+                prefix: 16
+            }]
+        );
     }
 
     #[test]
@@ -1195,10 +1502,20 @@ mod tests {
     #[test]
     fn parses_fdb_fixture_collapsing_vlan_twins() {
         let fdb = parse_fdb(&fx("bridge-fdb.json")).unwrap();
-        let st: Vec<_> = fdb.iter().filter(|e| e.is_static && e.dev == "gnv-b1" && e.mac == "52:54:00:23:01:05").collect();
+        let st: Vec<_> = fdb
+            .iter()
+            .filter(|e| e.is_static && e.dev == "gnv-b1" && e.mac == "52:54:00:23:01:05")
+            .collect();
         assert_eq!(st.len(), 1, "vlan-1 twin must collapse: {st:?}");
-        assert!(fdb.iter().any(|e| e.dev == "gnv-b1" && !e.is_static), "learned entries kept");
-        assert!(!fdb.iter().any(|e| e.dev == "br-int" && e.mac.starts_with("33:33")), "self entries dropped");
+        assert!(
+            fdb.iter().any(|e| e.dev == "gnv-b1" && !e.is_static),
+            "learned entries kept"
+        );
+        assert!(
+            !fdb.iter()
+                .any(|e| e.dev == "br-int" && e.mac.starts_with("33:33")),
+            "self entries dropped"
+        );
     }
 
     #[test]
@@ -1214,7 +1531,14 @@ mod tests {
     #[test]
     fn unexpected_shapes_do_not_panic() {
         assert!(parse_links("[{\"ifindex\":1}]").unwrap().is_empty());
-        assert!(parse_links("[{\"ifname\":\"x\",\"linkinfo\":{\"info_kind\":\"geneve\",\"info_data\":{}}}]").unwrap()[0].geneve().is_none());
+        assert!(
+            parse_links(
+                "[{\"ifname\":\"x\",\"linkinfo\":{\"info_kind\":\"geneve\",\"info_data\":{}}}]"
+            )
+            .unwrap()[0]
+                .geneve()
+                .is_none()
+        );
         assert!(parse_fdb("[]").unwrap().is_empty());
         assert!(parse_route_get("[]").is_err());
         assert!(parse_links("not json").is_err());

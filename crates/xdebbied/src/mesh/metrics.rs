@@ -60,16 +60,26 @@ impl Snapshot {
     pub fn render_prometheus(&self) -> String {
         let mut o = String::new();
         o.push_str(&format!("xdebbie_mesh_generation {}\n", self.generation));
-        o.push_str(&format!("xdebbie_mesh_observed_generation {}\n", self.observed_generation));
+        o.push_str(&format!(
+            "xdebbie_mesh_observed_generation {}\n",
+            self.observed_generation
+        ));
         o.push_str(&format!("xdebbie_mesh_mtu_bytes {}\n", self.mtu_bytes));
         for (r, n) in &self.reconcile_total {
-            o.push_str(&format!("xdebbie_mesh_reconcile_total{{result=\"{r}\"}} {n}\n"));
+            o.push_str(&format!(
+                "xdebbie_mesh_reconcile_total{{result=\"{r}\"}} {n}\n"
+            ));
         }
         for (a, n) in &self.reconcile_actions_total {
-            o.push_str(&format!("xdebbie_mesh_reconcile_actions_total{{action=\"{a}\"}} {n}\n"));
+            o.push_str(&format!(
+                "xdebbie_mesh_reconcile_actions_total{{action=\"{a}\"}} {n}\n"
+            ));
         }
         for (peer, m) in &self.peers {
-            o.push_str(&format!("xdebbie_mesh_peer_up{{peer=\"{peer}\"}} {}\n", m.up));
+            o.push_str(&format!(
+                "xdebbie_mesh_peer_up{{peer=\"{peer}\"}} {}\n",
+                m.up
+            ));
             for st in ["Pending", "Up", "Down", "Error"] {
                 o.push_str(&format!(
                     "xdebbie_mesh_peer_state{{peer=\"{peer}\",state=\"{st}\"}} {}\n",
@@ -77,11 +87,22 @@ impl Snapshot {
                 ));
             }
             if let Some(r) = m.rtt_seconds {
-                o.push_str(&format!("xdebbie_mesh_peer_rtt_seconds{{peer=\"{peer}\"}} {r}\n"));
+                o.push_str(&format!(
+                    "xdebbie_mesh_peer_rtt_seconds{{peer=\"{peer}\"}} {r}\n"
+                ));
             }
-            o.push_str(&format!("xdebbie_mesh_probe_failures_total{{peer=\"{peer}\"}} {}\n", m.probe_failures_total));
-            o.push_str(&format!("xdebbie_mesh_tunnel_rx_bytes_total{{peer=\"{peer}\"}} {}\n", m.tunnel_rx_bytes_total));
-            o.push_str(&format!("xdebbie_mesh_tunnel_tx_bytes_total{{peer=\"{peer}\"}} {}\n", m.tunnel_tx_bytes_total));
+            o.push_str(&format!(
+                "xdebbie_mesh_probe_failures_total{{peer=\"{peer}\"}} {}\n",
+                m.probe_failures_total
+            ));
+            o.push_str(&format!(
+                "xdebbie_mesh_tunnel_rx_bytes_total{{peer=\"{peer}\"}} {}\n",
+                m.tunnel_rx_bytes_total
+            ));
+            o.push_str(&format!(
+                "xdebbie_mesh_tunnel_tx_bytes_total{{peer=\"{peer}\"}} {}\n",
+                m.tunnel_tx_bytes_total
+            ));
         }
         o
     }

@@ -789,13 +789,7 @@ async fn version_info(State(a): State<App>) -> Json<VersionInfo> {
     Json(VersionInfo {
         version: env!("CARGO_PKG_VERSION"),
         hostname,
-        features: vec![
-            "mesh",
-            "bootstrap",
-            "volumes",
-            "dhcp",
-            "enroll",
-        ],
+        features: vec!["mesh", "bootstrap", "volumes", "dhcp", "enroll"],
     })
 }
 

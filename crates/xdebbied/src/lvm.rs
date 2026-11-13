@@ -70,7 +70,11 @@ impl LvmManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            warn!("vgchange -ay {} reported errors: {}", self.vg_name, stderr.trim());
+            warn!(
+                "vgchange -ay {} reported errors: {}",
+                self.vg_name,
+                stderr.trim()
+            );
         }
 
         if let Some(ref pool) = self.thin_pool {
@@ -98,7 +102,10 @@ impl LvmManager {
                 };
                 anyhow::bail!(
                     "Thin pool {}/{} is not active (attr '{}'); VM disks are unavailable. {}",
-                    self.vg_name, pool, attr, hint
+                    self.vg_name,
+                    pool,
+                    attr,
+                    hint
                 );
             }
             info!("Thin pool {}/{} is active", self.vg_name, pool);
@@ -117,9 +124,14 @@ impl LvmManager {
     ///
     /// # Returns
     /// Path to the block device (e.g., "/dev/xdebbie-vg/w1-cp-2ptmn-root")
-    pub fn create_root_disk(&self, vm_name: &str, base_image: &str, size_gib: u64) -> Result<String> {
+    pub fn create_root_disk(
+        &self,
+        vm_name: &str,
+        base_image: &str,
+        size_gib: u64,
+    ) -> Result<String> {
         let lv_name = format!("{}-root", vm_name);
-        
+
         // Only enforce minimum for K8s images (they need space for container images)
         // Plain base images (like base-debian-13) respect the requested size
         let size_gib = if base_image.contains("k8s") {
@@ -127,17 +139,19 @@ impl LvmManager {
         } else {
             size_gib
         };
-        
+
         // Handle both "debian-12" and "base-debian-12" image names
         let base_lv = if base_image.starts_with("base-") {
             base_image.to_string()
         } else {
             format!("base-{}", base_image)
         };
-        
-        info!("create_root_disk called: vm_name={}, base_image={}, lv_name={}, base_lv={}, size_gib={}", 
-              vm_name, base_image, lv_name, base_lv, size_gib);
-        
+
+        info!(
+            "create_root_disk called: vm_name={}, base_image={}, lv_name={}, base_lv={}, size_gib={}",
+            vm_name, base_image, lv_name, base_lv, size_gib
+        );
+
         // Check if already exists
         if self.lv_exists(&lv_name)? {
             info!("Root disk {}/{} already exists", self.vg_name, lv_name);
@@ -148,12 +162,18 @@ impl LvmManager {
             return Ok(self.lv_path(&lv_name));
         }
 
-        info!("Root disk {}/{} does not exist, checking base image {}", self.vg_name, lv_name, base_lv);
-        
+        info!(
+            "Root disk {}/{} does not exist, checking base image {}",
+            self.vg_name, lv_name, base_lv
+        );
+
         // Check if base image exists
         let base_exists = self.lv_exists(&base_lv)?;
-        info!("Base image {}/{} exists: {}", self.vg_name, base_lv, base_exists);
-        
+        info!(
+            "Base image {}/{} exists: {}",
+            self.vg_name, base_lv, base_exists
+        );
+
         if !base_exists {
             let err_msg = format!(
                 "Base image '{}/{}' not found. Import it with:\n  \
@@ -166,14 +186,17 @@ impl LvmManager {
         }
 
         // Create snapshot
-        info!("Creating root disk snapshot: {}/{} from {}", 
-              self.vg_name, lv_name, base_lv);
-        
+        info!(
+            "Creating root disk snapshot: {}/{} from {}",
+            self.vg_name, lv_name, base_lv
+        );
+
         let output = Command::new("/usr/sbin/lvcreate")
             .args([
-                "-s",                                          // snapshot
-                "-n", &lv_name,                                // name of new snapshot
-                &format!("{}/{}", self.vg_name, base_lv),     // source LV (positional)
+                "-s", // snapshot
+                "-n",
+                &lv_name,                                 // name of new snapshot
+                &format!("{}/{}", self.vg_name, base_lv), // source LV (positional)
             ])
             .output()
             .context("executing lvcreate command")?;
@@ -183,16 +206,20 @@ impl LvmManager {
             let stdout = String::from_utf8_lossy(&output.stdout);
             anyhow::bail!(
                 "Failed to create root disk snapshot.\nstdout: {}\nstderr: {}",
-                stdout, stderr
+                stdout,
+                stderr
             );
         }
 
         // Clear activation skip flag and activate (thin snapshots have skip flag set by default)
-        info!("Clearing activation skip flag and activating {}/{}", self.vg_name, lv_name);
-        
+        info!(
+            "Clearing activation skip flag and activating {}/{}",
+            self.vg_name, lv_name
+        );
+
         let skip_output = Command::new("/usr/sbin/lvchange")
             .args([
-                "-kn",  // clear activation skip flag
+                "-kn", // clear activation skip flag
                 &format!("{}/{}", self.vg_name, lv_name),
             ])
             .output()
@@ -204,10 +231,7 @@ impl LvmManager {
         }
 
         let activate_output = Command::new("/usr/sbin/lvchange")
-            .args([
-                "-ay",
-                &format!("{}/{}", self.vg_name, lv_name),
-            ])
+            .args(["-ay", &format!("{}/{}", self.vg_name, lv_name)])
             .output()
             .context("activating logical volume")?;
 
@@ -219,7 +243,10 @@ impl LvmManager {
         // Snapshot inherits the origin's size; grow it to what was asked for.
         self.extend_to(&lv_name, size_gib)?;
 
-        info!("Created and activated root disk: {}/{}", self.vg_name, lv_name);
+        info!(
+            "Created and activated root disk: {}/{}",
+            self.vg_name, lv_name
+        );
 
         Ok(self.lv_path(&lv_name))
     }
@@ -268,9 +295,16 @@ impl LvmManager {
             return Ok(());
         }
 
-        info!("Extending {}/{} from {} GiB to {} GiB", self.vg_name, lv_name, current, size_gib);
+        info!(
+            "Extending {}/{} from {} GiB to {} GiB",
+            self.vg_name, lv_name, current, size_gib
+        );
         let output = Command::new("/usr/sbin/lvextend")
-            .args(["-L", &format!("{}G", size_gib), &format!("{}/{}", self.vg_name, lv_name)])
+            .args([
+                "-L",
+                &format!("{}G", size_gib),
+                &format!("{}/{}", self.vg_name, lv_name),
+            ])
             .output()
             .context("executing lvextend")?;
         if !output.status.success() {
@@ -295,7 +329,7 @@ impl LvmManager {
     /// Path to the block device (e.g., "/dev/xdebbie-vg/abe-01-data")
     pub fn create_data_disk(&self, vm_name: &str, size_gib: u64) -> Result<String> {
         let lv_name = format!("{}-data", vm_name);
-        
+
         // Check if already exists
         if self.lv_exists(&lv_name)? {
             info!("Data disk {}/{} already exists", self.vg_name, lv_name);
@@ -303,18 +337,23 @@ impl LvmManager {
         }
 
         let size = format!("{}G", size_gib);
-        
-        info!("Creating data disk: {}/{} ({})", 
-              self.vg_name, lv_name, size);
+
+        info!(
+            "Creating data disk: {}/{} ({})",
+            self.vg_name, lv_name, size
+        );
 
         // Create thin or thick LV depending on thin_pool availability
         let status = if let Some(ref pool) = self.thin_pool {
             // Thin provisioned
             Command::new("/usr/sbin/lvcreate")
                 .args([
-                    "-V", &size,                              // virtual size
-                    "-T", &format!("{}/{}", self.vg_name, pool), // thin pool
-                    "-n", &lv_name,                           // name
+                    "-V",
+                    &size, // virtual size
+                    "-T",
+                    &format!("{}/{}", self.vg_name, pool), // thin pool
+                    "-n",
+                    &lv_name, // name
                 ])
                 .status()
                 .context("creating thin data disk")?
@@ -323,9 +362,11 @@ impl LvmManager {
             warn!("No thin pool configured, creating thick LV (slow)");
             Command::new("/usr/sbin/lvcreate")
                 .args([
-                    "-L", &size,                              // size
-                    "-n", &lv_name,                           // name
-                    &self.vg_name,                            // vg
+                    "-L",
+                    &size, // size
+                    "-n",
+                    &lv_name,      // name
+                    &self.vg_name, // vg
                 ])
                 .status()
                 .context("creating thick data disk")?
@@ -378,9 +419,11 @@ impl LvmManager {
             let output = Command::new("/usr/sbin/lvs")
                 .args([
                     "--noheadings",
-                    "--units", "b",
+                    "--units",
+                    "b",
                     "--nosuffix",
-                    "-o", "lv_size,data_percent",
+                    "-o",
+                    "lv_size,data_percent",
                     &format!("{}/{}", self.vg_name, pool),
                 ])
                 .output()
@@ -405,8 +448,10 @@ impl LvmManager {
         let output = Command::new("/usr/sbin/vgs")
             .args([
                 "--noheadings",
-                "--units", "g",
-                "-o", "vg_size,vg_free",
+                "--units",
+                "g",
+                "-o",
+                "vg_size,vg_free",
                 &self.vg_name,
             ])
             .output()
@@ -418,12 +463,14 @@ impl LvmManager {
 
         let text = String::from_utf8_lossy(&output.stdout);
         let parts: Vec<&str> = text.split_whitespace().collect();
-        
+
         if parts.len() < 2 {
             anyhow::bail!("Unexpected vgs output format");
         }
 
-        let free_gib = parts[1].trim_end_matches('g').parse::<f64>()
+        let free_gib = parts[1]
+            .trim_end_matches('g')
+            .parse::<f64>()
             .context("parsing free size")?;
 
         Ok(LvmStats { free_gib })

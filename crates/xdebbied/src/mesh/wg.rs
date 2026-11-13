@@ -42,7 +42,9 @@ pub fn classify(observed: &Observed, dev: &str) -> WgState {
         None => WgState::Absent,
         Some(l) if l.wg_owned(dev) => WgState::Owned,
         Some(l) => WgState::Foreign(match &l.kind {
-            LinkKind::Wireguard => format!("{dev} is a WireGuard link without the {OWNER_ALIAS} alias"),
+            LinkKind::Wireguard => {
+                format!("{dev} is a WireGuard link without the {OWNER_ALIAS} alias")
+            }
             LinkKind::Other(k) => format!("{dev} exists but is a {k} link, not WireGuard"),
             LinkKind::Bridge(_) => format!("{dev} exists but is a bridge"),
             LinkKind::Geneve(_) => format!("{dev} exists but is a Geneve tunnel"),
@@ -60,7 +62,9 @@ pub fn allowed_ips_for(remote: Ipv4Addr) -> String {
 /// Caller must have checked `classify` != Foreign.
 pub fn diff(input: WgInput<'_>) -> Vec<Action> {
     let spec = input.spec;
-    let Some(w) = &spec.wireguard else { return vec![] };
+    let Some(w) = &spec.wireguard else {
+        return vec![];
+    };
     let dev = spec.underlay.clone();
     let observed = input.observed;
     let mut out = vec![];
@@ -78,19 +82,33 @@ pub fn diff(input: WgInput<'_>) -> Vec<Action> {
         .map(|i| i.pubkey.as_deref() == Some(input.pubkey) && i.listen_port == w.listen_port)
         .unwrap_or(false);
     if fresh || !iface_ok {
-        out.push(Action::WgSetIface { dev: dev.clone(), key_path: input.key_path.to_path_buf(), listen_port: w.listen_port });
+        out.push(Action::WgSetIface {
+            dev: dev.clone(),
+            key_path: input.key_path.to_path_buf(),
+            listen_port: w.listen_port,
+        });
     }
 
     // Address.
     let addr = spec.wg_address().expect("wireguard set");
-    let has_addr = observed.wg_addrs.iter().any(|a| a.addr == addr && a.prefix == w.prefix);
+    let has_addr = observed
+        .wg_addrs
+        .iter()
+        .any(|a| a.addr == addr && a.prefix == w.prefix);
     if fresh || !has_addr {
-        out.push(Action::AddrAdd { dev: dev.clone(), addr, prefix: w.prefix });
+        out.push(Action::AddrAdd {
+            dev: dev.clone(),
+            addr,
+            prefix: w.prefix,
+        });
     }
 
     // MTU and admin state.
     if fresh || link.map(|l| l.mtu != w.mtu as u32).unwrap_or(true) {
-        out.push(Action::SetMtu { dev: dev.clone(), mtu: w.mtu });
+        out.push(Action::SetMtu {
+            dev: dev.clone(),
+            mtu: w.mtu,
+        });
     }
     if fresh || link.map(|l| !l.up).unwrap_or(true) {
         out.push(Action::SetUp { dev: dev.clone() });
@@ -100,7 +118,11 @@ pub fn diff(input: WgInput<'_>) -> Vec<Action> {
     let mut desired: Vec<(String, Option<String>, String)> = spec
         .peers
         .iter()
-        .filter_map(|p| p.pubkey.as_ref().map(|k| (k.clone(), p.endpoint.clone(), allowed_ips_for(p.remote))))
+        .filter_map(|p| {
+            p.pubkey
+                .as_ref()
+                .map(|k| (k.clone(), p.endpoint.clone(), allowed_ips_for(p.remote)))
+        })
         .collect();
     desired.sort();
     for (pubkey, endpoint, allowed) in &desired {
@@ -109,7 +131,9 @@ pub fn diff(input: WgInput<'_>) -> Vec<Action> {
             .map(|c| {
                 let ips_same = c.allowed_ips.len() == 1 && c.allowed_ips[0] == *allowed;
                 let ka_same = c.keepalive == w.keepalive;
-                ips_same && ka_same && endpoint_satisfied(endpoint.as_deref(), c.endpoint.as_deref())
+                ips_same
+                    && ka_same
+                    && endpoint_satisfied(endpoint.as_deref(), c.endpoint.as_deref())
             })
             .unwrap_or(false);
         if !same {
@@ -125,7 +149,10 @@ pub fn diff(input: WgInput<'_>) -> Vec<Action> {
     if let Some(i) = iface {
         for c in &i.peers {
             if !desired.iter().any(|(k, _, _)| *k == c.pubkey) {
-                out.push(Action::WgPeerDel { dev: dev.clone(), pubkey: c.pubkey.clone() });
+                out.push(Action::WgPeerDel {
+                    dev: dev.clone(),
+                    pubkey: c.pubkey.clone(),
+                });
             }
         }
     }
@@ -144,7 +171,14 @@ fn endpoint_satisfied(want: Option<&str>, have: Option<&str>) -> bool {
             if w == h {
                 return true;
             }
-            let literal = w.rsplit_once(':').map(|(host, _)| host.trim_matches(|c| c == '[' || c == ']').parse::<std::net::IpAddr>().is_ok()).unwrap_or(false);
+            let literal = w
+                .rsplit_once(':')
+                .map(|(host, _)| {
+                    host.trim_matches(|c| c == '[' || c == ']')
+                        .parse::<std::net::IpAddr>()
+                        .is_ok()
+                })
+                .unwrap_or(false);
             if literal {
                 false
             } else {
@@ -158,7 +192,9 @@ fn endpoint_satisfied(want: Option<&str>, have: Option<&str>) -> bool {
 /// Delete the WireGuard link if (and only if) it is ours.
 pub fn teardown(observed: &Observed, dev: &str) -> Vec<Action> {
     match classify(observed, dev) {
-        WgState::Owned => vec![Action::DeleteLink { dev: dev.to_owned() }],
+        WgState::Owned => vec![Action::DeleteLink {
+            dev: dev.to_owned(),
+        }],
         _ => vec![],
     }
 }
@@ -176,11 +212,23 @@ mod tests {
     const K2: &str = "2Mt9XkPn7iVObR5nCjQYhTe1rtVf6hVuvIG1cyL+zGM=";
 
     fn spec() -> MeshSpec {
-        let mut s = MeshSpec { enabled: true, box_id: 0, underlay: "wg-flock".into(), ..Default::default() };
+        let mut s = MeshSpec {
+            enabled: true,
+            box_id: 0,
+            underlay: "wg-flock".into(),
+            ..Default::default()
+        };
         s.wireguard = Some(WireguardSpec::default());
         s.peers = vec![
-            PeerSpec { pubkey: Some(K1.into()), endpoint: Some("10.99.1.1:51820".into()), ..PeerSpec::new(1, Ipv4Addr::UNSPECIFIED) },
-            PeerSpec { pubkey: Some(K2.into()), ..PeerSpec::new(2, Ipv4Addr::UNSPECIFIED) },
+            PeerSpec {
+                pubkey: Some(K1.into()),
+                endpoint: Some("10.99.1.1:51820".into()),
+                ..PeerSpec::new(1, Ipv4Addr::UNSPECIFIED)
+            },
+            PeerSpec {
+                pubkey: Some(K2.into()),
+                ..PeerSpec::new(2, Ipv4Addr::UNSPECIFIED)
+            },
         ];
         s.normalize()
     }
@@ -193,7 +241,12 @@ mod tests {
 
     fn run(ops: &FakeNetOps, s: &MeshSpec, key: &Path, pubkey: &str) -> Vec<Action> {
         let obs = ops.observe(&s.bridge(), Some(&s.underlay)).unwrap();
-        let acts = diff(WgInput { spec: s, observed: &obs, key_path: key, pubkey });
+        let acts = diff(WgInput {
+            spec: s,
+            observed: &obs,
+            key_path: key,
+            pubkey,
+        });
         for a in &acts {
             ops.apply(a).unwrap();
         }
@@ -210,18 +263,43 @@ mod tests {
         let kinds: Vec<&str> = acts.iter().map(|a| a.kind()).collect();
         assert_eq!(
             kinds,
-            ["wg_create", "set_alias", "wg_set_iface", "addr_add", "set_mtu", "set_up", "wg_peer_set", "wg_peer_set"]
+            [
+                "wg_create",
+                "set_alias",
+                "wg_set_iface",
+                "addr_add",
+                "set_mtu",
+                "set_up",
+                "wg_peer_set",
+                "wg_peer_set"
+            ]
         );
         // peer 1 has an endpoint, peer 2 doesn't; allowed-ips derived from remote
-        let p1 = acts.iter().find(|a| matches!(a, Action::WgPeerSet { pubkey, .. } if pubkey == K1)).unwrap();
-        assert!(matches!(p1, Action::WgPeerSet { endpoint: Some(e), allowed_ips, keepalive: 25, .. } if e == "10.99.1.1:51820" && allowed_ips == "10.22.1.1/32"));
-        let p2 = acts.iter().find(|a| matches!(a, Action::WgPeerSet { pubkey, .. } if pubkey == K2)).unwrap();
-        assert!(matches!(p2, Action::WgPeerSet { endpoint: None, allowed_ips, .. } if allowed_ips == "10.22.2.1/32"));
+        let p1 = acts
+            .iter()
+            .find(|a| matches!(a, Action::WgPeerSet { pubkey, .. } if pubkey == K1))
+            .unwrap();
+        assert!(
+            matches!(p1, Action::WgPeerSet { endpoint: Some(e), allowed_ips, keepalive: 25, .. } if e == "10.99.1.1:51820" && allowed_ips == "10.22.1.1/32")
+        );
+        let p2 = acts
+            .iter()
+            .find(|a| matches!(a, Action::WgPeerSet { pubkey, .. } if pubkey == K2))
+            .unwrap();
+        assert!(
+            matches!(p2, Action::WgPeerSet { endpoint: None, allowed_ips, .. } if allowed_ips == "10.22.2.1/32")
+        );
 
         let obs = ops.observe("br-int", Some("wg-flock")).unwrap();
         assert_eq!(classify(&obs, "wg-flock"), WgState::Owned);
-        assert_eq!(obs.wg.as_ref().unwrap().pubkey.as_deref(), Some(pk.as_str()));
-        assert!(run(&ops, &s, &key, &pk).is_empty(), "second pass must be a no-op");
+        assert_eq!(
+            obs.wg.as_ref().unwrap().pubkey.as_deref(),
+            Some(pk.as_str())
+        );
+        assert!(
+            run(&ops, &s, &key, &pk).is_empty(),
+            "second pass must be a no-op"
+        );
     }
 
     #[test]
@@ -234,7 +312,10 @@ mod tests {
 
         // drop peer 2, add peer 3 → one del, one set
         s.peers.remove(1);
-        s.peers.push(PeerSpec { pubkey: Some("k3".into()), ..PeerSpec::new(3, Ipv4Addr::UNSPECIFIED) });
+        s.peers.push(PeerSpec {
+            pubkey: Some("k3".into()),
+            ..PeerSpec::new(3, Ipv4Addr::UNSPECIFIED)
+        });
         s = s.normalize();
         let acts = run(&ops, &s, &key, &pk);
         let kinds: Vec<&str> = acts.iter().map(|a| a.kind()).collect();
@@ -250,16 +331,31 @@ mod tests {
         // port change → wg_set_iface only
         s.wireguard.as_mut().unwrap().listen_port = 51821;
         let acts = run(&ops, &s, &key, &pk);
-        assert_eq!(acts.iter().map(|a| a.kind()).collect::<Vec<_>>(), ["wg_set_iface"]);
+        assert_eq!(
+            acts.iter().map(|a| a.kind()).collect::<Vec<_>>(),
+            ["wg_set_iface"]
+        );
     }
 
     #[test]
     fn hostname_endpoint_not_clobbered_once_resolved() {
-        assert!(endpoint_satisfied(Some("gram.local:51820"), Some("10.9.9.9:51820")));
-        assert!(!endpoint_satisfied(Some("gram.local:51820"), Some("10.9.9.9:51821")));
+        assert!(endpoint_satisfied(
+            Some("gram.local:51820"),
+            Some("10.9.9.9:51820")
+        ));
+        assert!(!endpoint_satisfied(
+            Some("gram.local:51820"),
+            Some("10.9.9.9:51821")
+        ));
         assert!(!endpoint_satisfied(Some("gram.local:51820"), None));
-        assert!(!endpoint_satisfied(Some("10.1.1.1:51820"), Some("10.9.9.9:51820")));
-        assert!(endpoint_satisfied(Some("10.1.1.1:51820"), Some("10.1.1.1:51820")));
+        assert!(!endpoint_satisfied(
+            Some("10.1.1.1:51820"),
+            Some("10.9.9.9:51820")
+        ));
+        assert!(endpoint_satisfied(
+            Some("10.1.1.1:51820"),
+            Some("10.1.1.1:51820")
+        ));
         assert!(endpoint_satisfied(None, Some("1.2.3.4:5")));
     }
 
@@ -282,10 +378,20 @@ mod tests {
         run(&ops, &s, &key, &pk);
         let obs = ops.observe("br-int", Some("wg-flock")).unwrap();
         let t = teardown(&obs, "wg-flock");
-        assert_eq!(t, vec![Action::DeleteLink { dev: "wg-flock".into() }]);
+        assert_eq!(
+            t,
+            vec![Action::DeleteLink {
+                dev: "wg-flock".into()
+            }]
+        );
         for a in &t {
             ops.apply(a).unwrap();
         }
-        assert!(ops.observe("br-int", Some("wg-flock")).unwrap().link("wg-flock").is_none());
+        assert!(
+            ops.observe("br-int", Some("wg-flock"))
+                .unwrap()
+                .link("wg-flock")
+                .is_none()
+        );
     }
 }

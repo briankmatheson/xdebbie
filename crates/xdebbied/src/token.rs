@@ -415,11 +415,13 @@ impl Distributor {
             // Answered, but not with our token: it let us in on our client
             // certificate (a box that enrolled with its own bootstrap token,
             // or missed a rotation). Install ours.
-            Ok(st) if st.id != fingerprint(&set.current) => match self.put(p, set, &set.current).await {
-                Ok(()) => Seen::Installing,
-                Err(Reach::Unauthorized) => Seen::Stale,
-                Err(Reach::Other(e)) => Seen::Unreachable(e),
-            },
+            Ok(st) if st.id != fingerprint(&set.current) => {
+                match self.put(p, set, &set.current).await {
+                    Ok(()) => Seen::Installing,
+                    Err(Reach::Unauthorized) => Seen::Stale,
+                    Err(Reach::Other(e)) => Seen::Unreachable(e),
+                }
+            }
             Ok(st) => {
                 // Holds a retired token after a rotation finished: tidy it.
                 if st.previous.is_some() && set.previous.is_none() {
@@ -554,12 +556,26 @@ mod tests {
         {
             use std::os::unix::fs::PermissionsExt;
             for f in [&tf, &tf.with_extension("previous")] {
-                assert_eq!(std::fs::metadata(f).unwrap().permissions().mode() & 0o777, SECRET_MODE, "{}", f.display());
+                assert_eq!(
+                    std::fs::metadata(f).unwrap().permissions().mode() & 0o777,
+                    SECRET_MODE,
+                    "{}",
+                    f.display()
+                );
             }
             // The env file is group-readable when the xdebbie group exists on
             // the machine running the tests, root-only otherwise.
-            let want = if xdebbie_gid().is_some() { GROUP_MODE } else { SECRET_MODE };
-            assert_eq!(std::fs::metadata(&env).unwrap().permissions().mode() & 0o777, want, "{}", env.display());
+            let want = if xdebbie_gid().is_some() {
+                GROUP_MODE
+            } else {
+                SECRET_MODE
+            };
+            assert_eq!(
+                std::fs::metadata(&env).unwrap().permissions().mode() & 0o777,
+                want,
+                "{}",
+                env.display()
+            );
         }
 
         // A restart resumes the overlap.

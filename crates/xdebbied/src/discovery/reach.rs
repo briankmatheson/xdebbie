@@ -51,7 +51,10 @@ pub fn local_v4_interfaces() -> Vec<std::net::Ipv4Addr> {
 
 /// Every global-scope IPv4 address on the host, from `ip -4 -o addr`.
 fn global_ipv4_addrs() -> Vec<IpAddr> {
-    let Ok(out) = std::process::Command::new("ip").args(["-4", "-o", "addr", "show", "scope", "global"]).output() else {
+    let Ok(out) = std::process::Command::new("ip")
+        .args(["-4", "-o", "addr", "show", "scope", "global"])
+        .output()
+    else {
         return vec![];
     };
     String::from_utf8_lossy(&out.stdout)
@@ -67,7 +70,9 @@ fn global_ipv4_addrs() -> Vec<IpAddr> {
 
 fn usable(ip: IpAddr) -> bool {
     match ip {
-        IpAddr::V4(v4) => !(v4.is_loopback() || v4.is_unspecified() || v4.is_link_local() || v4.is_multicast()),
+        IpAddr::V4(v4) => {
+            !(v4.is_loopback() || v4.is_unspecified() || v4.is_link_local() || v4.is_multicast())
+        }
         IpAddr::V6(v6) => !(v6.is_loopback() || v6.is_unspecified() || v6.is_multicast()),
     }
 }
@@ -77,7 +82,9 @@ fn usable(ip: IpAddr) -> bool {
 /// Candidates are tried in order: pass the packet's source address first,
 /// then what the peer announced.
 pub fn reachable_url(url: &str, candidates: impl IntoIterator<Item = IpAddr>) -> String {
-    let Some(parts) = split_url(url) else { return url.to_string() };
+    let Some(parts) = split_url(url) else {
+        return url.to_string();
+    };
     if parts.host.parse::<IpAddr>().is_ok() || resolves(parts.host) {
         return url.to_string();
     }
@@ -104,7 +111,10 @@ pub async fn reachable_url_async(url: String, candidates: Vec<IpAddr>) -> String
 }
 
 fn resolves(host: &str) -> bool {
-    (host, 0u16).to_socket_addrs().map(|mut a| a.next().is_some()).unwrap_or(false)
+    (host, 0u16)
+        .to_socket_addrs()
+        .map(|mut a| a.next().is_some())
+        .unwrap_or(false)
 }
 
 /// Does `host` resolve to a usable address within `budget`? `getaddrinfo`
@@ -118,7 +128,11 @@ pub fn resolves_within(host: &str, budget: std::time::Duration) -> bool {
     std::thread::spawn(move || {
         let ok = (host.as_str(), 0u16)
             .to_socket_addrs()
-            .map(|addrs| addrs.map(|a| a.ip()).any(|ip| usable(ip) && !is_link_local(ip)))
+            .map(|addrs| {
+                addrs
+                    .map(|a| a.ip())
+                    .any(|ip| usable(ip) && !is_link_local(ip))
+            })
             .unwrap_or(false);
         let _ = tx.send(ok);
     });
@@ -141,7 +155,10 @@ pub fn announced_addr(multicast_addr: &str) -> Option<IpAddr> {
 /// The source address of a received datagram as a candidate.
 pub fn source_ip(src: SocketAddr) -> Option<IpAddr> {
     let ip = match src.ip() {
-        IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(IpAddr::V6(v6)),
+        IpAddr::V6(v6) => v6
+            .to_ipv4_mapped()
+            .map(IpAddr::V4)
+            .unwrap_or(IpAddr::V6(v6)),
         v4 => v4,
     };
     usable(ip).then_some(ip)
@@ -175,7 +192,10 @@ fn split_url(url: &str) -> Option<UrlParts<'_>> {
         Some(i) => after.split_at(i),
         None => (after, ""),
     };
-    let authority = authority.rsplit_once('@').map(|(_, h)| h).unwrap_or(authority);
+    let authority = authority
+        .rsplit_once('@')
+        .map(|(_, h)| h)
+        .unwrap_or(authority);
     let (host, port) = if let Some(stripped) = authority.strip_prefix('[') {
         let (h, tail) = stripped.split_once(']')?;
         (h, tail.strip_prefix(':'))
@@ -188,7 +208,12 @@ fn split_url(url: &str) -> Option<UrlParts<'_>> {
     if host.is_empty() {
         return None;
     }
-    Some(UrlParts { scheme, host, port, rest })
+    Some(UrlParts {
+        scheme,
+        host,
+        port,
+        rest,
+    })
 }
 
 #[cfg(test)]
@@ -202,8 +227,14 @@ mod tests {
     fn resolves_within_budget() {
         let b = std::time::Duration::from_secs(2);
         assert!(resolves_within("192.0.2.7", b));
-        assert!(!resolves_within("127.0.0.1", b), "loopback is not reachable from elsewhere");
-        assert!(!resolves_within("fe80::1", b), "link-local is not reachable from elsewhere");
+        assert!(
+            !resolves_within("127.0.0.1", b),
+            "loopback is not reachable from elsewhere"
+        );
+        assert!(
+            !resolves_within("fe80::1", b),
+            "link-local is not reachable from elsewhere"
+        );
         assert!(!resolves_within("no-such-host.invalid", b));
         assert!(!resolves_within("", b));
     }
@@ -220,29 +251,53 @@ mod tests {
 
     #[test]
     fn resolvable_and_literal_hosts_untouched() {
-        assert_eq!(reachable_url("https://localhost:7443", [IP]), "https://localhost:7443");
-        assert_eq!(reachable_url("https://10.0.0.1:7443", [IP]), "https://10.0.0.1:7443");
-        assert_eq!(reachable_url("https://[::1]:7443", [IP]), "https://[::1]:7443");
+        assert_eq!(
+            reachable_url("https://localhost:7443", [IP]),
+            "https://localhost:7443"
+        );
+        assert_eq!(
+            reachable_url("https://10.0.0.1:7443", [IP]),
+            "https://10.0.0.1:7443"
+        );
+        assert_eq!(
+            reachable_url("https://[::1]:7443", [IP]),
+            "https://[::1]:7443"
+        );
     }
 
     #[test]
     fn unusable_candidates_skipped() {
         let lo = IpAddr::V4(Ipv4Addr::LOCALHOST);
-        assert_eq!(reachable_url("https://no-such-host.invalid:7443", [lo, IP]), "https://192.0.2.7:7443");
-        assert_eq!(reachable_url("https://no-such-host.invalid:7443", [lo]), "https://no-such-host.invalid:7443");
-        assert_eq!(reachable_url("https://no-such-host.invalid:7443", []), "https://no-such-host.invalid:7443");
+        assert_eq!(
+            reachable_url("https://no-such-host.invalid:7443", [lo, IP]),
+            "https://192.0.2.7:7443"
+        );
+        assert_eq!(
+            reachable_url("https://no-such-host.invalid:7443", [lo]),
+            "https://no-such-host.invalid:7443"
+        );
+        assert_eq!(
+            reachable_url("https://no-such-host.invalid:7443", []),
+            "https://no-such-host.invalid:7443"
+        );
     }
 
     #[test]
     fn v6_rewrite_is_bracketed() {
         let v6: IpAddr = "2001:db8::1".parse().unwrap();
-        assert_eq!(reachable_url("https://no-such-host.invalid:7443", [v6]), "https://[2001:db8::1]:7443");
+        assert_eq!(
+            reachable_url("https://no-such-host.invalid:7443", [v6]),
+            "https://[2001:db8::1]:7443"
+        );
     }
 
     #[test]
     fn split() {
         let p = split_url("https://user@h.example:7443/v1").unwrap();
-        assert_eq!((p.scheme, p.host, p.port, p.rest), ("https", "h.example", Some("7443"), "/v1"));
+        assert_eq!(
+            (p.scheme, p.host, p.port, p.rest),
+            ("https", "h.example", Some("7443"), "/v1")
+        );
         let p = split_url("https://[::1]:7443").unwrap();
         assert_eq!((p.host, p.port, p.rest), ("::1", Some("7443"), ""));
         assert!(split_url("not a url").is_none());

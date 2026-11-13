@@ -117,10 +117,15 @@ impl FirewallSpec {
             local_nets: local_ipv4_prefixes(),
             mesh_ifs,
             dhcp_bridge: cfg.network.as_ref().and_then(|_| cfg.dhcp_bridge()),
-            wireguard_port: mesh.as_ref().and_then(|m| m.wireguard.as_ref()).map(|w| w.listen_port),
+            wireguard_port: mesh
+                .as_ref()
+                .and_then(|m| m.wireguard.as_ref())
+                .map(|w| w.listen_port),
             geneve: mesh.as_ref().map(|m| (m.underlay.clone(), m.dstport)),
             discovery_port: if cfg.enable_discovery {
-                cfg.multicast_addr.rsplit_once(':').and_then(|(_, p)| p.parse().ok())
+                cfg.multicast_addr
+                    .rsplit_once(':')
+                    .and_then(|(_, p)| p.parse().ok())
             } else {
                 None
             },
@@ -130,7 +135,11 @@ impl FirewallSpec {
 
     /// Without a readable config: ssh and the API from local networks.
     pub fn minimal() -> Self {
-        Self { api_port: crate::config::DEFAULT_PORT, local_nets: local_ipv4_prefixes(), ..Default::default() }
+        Self {
+            api_port: crate::config::DEFAULT_PORT,
+            local_nets: local_ipv4_prefixes(),
+            ..Default::default()
+        }
     }
 
     /// The `ufw` argument lists, in order. Pure, so it can be tested.
@@ -141,25 +150,37 @@ impl FirewallSpec {
             args("allow proto tcp to any port 22 comment 'xdebbie ssh'"),
         ];
         for net in &self.local_nets {
-            r.push(args(&format!("allow proto tcp from {net} to any port {} comment 'xdebbie api from {net}'", self.api_port)));
+            r.push(args(&format!(
+                "allow proto tcp from {net} to any port {} comment 'xdebbie api from {net}'",
+                self.api_port
+            )));
             if let Some(p) = self.discovery_port {
                 r.push(args(&format!("allow proto udp from {net} to any port {p} comment 'xdebbie discovery from {net}'")));
             }
         }
         if let Some(p) = self.wireguard_port {
-            r.push(args(&format!("allow proto udp to any port {p} comment 'xdebbie wireguard underlay'")));
+            r.push(args(&format!(
+                "allow proto udp to any port {p} comment 'xdebbie wireguard underlay'"
+            )));
         }
         for iface in &self.mesh_ifs {
             r.push(args(&format!("allow in on {iface} proto tcp to any port 16514 comment 'xdebbie libvirt tls on {iface}'")));
         }
         if let Some((iface, p)) = &self.geneve {
-            r.push(args(&format!("allow in on {iface} proto udp to any port {p} comment 'xdebbie geneve on {iface}'")));
+            r.push(args(&format!(
+                "allow in on {iface} proto udp to any port {p} comment 'xdebbie geneve on {iface}'"
+            )));
         }
         if let Some(br) = &self.dhcp_bridge {
-            r.push(args(&format!("allow in on {br} proto udp to any port 67 comment 'xdebbie dhcp on {br}'")));
+            r.push(args(&format!(
+                "allow in on {br} proto udp to any port 67 comment 'xdebbie dhcp on {br}'"
+            )));
         }
         if let Some(e) = &self.egress {
-            r.push(args(&format!("route allow in on {} from {} comment 'xdebbie vm egress {} via {}'", e.bridge, e.vm_net, e.vm_net, e.bridge)));
+            r.push(args(&format!(
+                "route allow in on {} from {} comment 'xdebbie vm egress {} via {}'",
+                e.bridge, e.vm_net, e.vm_net, e.bridge
+            )));
         }
         r
     }
@@ -175,7 +196,9 @@ impl FirewallSpec {
     pub fn render_nft(&self) -> Option<String> {
         let e = self.egress.as_ref()?;
         let mut out = format!("table ip {NFT_TABLE} {{\n");
-        out.push_str("  chain prerouting {\n    type nat hook prerouting priority dstnat; policy accept;\n");
+        out.push_str(
+            "  chain prerouting {\n    type nat hook prerouting priority dstnat; policy accept;\n",
+        );
         if let Some(dns) = e.upstream_dns.first() {
             for proto in ["udp", "tcp"] {
                 out.push_str(&format!(
@@ -210,7 +233,10 @@ fn args(s: &str) -> Vec<String> {
     let mut rest = s;
     while let Some(i) = rest.find('\'') {
         out.extend(rest[..i].split_whitespace().map(str::to_string));
-        let end = rest[i + 1..].find('\'').map(|e| i + 1 + e).unwrap_or(rest.len());
+        let end = rest[i + 1..]
+            .find('\'')
+            .map(|e| i + 1 + e)
+            .unwrap_or(rest.len());
         out.push(rest[i + 1..end].to_string());
         rest = rest.get(end + 1..).unwrap_or("");
     }
@@ -227,7 +253,9 @@ fn comment_of(rule: &[String]) -> Option<String> {
 /// IPv4 prefixes (`a.b.c.0/n`) of every global-scope address on this host:
 /// the LAN, the wg-flock underlay (10.22/16), the mesh overlay (10.23/16).
 pub fn local_ipv4_prefixes() -> Vec<String> {
-    let out = Command::new("ip").args(["-4", "-o", "addr", "show", "scope", "global"]).output();
+    let out = Command::new("ip")
+        .args(["-4", "-o", "addr", "show", "scope", "global"])
+        .output();
     let Ok(out) = out else { return vec![] };
     let mut nets: Vec<String> = String::from_utf8_lossy(&out.stdout)
         .lines()
@@ -251,13 +279,20 @@ pub fn local_ipv4_prefixes() -> Vec<String> {
 }
 
 fn ufw(argv: &[String]) -> Result<String> {
-    let out = Command::new("ufw").args(argv).output().with_context(|| format!("running ufw {}", argv.join(" ")))?;
+    let out = Command::new("ufw")
+        .args(argv)
+        .output()
+        .with_context(|| format!("running ufw {}", argv.join(" ")))?;
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let stderr = String::from_utf8_lossy(&out.stderr);
     if !out.status.success() {
         anyhow::bail!("ufw {}: {}{}", argv.join(" "), stdout.trim(), stderr.trim());
     }
-    let line = stdout.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+    let line = stdout
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim();
     if !line.starts_with("Skipping") && argv.first().map(String::as_str) != Some("status") {
         info!("  ufw {}: {}", argv.join(" "), line);
     }
@@ -299,7 +334,13 @@ fn prune_stale(spec: &FirewallSpec) -> Result<()> {
 
 /// Remove the iptables chain pre-ufw versions installed, if it is there.
 fn remove_legacy_chain() {
-    let run = |a: &[&str]| Command::new("iptables").args(a).output().map(|o| o.status.success()).unwrap_or(false);
+    let run = |a: &[&str]| {
+        Command::new("iptables")
+            .args(a)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    };
     if run(&["-C", "INPUT", "-j", LEGACY_CHAIN]) {
         run(&["-D", "INPUT", "-j", LEGACY_CHAIN]);
     }
@@ -311,7 +352,11 @@ fn remove_legacy_chain() {
 
 /// Apply (or drop) the `xdebbie_host` nftables table.
 fn apply_nft(spec: &FirewallSpec) -> Result<()> {
-    if !Command::new("nft").arg("--version").output().is_ok_and(|o| o.status.success()) {
+    if !Command::new("nft")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success())
+    {
         warn!("nft not installed; VM NAT and DNS forwarding not configured (apt install nftables)");
         return Ok(());
     }
@@ -319,7 +364,8 @@ fn apply_nft(spec: &FirewallSpec) -> Result<()> {
         Some(rendered) => {
             // A `table` block adds to an existing table; flushing it first
             // in the same transaction makes this a replace.
-            let script = format!("table ip {NFT_TABLE} {{}}\nflush table ip {NFT_TABLE}\n{rendered}");
+            let script =
+                format!("table ip {NFT_TABLE} {{}}\nflush table ip {NFT_TABLE}\n{rendered}");
             let mut child = Command::new("nft")
                 .args(["-f", "-"])
                 .stdin(Stdio::piped())
@@ -328,7 +374,11 @@ fn apply_nft(spec: &FirewallSpec) -> Result<()> {
                 .spawn()
                 .context("running nft -f -")?;
             use std::io::Write;
-            child.stdin.take().context("nft stdin")?.write_all(script.as_bytes())?;
+            child
+                .stdin
+                .take()
+                .context("nft stdin")?
+                .write_all(script.as_bytes())?;
             let out = child.wait_with_output()?;
             if !out.status.success() {
                 anyhow::bail!("nft -f: {}", String::from_utf8_lossy(&out.stderr).trim());
@@ -345,7 +395,9 @@ fn apply_nft(spec: &FirewallSpec) -> Result<()> {
             );
         }
         None => {
-            let out = Command::new("nft").args(["delete", "table", "ip", NFT_TABLE]).output()?;
+            let out = Command::new("nft")
+                .args(["delete", "table", "ip", NFT_TABLE])
+                .output()?;
             if out.status.success() {
                 info!("  nft {NFT_TABLE}: removed (no [network])");
             }
@@ -372,7 +424,11 @@ fn enable_ip_forward() {
 /// Apply `spec` and make sure ufw is enabled. Idempotent.
 pub fn configure_firewall(spec: &FirewallSpec) -> Result<()> {
     info!("Configuring firewall (ufw)...");
-    if !Command::new("ufw").arg("--version").output().is_ok_and(|o| o.status.success()) {
+    if !Command::new("ufw")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success())
+    {
         warn!("ufw not installed; firewall not configured (apt install ufw)");
         return Ok(());
     }
@@ -390,10 +446,15 @@ pub fn configure_firewall(spec: &FirewallSpec) -> Result<()> {
     ufw(&args("--force enable"))?;
     info!(
         "Firewall: LAN accepts only ssh{}, api:{} and discovery from {}; libvirt{} only on {}",
-        spec.wireguard_port.map(|p| format!(", wireguard {p}/udp")).unwrap_or_default(),
+        spec.wireguard_port
+            .map(|p| format!(", wireguard {p}/udp"))
+            .unwrap_or_default(),
         spec.api_port,
         spec.local_nets.join(", "),
-        spec.geneve.as_ref().map(|(_, p)| format!("/geneve {p}")).unwrap_or_default(),
+        spec.geneve
+            .as_ref()
+            .map(|(_, p)| format!("/geneve {p}"))
+            .unwrap_or_default(),
         spec.mesh_ifs.join(", "),
     );
     if spec.egress.is_some() {
@@ -425,14 +486,31 @@ mod tests {
     }
 
     fn golden(name: &str) -> String {
-        std::fs::read_to_string(format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
+        std::fs::read_to_string(format!(
+            "{}/tests/fixtures/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap()
     }
 
     #[test]
     fn args_keeps_comment_whole() {
         assert_eq!(
             args("allow in on wg-flock proto udp to any port 6081 comment 'xdebbie geneve'"),
-            ["allow", "in", "on", "wg-flock", "proto", "udp", "to", "any", "port", "6081", "comment", "xdebbie geneve"]
+            [
+                "allow",
+                "in",
+                "on",
+                "wg-flock",
+                "proto",
+                "udp",
+                "to",
+                "any",
+                "port",
+                "6081",
+                "comment",
+                "xdebbie geneve"
+            ]
         );
         assert_eq!(args("--force enable"), ["--force", "enable"]);
     }
@@ -443,7 +521,9 @@ mod tests {
         assert_eq!(rules[0], "default deny incoming");
         assert_eq!(rules[1], "default allow outgoing");
         assert!(rules.contains(&"allow proto tcp to any port 22 comment xdebbie ssh".to_string()));
-        assert!(rules.contains(&"allow proto udp to any port 51820 comment xdebbie wireguard underlay".to_string()));
+        assert!(rules.contains(
+            &"allow proto udp to any port 51820 comment xdebbie wireguard underlay".to_string()
+        ));
         assert!(rules.contains(&"allow proto tcp from 192.168.1.0/24 to any port 7443 comment xdebbie api from 192.168.1.0/24".to_string()));
         assert!(rules.contains(&"allow proto tcp from 10.22.0.0/16 to any port 7443 comment xdebbie api from 10.22.0.0/16".to_string()));
         // everything else names a mesh interface
@@ -451,7 +531,11 @@ mod tests {
             let unrestricted = !r.contains(" in on ") && !r.starts_with("route ");
             if unrestricted {
                 assert!(
-                    r.starts_with("default ") || r.contains("port 22 ") || r.contains("port 51820 ") || r.contains("port 7443 ") || r.contains("port 7442 "),
+                    r.starts_with("default ")
+                        || r.contains("port 22 ")
+                        || r.contains("port 51820 ")
+                        || r.contains("port 7443 ")
+                        || r.contains("port 7442 "),
                     "LAN-reachable rule that should not be: {r}"
                 );
             }
@@ -463,7 +547,12 @@ mod tests {
         assert!(rules.contains(&"allow in on wg-flock proto udp to any port 6081 comment xdebbie geneve on wg-flock".to_string()));
         assert!(rules.contains(&"allow in on virbr-xdebbie proto udp to any port 67 comment xdebbie dhcp on virbr-xdebbie".to_string()));
         assert!(rules.contains(&"route allow in on virbr-xdebbie from 10.23.1.0/24 comment xdebbie vm egress 10.23.1.0/24 via virbr-xdebbie".to_string()));
-        assert!(!rules.iter().any(|r| r.contains("from 192.168.1.0/24 to any port 16514")), "libvirt open to the LAN");
+        assert!(
+            !rules
+                .iter()
+                .any(|r| r.contains("from 192.168.1.0/24 to any port 16514")),
+            "libvirt open to the LAN"
+        );
         assert_eq!(rules.len(), 3 + 2 * 2 + 1 + 2 + 1 + 1 + 1);
     }
 
@@ -475,12 +564,19 @@ mod tests {
         dedup.sort();
         dedup.dedup();
         assert_eq!(c.len(), dedup.len(), "duplicate comments: {c:?}");
-        assert_eq!(c.len(), spec.rules().len() - 2, "every rule but the two defaults is tagged");
+        assert_eq!(
+            c.len(),
+            spec.rules().len() - 2,
+            "every rule but the two defaults is tagged"
+        );
     }
 
     #[test]
     fn no_mesh_no_mesh_rules() {
-        let spec = FirewallSpec { api_port: 7443, ..Default::default() };
+        let spec = FirewallSpec {
+            api_port: 7443,
+            ..Default::default()
+        };
         assert_eq!(spec.rules().len(), 3);
         assert_eq!(spec.render_nft(), None);
     }
@@ -495,7 +591,10 @@ mod tests {
             [ 5] 6081/udp on wg-flock       ALLOW IN    Anywhere                   # xdebbie geneve on wg-flock\n\
             [ 6] 22/tcp (v6)                ALLOW IN    Anywhere (v6)              # xdebbie ssh\n\
             [ 7] 16514/tcp (v6)             ALLOW IN    Anywhere (v6)              # xdebbie libvirt tls\n";
-        let wanted: Vec<String> = ["xdebbie ssh", "xdebbie geneve on wg-flock"].iter().map(|s| s.to_string()).collect();
+        let wanted: Vec<String> = ["xdebbie ssh", "xdebbie geneve on wg-flock"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         assert_eq!(stale_rule_numbers(status, &wanted), [7, 3, 2]);
         assert_eq!(stale_rule_numbers("", &wanted), Vec::<u32>::new());
     }
@@ -511,7 +610,15 @@ mod tests {
         spec.egress.as_mut().unwrap().upstream_dns.clear();
         let t = spec.render_nft().unwrap();
         assert!(!t.contains("dnat"), "{t}");
-        assert!(t.contains("ip saddr 10.23.1.0/24 oifname != \"virbr-xdebbie\" counter masquerade"), "{t}");
-        assert!(t.contains("iifname != \"virbr-xdebbie\" oifname \"virbr-xdebbie\" ct state new counter drop"), "{t}");
+        assert!(
+            t.contains("ip saddr 10.23.1.0/24 oifname != \"virbr-xdebbie\" counter masquerade"),
+            "{t}"
+        );
+        assert!(
+            t.contains(
+                "iifname != \"virbr-xdebbie\" oifname \"virbr-xdebbie\" ct state new counter drop"
+            ),
+            "{t}"
+        );
     }
 }

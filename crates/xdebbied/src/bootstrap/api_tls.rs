@@ -83,10 +83,16 @@ pub fn ensure_api_tls(hostname: &str, force: bool, paths: &ApiTlsPaths) -> Resul
     let sans = server_sans(hostname);
     if paths.is_ca() {
         if paths.all_exist() && !force {
-            info!("API TLS certs already exist (CA key at {}); skipping", paths.ca_key.display());
+            info!(
+                "API TLS certs already exist (CA key at {}); skipping",
+                paths.ca_key.display()
+            );
             return Ok(());
         }
-        info!("Reissuing server cert for {} from the existing CA", hostname);
+        info!(
+            "Reissuing server cert for {} from the existing CA",
+            hostname
+        );
         let signer = CaSigner::load(&paths.ca_cert, &paths.ca_key)?
             .ok_or_else(|| anyhow::anyhow!("{} vanished", paths.ca_key.display()))?;
         let key = KeyPair::generate().context("generating server key")?;
@@ -129,13 +135,23 @@ fn generate(hostname: &str, sans: &[SanType], paths: &ApiTlsPaths) -> Result<()>
     let mut ca_params = CertificateParams::default();
     ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     ca_params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
-    ca_params.distinguished_name.push(DnType::CommonName, format!("xdebbie cluster CA ({hostname})"));
-    ca_params.distinguished_name.push(DnType::OrganizationName, "xdebbie");
+    ca_params.distinguished_name.push(
+        DnType::CommonName,
+        format!("xdebbie cluster CA ({hostname})"),
+    );
+    ca_params
+        .distinguished_name
+        .push(DnType::OrganizationName, "xdebbie");
     ca_params.not_before = not_before;
     ca_params.not_after = now + time::Duration::days(CA_DAYS);
-    let ca_cert = ca_params.self_signed(&ca_key).context("self-signing CA cert")?;
+    let ca_cert = ca_params
+        .self_signed(&ca_key)
+        .context("self-signing CA cert")?;
     let ca_key_pem = ca_key.serialize_pem();
-    let signer = CaSigner { cert_pem: ca_cert.pem(), issuer: Issuer::new(ca_params, ca_key) };
+    let signer = CaSigner {
+        cert_pem: ca_cert.pem(),
+        issuer: Issuer::new(ca_params, ca_key),
+    };
 
     // ---- Server cert ----
     let server_key = KeyPair::generate().context("generating server key")?;
@@ -174,10 +190,14 @@ impl CaSigner {
         if !ca_key.exists() {
             return Ok(None);
         }
-        let cert_pem = std::fs::read_to_string(ca_cert).with_context(|| format!("reading {}", ca_cert.display()))?;
-        let key_pem = std::fs::read_to_string(ca_key).with_context(|| format!("reading {}", ca_key.display()))?;
-        let key = KeyPair::from_pem(&key_pem).with_context(|| format!("parsing {}", ca_key.display()))?;
-        let issuer = Issuer::from_ca_cert_pem(&cert_pem, key).with_context(|| format!("parsing {}", ca_cert.display()))?;
+        let cert_pem = std::fs::read_to_string(ca_cert)
+            .with_context(|| format!("reading {}", ca_cert.display()))?;
+        let key_pem = std::fs::read_to_string(ca_key)
+            .with_context(|| format!("reading {}", ca_key.display()))?;
+        let key =
+            KeyPair::from_pem(&key_pem).with_context(|| format!("parsing {}", ca_key.display()))?;
+        let issuer = Issuer::from_ca_cert_pem(&cert_pem, key)
+            .with_context(|| format!("parsing {}", ca_cert.display()))?;
         Ok(Some(Self { cert_pem, issuer }))
     }
 
@@ -190,25 +210,40 @@ impl CaSigner {
     /// usage is fixed here: a member cert serves its API (serverAuth) and
     /// identifies the daemon to other boxes (clientAuth), never signs.
     pub fn sign_csr(&self, csr_pem: &str) -> Result<String> {
-        let csr = rcgen::CertificateSigningRequestParams::from_pem(csr_pem).context("parsing CSR")?;
+        let csr =
+            rcgen::CertificateSigningRequestParams::from_pem(csr_pem).context("parsing CSR")?;
         let hostname = csr_hostname(&csr).unwrap_or_default();
         let sans = csr.params.subject_alt_names.clone();
         self.issue(&hostname, &sans, &csr.public_key)
     }
 
     /// Issue a member/server certificate for `public_key`.
-    fn issue(&self, hostname: &str, sans: &[SanType], public_key: &impl PublicKeyData) -> Result<String> {
+    fn issue(
+        &self,
+        hostname: &str,
+        sans: &[SanType],
+        public_key: &impl PublicKeyData,
+    ) -> Result<String> {
         let now = time::OffsetDateTime::now_utc();
         let mut p = CertificateParams::default();
         p.subject_alt_names = sans.to_vec();
         p.is_ca = IsCa::NoCa;
-        p.key_usages = vec![KeyUsagePurpose::DigitalSignature, KeyUsagePurpose::KeyEncipherment];
-        p.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth, ExtendedKeyUsagePurpose::ClientAuth];
+        p.key_usages = vec![
+            KeyUsagePurpose::DigitalSignature,
+            KeyUsagePurpose::KeyEncipherment,
+        ];
+        p.extended_key_usages = vec![
+            ExtendedKeyUsagePurpose::ServerAuth,
+            ExtendedKeyUsagePurpose::ClientAuth,
+        ];
         p.distinguished_name.push(DnType::CommonName, hostname);
-        p.distinguished_name.push(DnType::OrganizationName, "xdebbie");
+        p.distinguished_name
+            .push(DnType::OrganizationName, "xdebbie");
         p.not_before = now - time::Duration::minutes(1);
         p.not_after = now + time::Duration::days(SERVER_DAYS);
-        Ok(p.signed_by(public_key, &self.issuer).context("signing certificate")?.pem())
+        Ok(p.signed_by(public_key, &self.issuer)
+            .context("signing certificate")?
+            .pem())
     }
 }
 
@@ -232,7 +267,8 @@ pub fn make_csr(hostname: &str) -> Result<Csr> {
     let mut p = CertificateParams::default();
     p.subject_alt_names = server_sans(hostname);
     p.distinguished_name.push(DnType::CommonName, hostname);
-    p.distinguished_name.push(DnType::OrganizationName, "xdebbie");
+    p.distinguished_name
+        .push(DnType::OrganizationName, "xdebbie");
     let csr = p.serialize_request(&key).context("building CSR")?;
     Ok(Csr {
         fingerprint: spki_fingerprint(key.subject_public_key_info().as_slice()),
@@ -252,7 +288,9 @@ pub struct Csr {
 /// the joiner.
 pub fn csr_fingerprint(csr_pem: &str) -> Result<String> {
     let csr = rcgen::CertificateSigningRequestParams::from_pem(csr_pem).context("parsing CSR")?;
-    Ok(spki_fingerprint(csr.public_key.subject_public_key_info().as_slice()))
+    Ok(spki_fingerprint(
+        csr.public_key.subject_public_key_info().as_slice(),
+    ))
 }
 
 fn spki_fingerprint(spki: &[u8]) -> String {
@@ -264,8 +302,12 @@ fn spki_fingerprint(spki: &[u8]) -> String {
 /// when `bootstrap --join` asks whether to trust a CA.
 pub fn cert_fingerprint(pem: &str) -> Result<String> {
     use sha2::Digest;
-    let (_, p) = x509_parser::pem::parse_x509_pem(pem.as_bytes()).context("parsing certificate PEM")?;
-    Ok(format!("sha256:{}", hex::encode(sha2::Sha256::digest(&p.contents))))
+    let (_, p) =
+        x509_parser::pem::parse_x509_pem(pem.as_bytes()).context("parsing certificate PEM")?;
+    Ok(format!(
+        "sha256:{}",
+        hex::encode(sha2::Sha256::digest(&p.contents))
+    ))
 }
 
 /// Install a certificate issued by the cluster CA (and the CA itself) on a
@@ -278,9 +320,14 @@ pub fn install_issued(paths: &ApiTlsPaths, cert_pem: &str, ca_pem: &str) -> Resu
     // A joined box never signs; make sure a stale local CA key cannot
     // confuse `is_ca`.
     if paths.ca_key.exists() {
-        std::fs::remove_file(&paths.ca_key).with_context(|| format!("removing {}", paths.ca_key.display()))?;
+        std::fs::remove_file(&paths.ca_key)
+            .with_context(|| format!("removing {}", paths.ca_key.display()))?;
     }
-    info!("Installed cluster CA at {} and issued cert at {}", paths.ca_cert.display(), paths.server_cert.display());
+    info!(
+        "Installed cluster CA at {} and issued cert at {}",
+        paths.ca_cert.display(),
+        paths.server_cert.display()
+    );
     Ok(())
 }
 
@@ -320,7 +367,10 @@ fn server_sans(hostname: &str) -> Vec<SanType> {
             push_dns(&fqdn);
         }
     }
-    if let Ok(out) = std::process::Command::new("ip").args(["-4", "-o", "addr", "show", "scope", "global"]).output() {
+    if let Ok(out) = std::process::Command::new("ip")
+        .args(["-4", "-o", "addr", "show", "scope", "global"])
+        .output()
+    {
         for line in String::from_utf8_lossy(&out.stdout).lines() {
             let mut f = line.split_whitespace();
             if f.any(|w| w == "inet")
@@ -350,7 +400,9 @@ pub fn load_ca_cert(path: &Path) -> Option<reqwest::tls::Certificate> {
 /// `/etc/xdebbie/peers/` without editing config.
 pub fn load_ca_dir(dir: &Path) -> Vec<reqwest::tls::Certificate> {
     let mut out = vec![];
-    let Ok(rd) = std::fs::read_dir(dir) else { return out };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return out;
+    };
     for e in rd.flatten() {
         let p = e.path();
         if p.extension().is_some_and(|x| x == "pem")
@@ -416,11 +468,21 @@ mod tests {
         assert_eq!(csr_fingerprint(&csr.csr_pem).unwrap(), csr.fingerprint);
 
         // CA side.
-        let signer = CaSigner::load(&paths.ca_cert, &paths.ca_key).unwrap().unwrap();
+        let signer = CaSigner::load(&paths.ca_cert, &paths.ca_key)
+            .unwrap()
+            .unwrap();
         let cert_pem = signer.sign_csr(&csr.csr_pem).unwrap();
         let (der,) = parse(&cert_pem);
         let (_, x) = x509_parser::parse_x509_certificate(&der).unwrap();
-        assert_eq!(x.subject().iter_common_name().next().unwrap().as_str().unwrap(), "joiner.example");
+        assert_eq!(
+            x.subject()
+                .iter_common_name()
+                .next()
+                .unwrap()
+                .as_str()
+                .unwrap(),
+            "joiner.example"
+        );
         let eku = x.extended_key_usage().unwrap().unwrap().value;
         assert!(eku.server_auth && eku.client_auth);
         assert!(!x.is_ca());
@@ -436,7 +498,10 @@ mod tests {
         std::fs::write(&jpaths.server_key, &csr.key_pem).unwrap();
         install_issued(&jpaths, &cert_pem, signer.ca_pem()).unwrap();
         assert!(jpaths.all_exist() && !jpaths.is_ca());
-        assert_eq!(cert_fingerprint(signer.ca_pem()).unwrap().len(), "sha256:".len() + 64);
+        assert_eq!(
+            cert_fingerprint(signer.ca_pem()).unwrap().len(),
+            "sha256:".len() + 64
+        );
     }
 
     #[test]

@@ -804,19 +804,33 @@ fn cmd_version(api: &mut Api, cli: &Cli) -> Result<()> {
         return Ok(());
     }
 
+    let host = |v: &serde_json::Value| v["hostname"].as_str().unwrap_or("?").to_string();
+    let local_host = local_ver.as_ref().map(&host);
+    let leader_host = leader_ver.as_ref().map(|(_, v)| host(v));
+    let w = [
+        Some("hostname".to_string()),
+        local_host.clone(),
+        leader_host.clone(),
+    ]
+    .iter()
+    .flatten()
+    .map(|h| h.len())
+    .max()
+    .unwrap_or(8);
+
     println!(
-        "{:<10} {:<14} {:<20} {}",
+        "{:<10} {:<14} {:<w$} {}",
         "component", "version", "hostname", "url"
     );
-    println!("{:-<10} {:-<14} {:-<20} {:-<36}", "", "", "", "");
-    println!("{:<10} {:<14} {:<20}", "xdctl", xdctl_ver, "(client)");
+    println!("{:-<10} {:-<14} {:-<w$} {:-<36}", "", "", "", "");
+    println!("{:<10} {:<14} {:<w$}", "xdctl", xdctl_ver, "(client)");
 
     match &local_ver {
         Some(v) => println!(
-            "{:<10} {:<14} {:<20} {}",
+            "{:<10} {:<14} {:<w$} {}",
             "local",
             v["version"].as_str().unwrap_or("?"),
-            v["hostname"].as_str().unwrap_or("?"),
+            local_host.as_deref().unwrap_or("?"),
             local_url,
         ),
         None => println!("{:<10} unreachable ({})", "local", local_url),
@@ -824,10 +838,10 @@ fn cmd_version(api: &mut Api, cli: &Cli) -> Result<()> {
 
     match leader_ver {
         Some((url, v)) => println!(
-            "{:<10} {:<14} {:<20} {}",
+            "{:<10} {:<14} {:<w$} {}",
             "leader",
             v["version"].as_str().unwrap_or("?"),
-            v["hostname"].as_str().unwrap_or("?"),
+            leader_host.as_deref().unwrap_or("?"),
             url,
         ),
         None if local_st.as_ref().map(|s| s.is_leader).unwrap_or(false) => {

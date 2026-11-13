@@ -12,7 +12,10 @@
 use std::{future::Future, io, path::Path, pin::Pin, sync::Arc};
 
 use anyhow::{Context, Result};
-use axum_server::{accept::Accept, tls_rustls::{RustlsAcceptor, RustlsConfig}};
+use axum_server::{
+    accept::Accept,
+    tls_rustls::{RustlsAcceptor, RustlsConfig},
+};
 use rustls::{
     RootCertStore, ServerConfig,
     pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject},
@@ -47,7 +50,10 @@ impl PeerIdentity {
             .and_then(|cn| cn.as_str().ok())
             .unwrap_or("")
             .to_string();
-        Some(Self { hostname, fingerprint: format!("sha256:{}", hex::encode(sha2::Sha256::digest(der))) })
+        Some(Self {
+            hostname,
+            fingerprint: format!("sha256:{}", hex::encode(sha2::Sha256::digest(der))),
+        })
     }
 }
 
@@ -57,7 +63,11 @@ pub fn client_roots(ca_file: &Path, peer_ca_dir: &Path) -> RootCertStore {
     let mut roots = RootCertStore::empty();
     let mut files = vec![ca_file.to_path_buf()];
     if let Ok(rd) = std::fs::read_dir(peer_ca_dir) {
-        files.extend(rd.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "pem")));
+        files.extend(
+            rd.flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|x| x == "pem")),
+        );
     }
     for f in files {
         if !f.exists() {
@@ -85,17 +95,22 @@ pub fn server_config(cert: &Path, key: &Path, roots: RootCertStore) -> Result<Ar
         .with_context(|| format!("reading {}", cert.display()))?
         .collect::<std::result::Result<_, _>>()
         .with_context(|| format!("parsing {}", cert.display()))?;
-    let key = PrivateKeyDer::from_pem_file(key).with_context(|| format!("reading {}", key.display()))?;
+    let key =
+        PrivateKeyDer::from_pem_file(key).with_context(|| format!("reading {}", key.display()))?;
     let builder = ServerConfig::builder();
     let mut sc = if roots.is_empty() {
-        tracing::warn!("no CA certificates to verify client certs against; peers must use bearer tokens");
+        tracing::warn!(
+            "no CA certificates to verify client certs against; peers must use bearer tokens"
+        );
         builder.with_no_client_auth().with_single_cert(certs, key)
     } else {
         let verifier = WebPkiClientVerifier::builder(Arc::new(roots))
             .allow_unauthenticated()
             .build()
             .context("building client certificate verifier")?;
-        builder.with_client_cert_verifier(verifier).with_single_cert(certs, key)
+        builder
+            .with_client_cert_verifier(verifier)
+            .with_single_cert(certs, key)
     }
     .context("loading server certificate/key")?;
     sc.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
@@ -111,7 +126,9 @@ pub struct PeerCertAcceptor {
 
 impl PeerCertAcceptor {
     pub fn new(config: Arc<ServerConfig>) -> Self {
-        Self { inner: RustlsAcceptor::new(RustlsConfig::from_config(config)) }
+        Self {
+            inner: RustlsAcceptor::new(RustlsConfig::from_config(config)),
+        }
     }
 }
 
@@ -136,7 +153,13 @@ where
             if let Some(p) = &peer {
                 tracing::debug!(peer = %p.hostname, fp = %p.fingerprint, "client certificate accepted");
             }
-            Ok((tls, WithClientCert { inner: service, peer: ClientCert(peer) }))
+            Ok((
+                tls,
+                WithClientCert {
+                    inner: service,
+                    peer: ClientCert(peer),
+                },
+            ))
         })
     }
 }
@@ -156,7 +179,10 @@ where
     type Error = S::Error;
     type Future = S::Future;
 
-    fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
+    fn poll_ready(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
         self.inner.poll_ready(cx)
     }
 

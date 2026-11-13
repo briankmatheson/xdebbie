@@ -132,7 +132,11 @@ impl ElectionStateMachine {
         // If we see a higher-scored leader, follow them
         if leader_score > self.score || (leader_score == self.score && leader_id > self.node_id) {
             if self.current_leader != Some(leader_id) {
-                tracing::info!("Recognized new leader: {} (score: {:.1})", leader_id, leader_score);
+                tracing::info!(
+                    "Recognized new leader: {} (score: {:.1})",
+                    leader_id,
+                    leader_score
+                );
                 self.current_leader = Some(leader_id);
             }
 
@@ -144,7 +148,9 @@ impl ElectionStateMachine {
         else if self.state != ElectionState::Leader && self.state != ElectionState::Election {
             tracing::info!(
                 "Received heartbeat from lower-scored leader {} ({:.1} < {:.1}), starting election",
-                leader_id, leader_score, self.score
+                leader_id,
+                leader_score,
+                self.score
             );
             self.start_election();
         }
@@ -221,7 +227,8 @@ impl ElectionStateMachine {
 
     /// Check if election has timed out (no winner emerged)
     pub fn election_timeout(&self) -> bool {
-        self.state == ElectionState::Election && self.state_entered.elapsed() > self.election_timeout
+        self.state == ElectionState::Election
+            && self.state_entered.elapsed() > self.election_timeout
     }
 }
 
@@ -232,11 +239,8 @@ mod tests {
     #[test]
     fn test_state_transitions() {
         let node_id = Uuid::new_v4();
-        let mut sm = ElectionStateMachine::new(
-            node_id,
-            Duration::from_secs(5),
-            Duration::from_secs(3),
-        );
+        let mut sm =
+            ElectionStateMachine::new(node_id, Duration::from_secs(5), Duration::from_secs(3));
 
         assert_eq!(sm.state(), ElectionState::Inactive);
 
@@ -258,11 +262,8 @@ mod tests {
     #[test]
     fn test_voting() {
         let node_id = Uuid::new_v4();
-        let mut sm = ElectionStateMachine::new(
-            node_id,
-            Duration::from_secs(5),
-            Duration::from_secs(3),
-        );
+        let mut sm =
+            ElectionStateMachine::new(node_id, Duration::from_secs(5), Duration::from_secs(3));
 
         sm.start_election();
 

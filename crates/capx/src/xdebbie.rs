@@ -2,9 +2,9 @@
 //! Minimal async client for the xdebbied REST API.
 
 use anyhow::{Result, bail};
-use xdebbie_core::{FailureDomain, Vm, VmSpec};
 use reqwest::{Client, StatusCode};
 use uuid::Uuid;
+use xdebbie_core::{FailureDomain, Vm, VmSpec};
 
 #[derive(Clone)]
 pub struct XDebbie8s {

@@ -36,17 +36,25 @@ impl BoxBlock {
 
 /// How many boxes `cidr` has room for: one /24 each.
 pub fn capacity(cidr: &Cidr) -> u32 {
-    if cidr.prefix > 24 { 0 } else { 1u32 << (24 - cidr.prefix) }
+    if cidr.prefix > 24 {
+        0
+    } else {
+        1u32 << (24 - cidr.prefix)
+    }
 }
 
 /// Box `box_id`'s block of `cidr`.
 pub fn box_block(cidr: &Cidr, box_id: u8) -> Result<BoxBlock> {
     let cap = capacity(cidr);
     if cap == 0 {
-        bail!("overlay {cidr} is narrower than a /24; use a /16 (10.23.0.0/16) so every box gets its own /24");
+        bail!(
+            "overlay {cidr} is narrower than a /24; use a /16 (10.23.0.0/16) so every box gets its own /24"
+        );
     }
     if u32::from(box_id) >= cap {
-        bail!("overlay {cidr} has room for {cap} box(es), not box {box_id}; use a /16 (10.23.0.0/16)");
+        bail!(
+            "overlay {cidr} has room for {cap} box(es), not box {box_id}; use a /16 (10.23.0.0/16)"
+        );
     }
     let net = u32::from(cidr.network) + u32::from(box_id) * 256;
     let last = u32::from(cidr.last_host());
@@ -59,8 +67,14 @@ pub fn box_block(cidr: &Cidr, box_id: u8) -> Result<BoxBlock> {
 
 /// Same, from a `a.b.c.d/N` string (bootstrap's `--subnet`).
 pub fn box_block_str(subnet: &str, box_id: u8) -> Result<BoxBlock> {
-    let s = if subnet.contains('/') { subnet.to_string() } else { format!("{subnet}/24") };
-    let cidr: Cidr = s.parse().map_err(|e| anyhow::anyhow!("network subnet {subnet:?}: {e}"))?;
+    let s = if subnet.contains('/') {
+        subnet.to_string()
+    } else {
+        format!("{subnet}/24")
+    };
+    let cidr: Cidr = s
+        .parse()
+        .map_err(|e| anyhow::anyhow!("network subnet {subnet:?}: {e}"))?;
     box_block(&cidr, box_id)
 }
 
@@ -77,9 +91,15 @@ mod tests {
         let c: Cidr = "10.23.0.0/16".parse().unwrap();
         assert_eq!(capacity(&c), 256);
         let b0 = box_block(&c, 0).unwrap();
-        assert_eq!((b0.bridge, b0.pool_start, b0.pool_end), (ip("10.23.0.1"), ip("10.23.0.2"), ip("10.23.0.254")));
+        assert_eq!(
+            (b0.bridge, b0.pool_start, b0.pool_end),
+            (ip("10.23.0.1"), ip("10.23.0.2"), ip("10.23.0.254"))
+        );
         let b1 = box_block(&c, 1).unwrap();
-        assert_eq!((b1.bridge, b1.pool_start, b1.pool_end), (ip("10.23.1.1"), ip("10.23.1.2"), ip("10.23.1.254")));
+        assert_eq!(
+            (b1.bridge, b1.pool_start, b1.pool_end),
+            (ip("10.23.1.1"), ip("10.23.1.2"), ip("10.23.1.254"))
+        );
         assert_eq!(b1.network(), ip("10.23.1.0"));
         let b253 = box_block(&c, 253).unwrap();
         assert_eq!(b253.bridge, ip("10.23.253.1"));
@@ -94,7 +114,14 @@ mod tests {
         let c: Cidr = "192.168.100.0/24".parse().unwrap();
         assert_eq!(capacity(&c), 1);
         let b = box_block(&c, 0).unwrap();
-        assert_eq!((b.bridge, b.pool_start, b.pool_end), (ip("192.168.100.1"), ip("192.168.100.2"), ip("192.168.100.254")));
+        assert_eq!(
+            (b.bridge, b.pool_start, b.pool_end),
+            (
+                ip("192.168.100.1"),
+                ip("192.168.100.2"),
+                ip("192.168.100.254")
+            )
+        );
         let e = box_block(&c, 1).unwrap_err().to_string();
         assert!(e.contains("room for 1 box"), "{e}");
         let c: Cidr = "10.9.0.0/20".parse().unwrap();
@@ -102,7 +129,12 @@ mod tests {
         assert_eq!(box_block(&c, 15).unwrap().bridge, ip("10.9.15.1"));
         assert!(box_block(&c, 16).is_err());
         let c: Cidr = "10.9.9.0/28".parse().unwrap();
-        assert!(box_block(&c, 0).unwrap_err().to_string().contains("narrower than a /24"));
+        assert!(
+            box_block(&c, 0)
+                .unwrap_err()
+                .to_string()
+                .contains("narrower than a /24")
+        );
     }
 
     #[test]
@@ -111,6 +143,9 @@ mod tests {
         let b = box_block(&c, 255).unwrap();
         assert_eq!(b.pool_end, ip("10.23.255.254"));
         assert!(box_block_str("nope/16", 0).is_err());
-        assert_eq!(box_block_str("10.23.0.0/16", 2).unwrap().bridge, ip("10.23.2.1"));
+        assert_eq!(
+            box_block_str("10.23.0.0/16", 2).unwrap().bridge,
+            ip("10.23.2.1")
+        );
     }
 }

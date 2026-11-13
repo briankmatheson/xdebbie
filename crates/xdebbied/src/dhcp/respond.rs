@@ -7,7 +7,7 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use uuid::Uuid;
 
 use super::model::NetworkConfig;
-use super::wire::{self, opt, MsgType, Reply, Request};
+use super::wire::{self, MsgType, Reply, Request, opt};
 
 /// What the store knows about a MAC.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,7 +83,9 @@ pub fn respond(p: &Params, req: &Request, active: bool, binding: Option<&Binding
             // SELECTING/INIT-REBOOT carry option 50; RENEWING/REBINDING carry
             // ciaddr. Either must match the record, otherwise NAK so the
             // client starts over and gets the right address.
-            let wanted = req.requested_ip.or_else(|| (!req.ciaddr.is_unspecified()).then_some(req.ciaddr));
+            let wanted = req
+                .requested_ip
+                .or_else(|| (!req.ciaddr.is_unspecified()).then_some(req.ciaddr));
             match wanted {
                 Some(ip) if ip == b.ip => ack(p, req, b, true),
                 Some(_) | None => nak(p, req),
@@ -147,23 +149,39 @@ fn offer(p: &Params, req: &Request, b: &Binding) -> Outcome {
     let mut r = base(p, req, MsgType::Offer, b.ip);
     r.ciaddr = Ipv4Addr::UNSPECIFIED;
     r.options = net_options(p, b, true);
-    Outcome::Send { dst: dest(req, MsgType::Offer), reply: r }
+    Outcome::Send {
+        dst: dest(req, MsgType::Offer),
+        reply: r,
+    }
 }
 
 fn ack(p: &Params, req: &Request, b: &Binding, with_lease: bool) -> Outcome {
     // INFORM: client already has an address; yiaddr stays 0, no lease.
-    let yiaddr = if with_lease { b.ip } else { Ipv4Addr::UNSPECIFIED };
+    let yiaddr = if with_lease {
+        b.ip
+    } else {
+        Ipv4Addr::UNSPECIFIED
+    };
     let mut r = base(p, req, MsgType::Ack, yiaddr);
     r.options = net_options(p, b, with_lease);
-    Outcome::Send { dst: dest(req, MsgType::Ack), reply: r }
+    Outcome::Send {
+        dst: dest(req, MsgType::Ack),
+        reply: r,
+    }
 }
 
 fn nak(p: &Params, req: &Request) -> Outcome {
     let mut r = base(p, req, MsgType::Nak, Ipv4Addr::UNSPECIFIED);
     r.ciaddr = Ipv4Addr::UNSPECIFIED;
     r.flags |= 0x8000; // NAKs are always broadcast
-    r.options = vec![(opt::MESSAGE, b"address is not bound to this client".to_vec())];
-    Outcome::Send { dst: dest(req, MsgType::Nak), reply: r }
+    r.options = vec![(
+        opt::MESSAGE,
+        b"address is not bound to this client".to_vec(),
+    )];
+    Outcome::Send {
+        dst: dest(req, MsgType::Nak),
+        reply: r,
+    }
 }
 
 #[cfg(test)]
@@ -195,32 +213,53 @@ mod tests {
         }
     }
     fn binding() -> Binding {
-        Binding { vm: Uuid::nil(), name: "mesh-g1".into(), ip: Ipv4Addr::new(10, 23, 0, 42) }
+        Binding {
+            vm: Uuid::nil(),
+            name: "mesh-g1".into(),
+            ip: Ipv4Addr::new(10, 23, 0, 42),
+        }
     }
     fn req(msg: MsgType, extra: &[(u8, Vec<u8>)]) -> Request {
         parse(&build_request(msg, MAC, 0x1234, extra)).unwrap()
     }
     fn opt_of(r: &Reply, code: u8) -> Option<&[u8]> {
-        r.options.iter().find(|(c, _)| *c == code).map(|(_, v)| v.as_slice())
+        r.options
+            .iter()
+            .find(|(c, _)| *c == code)
+            .map(|(_, v)| v.as_slice())
     }
 
     #[test]
     fn discover_gets_offer_with_everything() {
         let p = params(Some(1370));
         let out = respond(&p, &req(MsgType::Discover, &[]), true, Some(&binding()));
-        let Outcome::Send { reply, dst } = out else { panic!("{out:?}") };
+        let Outcome::Send { reply, dst } = out else {
+            panic!("{out:?}")
+        };
         assert_eq!(reply.msg_type, MsgType::Offer);
         assert_eq!(reply.yiaddr, Ipv4Addr::new(10, 23, 0, 42));
         assert_eq!(reply.server_id, Ipv4Addr::new(10, 23, 0, 2));
         assert_eq!(dst, SocketAddrV4::new(Ipv4Addr::BROADCAST, 68));
-        assert_eq!(opt_of(&reply, opt::SUBNET_MASK), Some(&[255, 255, 0, 0][..]));
+        assert_eq!(
+            opt_of(&reply, opt::SUBNET_MASK),
+            Some(&[255, 255, 0, 0][..])
+        );
         assert_eq!(opt_of(&reply, opt::ROUTER), Some(&[10, 23, 0, 1][..]));
-        assert_eq!(opt_of(&reply, opt::DNS), Some(&[1, 1, 1, 1, 8, 8, 8, 8][..]));
-        assert_eq!(opt_of(&reply, opt::BROADCAST), Some(&[10, 23, 255, 255][..]));
+        assert_eq!(
+            opt_of(&reply, opt::DNS),
+            Some(&[1, 1, 1, 1, 8, 8, 8, 8][..])
+        );
+        assert_eq!(
+            opt_of(&reply, opt::BROADCAST),
+            Some(&[10, 23, 255, 255][..])
+        );
         assert_eq!(opt_of(&reply, opt::HOSTNAME), Some(&b"mesh-g1"[..]));
         assert_eq!(opt_of(&reply, opt::DOMAIN), Some(&b"vm.example"[..]));
         assert_eq!(opt_of(&reply, opt::MTU), Some(&[5, 90][..]));
-        assert_eq!(opt_of(&reply, opt::LEASE_TIME), Some(&86400u32.to_be_bytes()[..]));
+        assert_eq!(
+            opt_of(&reply, opt::LEASE_TIME),
+            Some(&86400u32.to_be_bytes()[..])
+        );
         assert_eq!(opt_of(&reply, opt::T1), Some(&43200u32.to_be_bytes()[..]));
         assert_eq!(opt_of(&reply, opt::T2), Some(&75600u32.to_be_bytes()[..]));
         // encodes; a full option set is longer than the 300-byte minimum
@@ -233,7 +272,9 @@ mod tests {
     #[test]
     fn no_mtu_option_off_the_mesh() {
         let p = params(None);
-        let Outcome::Send { reply, .. } = respond(&p, &req(MsgType::Discover, &[]), true, Some(&binding())) else {
+        let Outcome::Send { reply, .. } =
+            respond(&p, &req(MsgType::Discover, &[]), true, Some(&binding()))
+        else {
             panic!()
         };
         assert_eq!(opt_of(&reply, opt::MTU), None);
@@ -242,14 +283,27 @@ mod tests {
     #[test]
     fn request_right_address_is_acked_wrong_is_nakked() {
         let p = params(None);
-        let good = req(MsgType::Request, &[(opt::REQUESTED_IP, vec![10, 23, 0, 42]), (opt::SERVER_ID, vec![10, 23, 0, 2])]);
-        let Outcome::Send { reply, dst } = respond(&p, &good, true, Some(&binding())) else { panic!() };
+        let good = req(
+            MsgType::Request,
+            &[
+                (opt::REQUESTED_IP, vec![10, 23, 0, 42]),
+                (opt::SERVER_ID, vec![10, 23, 0, 2]),
+            ],
+        );
+        let Outcome::Send { reply, dst } = respond(&p, &good, true, Some(&binding())) else {
+            panic!()
+        };
         assert_eq!(reply.msg_type, MsgType::Ack);
         assert_eq!(reply.yiaddr, Ipv4Addr::new(10, 23, 0, 42));
         assert_eq!(dst, SocketAddrV4::new(Ipv4Addr::BROADCAST, 68));
 
-        let stale = req(MsgType::Request, &[(opt::REQUESTED_IP, vec![10, 23, 0, 142])]);
-        let Outcome::Send { reply, dst } = respond(&p, &stale, true, Some(&binding())) else { panic!() };
+        let stale = req(
+            MsgType::Request,
+            &[(opt::REQUESTED_IP, vec![10, 23, 0, 142])],
+        );
+        let Outcome::Send { reply, dst } = respond(&p, &stale, true, Some(&binding())) else {
+            panic!()
+        };
         assert_eq!(reply.msg_type, MsgType::Nak);
         assert_eq!(reply.yiaddr, Ipv4Addr::UNSPECIFIED);
         assert!(reply.flags & 0x8000 != 0);
@@ -257,7 +311,9 @@ mod tests {
         assert!(opt_of(&reply, opt::MESSAGE).is_some());
 
         let none = req(MsgType::Request, &[]);
-        let Outcome::Send { reply, .. } = respond(&p, &none, true, Some(&binding())) else { panic!() };
+        let Outcome::Send { reply, .. } = respond(&p, &none, true, Some(&binding())) else {
+            panic!()
+        };
         assert_eq!(reply.msg_type, MsgType::Nak);
     }
 
@@ -266,13 +322,17 @@ mod tests {
         let p = params(None);
         let mut r = req(MsgType::Request, &[]);
         r.ciaddr = Ipv4Addr::new(10, 23, 0, 42);
-        let Outcome::Send { reply, dst } = respond(&p, &r, true, Some(&binding())) else { panic!() };
+        let Outcome::Send { reply, dst } = respond(&p, &r, true, Some(&binding())) else {
+            panic!()
+        };
         assert_eq!(reply.msg_type, MsgType::Ack);
         assert_eq!(reply.ciaddr, Ipv4Addr::new(10, 23, 0, 42));
         assert_eq!(dst, SocketAddrV4::new(Ipv4Addr::new(10, 23, 0, 42), 68));
         // ...but a renewal of the wrong address is a NAK, broadcast
         r.ciaddr = Ipv4Addr::new(10, 23, 0, 142);
-        let Outcome::Send { reply, dst } = respond(&p, &r, true, Some(&binding())) else { panic!() };
+        let Outcome::Send { reply, dst } = respond(&p, &r, true, Some(&binding())) else {
+            panic!()
+        };
         assert_eq!(reply.msg_type, MsgType::Nak);
         assert_eq!(dst.ip(), &Ipv4Addr::BROADCAST);
     }
@@ -282,7 +342,9 @@ mod tests {
         let p = params(Some(1370));
         let mut r = req(MsgType::Inform, &[]);
         r.ciaddr = Ipv4Addr::new(10, 23, 0, 42);
-        let Outcome::Send { reply, dst } = respond(&p, &r, true, Some(&binding())) else { panic!() };
+        let Outcome::Send { reply, dst } = respond(&p, &r, true, Some(&binding())) else {
+            panic!()
+        };
         assert_eq!(reply.msg_type, MsgType::Ack);
         assert_eq!(reply.yiaddr, Ipv4Addr::UNSPECIFIED);
         assert_eq!(opt_of(&reply, opt::LEASE_TIME), None);
@@ -294,15 +356,42 @@ mod tests {
     fn ignores_what_it_should() {
         let p = params(None);
         let b = binding();
-        assert_eq!(respond(&p, &req(MsgType::Discover, &[]), false, Some(&b)), Outcome::Ignore(Ignored::Standby));
-        assert_eq!(respond(&p, &req(MsgType::Discover, &[]), true, None), Outcome::Ignore(Ignored::UnknownMac));
-        let other = req(MsgType::Request, &[(opt::REQUESTED_IP, vec![10, 23, 0, 42]), (opt::SERVER_ID, vec![10, 23, 0, 9])]);
-        assert_eq!(respond(&p, &other, true, Some(&b)), Outcome::Ignore(Ignored::OtherServer));
-        assert_eq!(respond(&p, &req(MsgType::Release, &[]), true, Some(&b)), Outcome::Ignore(Ignored::Noted));
-        assert_eq!(respond(&p, &req(MsgType::Decline, &[]), true, Some(&b)), Outcome::Ignore(Ignored::Noted));
-        assert_eq!(respond(&p, &req(MsgType::Offer, &[]), true, Some(&b)), Outcome::Ignore(Ignored::NotAClientMessage));
+        assert_eq!(
+            respond(&p, &req(MsgType::Discover, &[]), false, Some(&b)),
+            Outcome::Ignore(Ignored::Standby)
+        );
+        assert_eq!(
+            respond(&p, &req(MsgType::Discover, &[]), true, None),
+            Outcome::Ignore(Ignored::UnknownMac)
+        );
+        let other = req(
+            MsgType::Request,
+            &[
+                (opt::REQUESTED_IP, vec![10, 23, 0, 42]),
+                (opt::SERVER_ID, vec![10, 23, 0, 9]),
+            ],
+        );
+        assert_eq!(
+            respond(&p, &other, true, Some(&b)),
+            Outcome::Ignore(Ignored::OtherServer)
+        );
+        assert_eq!(
+            respond(&p, &req(MsgType::Release, &[]), true, Some(&b)),
+            Outcome::Ignore(Ignored::Noted)
+        );
+        assert_eq!(
+            respond(&p, &req(MsgType::Decline, &[]), true, Some(&b)),
+            Outcome::Ignore(Ignored::Noted)
+        );
+        assert_eq!(
+            respond(&p, &req(MsgType::Offer, &[]), true, Some(&b)),
+            Outcome::Ignore(Ignored::NotAClientMessage)
+        );
         // standby wins over unknown: a follower never even looks
-        assert_eq!(respond(&p, &req(MsgType::Discover, &[]), false, None), Outcome::Ignore(Ignored::Standby));
+        assert_eq!(
+            respond(&p, &req(MsgType::Discover, &[]), false, None),
+            Outcome::Ignore(Ignored::Standby)
+        );
     }
 
     #[test]
@@ -310,7 +399,9 @@ mod tests {
         let p = params(None);
         let mut r = req(MsgType::Discover, &[]);
         r.giaddr = Ipv4Addr::new(10, 23, 7, 1);
-        let Outcome::Send { reply, dst } = respond(&p, &r, true, Some(&binding())) else { panic!() };
+        let Outcome::Send { reply, dst } = respond(&p, &r, true, Some(&binding())) else {
+            panic!()
+        };
         assert_eq!(reply.giaddr, Ipv4Addr::new(10, 23, 7, 1));
         assert_eq!(dst, SocketAddrV4::new(Ipv4Addr::new(10, 23, 7, 1), 67));
     }

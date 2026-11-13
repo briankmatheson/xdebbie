@@ -138,7 +138,14 @@ pub struct DhcpServer {
 
 impl DhcpServer {
     pub fn new(net: NetworkConfig, bridge: String, store: Store, mtu: MtuFn, gate: Gate) -> Self {
-        Self { net, bridge, store, mtu, gate, inner: Mutex::new(Inner::default()) }
+        Self {
+            net,
+            bridge,
+            store,
+            mtu,
+            gate,
+            inner: Mutex::new(Inner::default()),
+        }
     }
 
     pub fn status(&self) -> NetworkStatus {
@@ -170,23 +177,34 @@ impl DhcpServer {
     }
 
     fn params(&self, server_id: Ipv4Addr) -> Params {
-        Params { server_id, net: self.net.clone(), mtu: (self.mtu)(&self.bridge) }
+        Params {
+            server_id,
+            net: self.net.clone(),
+            mtu: (self.mtu)(&self.bridge),
+        }
     }
 
     async fn binding_for(&self, chaddr: &[u8; 6]) -> Option<Binding> {
         let st = self.store.read().await;
-        st.vms.values().find(|v| v.ip.is_some() && v.mac_bytes() == *chaddr).map(|v| Binding {
-            vm: v.id,
-            name: v.spec.name.clone(),
-            ip: v.ip.unwrap(),
-        })
+        st.vms
+            .values()
+            .find(|v| v.ip.is_some() && v.mac_bytes() == *chaddr)
+            .map(|v| Binding {
+                vm: v.id,
+                name: v.spec.name.clone(),
+                ip: v.ip.unwrap(),
+            })
     }
 
     fn note(&self, req: &wire::Request, b: Option<&Binding>, outcome: &str) {
         let mut g = self.inner.lock().unwrap();
         let mac = req.mac();
         if g.seen.len() >= MAX_SEEN && !g.seen.contains_key(&mac) {
-            let oldest = g.seen.values().min_by_key(|s| s.last_seen).map(|s| s.mac.clone());
+            let oldest = g
+                .seen
+                .values()
+                .min_by_key(|s| s.last_seen)
+                .map(|s| s.mac.clone());
             if let Some(k) = oldest {
                 g.seen.remove(&k);
             }
@@ -228,7 +246,9 @@ impl DhcpServer {
                     continue;
                 }
             };
-            let server_id = detect_addr(&self.bridge, &self.net.cidr).await.unwrap_or_else(|| self.net.gateway());
+            let server_id = detect_addr(&self.bridge, &self.net.cidr)
+                .await
+                .unwrap_or_else(|| self.net.gateway());
             {
                 let mut g = self.inner.lock().unwrap();
                 g.bound = true;
@@ -244,11 +264,13 @@ impl DhcpServer {
 
     async fn bind(&self) -> Result<(tokio::net::UdpSocket, u32)> {
         use socket2::{Domain, Protocol, Socket, Type};
-        let ifindex = if_index(&self.bridge).with_context(|| format!("bridge {} does not exist", self.bridge))?;
+        let ifindex = if_index(&self.bridge)
+            .with_context(|| format!("bridge {} does not exist", self.bridge))?;
         let s = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP)).context("socket")?;
         s.set_reuse_address(true).context("SO_REUSEADDR")?;
         s.set_broadcast(true).context("SO_BROADCAST")?;
-        s.bind_device(Some(self.bridge.as_bytes())).with_context(|| format!("SO_BINDTODEVICE {}", self.bridge))?;
+        s.bind_device(Some(self.bridge.as_bytes()))
+            .with_context(|| format!("SO_BINDTODEVICE {}", self.bridge))?;
         s.set_nonblocking(true)?;
         s.bind(&SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, wire::SERVER_PORT).into())
             .context("bind udp/67 (is another DHCP server — dhcpd, dnsmasq — on this bridge?)")?;
@@ -260,20 +282,21 @@ impl DhcpServer {
         let params = self.params(server_id);
         let mut buf = vec![0u8; 1500];
         loop {
-            let (n, _from) = match tokio::time::timeout(REBIND_DELAY, sock.recv_from(&mut buf)).await {
-                Ok(Ok(v)) => v,
-                Ok(Err(e)) => {
-                    warn!("dhcp: recv: {e}");
-                    return;
-                }
-                Err(_) => {
-                    if if_index(&self.bridge) != Some(ifindex) {
-                        info!(bridge = %self.bridge, "dhcp: bridge changed, rebinding");
+            let (n, _from) =
+                match tokio::time::timeout(REBIND_DELAY, sock.recv_from(&mut buf)).await {
+                    Ok(Ok(v)) => v,
+                    Ok(Err(e)) => {
+                        warn!("dhcp: recv: {e}");
                         return;
                     }
-                    continue;
-                }
-            };
+                    Err(_) => {
+                        if if_index(&self.bridge) != Some(ifindex) {
+                            info!(bridge = %self.bridge, "dhcp: bridge changed, rebinding");
+                            return;
+                        }
+                        continue;
+                    }
+                };
             let req = match wire::parse(&buf[..n]) {
                 Ok(r) => r,
                 Err(e) => {
@@ -284,7 +307,10 @@ impl DhcpServer {
             };
             let binding = self.binding_for(&req.chaddr).await;
             // MTU can change between ticks (mesh enabled later); refresh cheaply.
-            let params = Params { mtu: (self.mtu)(&self.bridge), ..params.clone() };
+            let params = Params {
+                mtu: (self.mtu)(&self.bridge),
+                ..params.clone()
+            };
             match respond::respond(&params, &req, self.gate.active(), binding.as_ref()) {
                 Outcome::Send { reply, dst } => {
                     let bytes = reply.to_bytes();

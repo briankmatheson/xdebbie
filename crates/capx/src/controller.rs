@@ -14,10 +14,10 @@ use kube::{
         finalizer::{Event, finalizer},
     },
 };
-use xdebbie_core::{Placement, VmPhase, VmSpec};
 use serde_json::{Value, json};
 use tracing::{info, warn};
 use uuid::Uuid;
+use xdebbie_core::{Placement, VmPhase, VmSpec};
 
 use crate::{crd::*, xdebbie::XDebbie8s};
 

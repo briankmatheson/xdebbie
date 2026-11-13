@@ -68,43 +68,82 @@ fn if_match(h: &HeaderMap) -> Result<Option<u64>, Response> {
         Some(v) => {
             let s = v.to_str().unwrap_or("").trim().trim_matches('"');
             s.parse::<u64>().map(Some).map_err(|_| {
-                (StatusCode::BAD_REQUEST, Json(ErrBody { error: format!("If-Match must be a generation number, got {s:?}") }))
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrBody {
+                        error: format!("If-Match must be a generation number, got {s:?}"),
+                    }),
+                )
                     .into_response()
             })
         }
     }
 }
 
-async fn put_mesh(State(a): State<MeshApi>, headers: HeaderMap, Json(spec): Json<MeshSpec>) -> Response {
+async fn put_mesh(
+    State(a): State<MeshApi>,
+    headers: HeaderMap,
+    Json(spec): Json<MeshSpec>,
+) -> Response {
     let im = match if_match(&headers) {
         Ok(v) => v,
         Err(r) => return r,
     };
     match a.mesh.put(spec, im).await {
         Ok((spec, status)) => (StatusCode::OK, Json(MeshDoc { spec, status })).into_response(),
-        Err(PutError::Validation(errors)) => (StatusCode::BAD_REQUEST, Json(ValidationBody { errors })).into_response(),
+        Err(PutError::Validation(errors)) => {
+            (StatusCode::BAD_REQUEST, Json(ValidationBody { errors })).into_response()
+        }
         Err(PutError::Conflict { current }) => (
             StatusCode::CONFLICT,
-            Json(ErrBody { error: format!("If-Match does not match current generation {current}") }),
+            Json(ErrBody {
+                error: format!("If-Match does not match current generation {current}"),
+            }),
         )
             .into_response(),
-        Err(PutError::Internal(e)) => (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrBody { error: format!("{e:#}") })).into_response(),
+        Err(PutError::Internal(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrBody {
+                error: format!("{e:#}"),
+            }),
+        )
+            .into_response(),
     }
 }
 
 async fn delete_mesh(State(a): State<MeshApi>) -> Response {
     match a.mesh.delete().await {
-        Ok((status, reenabled_from_config)) => (StatusCode::OK, Json(DeleteBody { status, reenabled_from_config })).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrBody { error: format!("{e:#}") })).into_response(),
+        Ok((status, reenabled_from_config)) => (
+            StatusCode::OK,
+            Json(DeleteBody {
+                status,
+                reenabled_from_config,
+            }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrBody {
+                error: format!("{e:#}"),
+            }),
+        )
+            .into_response(),
     }
 }
 
-async fn get_peer(State(a): State<MeshApi>, Path(b): Path<u8>) -> Result<Json<PeerStatus>, Response> {
-    a.mesh
-        .peer(b)
-        .await
-        .map(Json)
-        .ok_or_else(|| (StatusCode::NOT_FOUND, Json(ErrBody { error: format!("no peer with box {b}") })).into_response())
+async fn get_peer(
+    State(a): State<MeshApi>,
+    Path(b): Path<u8>,
+) -> Result<Json<PeerStatus>, Response> {
+    a.mesh.peer(b).await.map(Json).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrBody {
+                error: format!("no peer with box {b}"),
+            }),
+        )
+            .into_response()
+    })
 }
 
 async fn reconcile(State(a): State<MeshApi>) -> StatusCode {
@@ -131,7 +170,12 @@ mod tests {
         f.add_bridge("br-int", 1500, "52:54:00:23:00:fe");
         f.add_underlay("ul0", 1420, Ipv4Addr::new(10, 22, 0, 1));
         let dir = tempfile::tempdir().unwrap();
-        let cfg = MeshConfig { enabled: false, underlay: "ul0".into(), allow_plain_underlay: true, ..Default::default() };
+        let cfg = MeshConfig {
+            enabled: false,
+            underlay: "ul0".into(),
+            allow_plain_underlay: true,
+            ..Default::default()
+        };
         let mesh = MeshManager::new_for_test(f.clone(), dir.path().into(), Some(&cfg)).unwrap();
         let app = Router::new().nest("/v1", router(MeshApi { mesh }));
         (app, f, dir)
@@ -142,21 +186,41 @@ mod tests {
             enabled: true,
             underlay: "ul0".into(),
             allow_plain_underlay: true,
-            peers: (1..=n).map(|i| PeerSpec::new(i, Ipv4Addr::new(10, 22, i, 1))).collect(),
+            peers: (1..=n)
+                .map(|i| PeerSpec::new(i, Ipv4Addr::new(10, 22, i, 1)))
+                .collect(),
             ..Default::default()
         }
     }
 
-    async fn call(app: &Router, method: &str, path: &str, body: Option<&MeshSpec>, if_match: Option<&str>) -> (StatusCode, serde_json::Value) {
-        let mut req = Request::builder().method(method).uri(path).header(header::CONTENT_TYPE, "application/json");
+    async fn call(
+        app: &Router,
+        method: &str,
+        path: &str,
+        body: Option<&MeshSpec>,
+        if_match: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
+        let mut req = Request::builder()
+            .method(method)
+            .uri(path)
+            .header(header::CONTENT_TYPE, "application/json");
         if let Some(im) = if_match {
             req = req.header("If-Match", im);
         }
-        let req = req.body(Body::from(body.map(|b| serde_json::to_vec(b).unwrap()).unwrap_or_default())).unwrap();
+        let req = req
+            .body(Body::from(
+                body.map(|b| serde_json::to_vec(b).unwrap())
+                    .unwrap_or_default(),
+            ))
+            .unwrap();
         let resp = app.clone().oneshot(req).await.unwrap();
         let st = resp.status();
         let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-        let v = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap() };
+        let v = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap()
+        };
         (st, v)
     }
 
@@ -192,9 +256,20 @@ mod tests {
         assert_eq!(st, StatusCode::CONFLICT);
 
         f.clear_applied();
-        let (st, v) = call(&app, "PUT", "/v1/mesh", Some(&spec(2)), Some(&g.to_string())).await;
+        let (st, v) = call(
+            &app,
+            "PUT",
+            "/v1/mesh",
+            Some(&spec(2)),
+            Some(&g.to_string()),
+        )
+        .await;
         assert_eq!(st, StatusCode::OK);
-        assert_eq!(v["status"]["generation"].as_u64().unwrap(), g, "idempotent PUT keeps generation");
+        assert_eq!(
+            v["status"]["generation"].as_u64().unwrap(),
+            g,
+            "idempotent PUT keeps generation"
+        );
         assert!(f.applied().is_empty());
 
         let (st, v) = call(&app, "GET", "/v1/mesh/peers/2", None, None).await;

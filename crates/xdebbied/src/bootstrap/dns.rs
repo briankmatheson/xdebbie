@@ -56,7 +56,10 @@ mod tests {
     #[test]
     fn parses_ipv4_nameservers_only() {
         let text = "# generated\nsearch example.net\nnameserver 127.0.0.53  # stub\nnameserver 192.168.1.1\nnameserver 2600:4040::1\nnameserver 192.168.1.1\nnameserver 9.9.9.9 ; quad9\noptions edns0\n";
-        let got: Vec<String> = parse_resolv_conf(text).iter().map(|ip| ip.to_string()).collect();
+        let got: Vec<String> = parse_resolv_conf(text)
+            .iter()
+            .map(|ip| ip.to_string())
+            .collect();
         assert_eq!(got, ["192.168.1.1", "9.9.9.9"]);
         assert!(parse_resolv_conf("nameserver 127.0.0.1\n").is_empty());
         assert!(parse_resolv_conf("").is_empty());

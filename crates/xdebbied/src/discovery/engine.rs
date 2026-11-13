@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use super::{
     messages::{DiscoveryMessage, NodeCapacity},
-    multicast::{MulticastSocket, DEFAULT_MULTICAST_ADDR},
+    multicast::{DEFAULT_MULTICAST_ADDR, MulticastSocket},
     peer::{PeerInfo, PeerTable},
 };
 use crate::election::{
@@ -120,7 +120,10 @@ impl DiscoveryEngine {
             total_memory_mib: 65536, // Placeholder
             available_cpus: num_cpus::get() as f32,
             available_memory_mib: 32768, // Placeholder
-            vm_count: self.config.vm_count.load(std::sync::atomic::Ordering::Relaxed),
+            vm_count: self
+                .config
+                .vm_count
+                .load(std::sync::atomic::Ordering::Relaxed),
             control_plane_eligible: true,
         }
     }
@@ -211,7 +214,11 @@ impl DiscoveryEngine {
     }
 
     /// Process received message
-    async fn process_message(&self, msg: DiscoveryMessage, src: std::net::SocketAddr) -> Result<()> {
+    async fn process_message(
+        &self,
+        msg: DiscoveryMessage,
+        src: std::net::SocketAddr,
+    ) -> Result<()> {
         // Ignore our own messages
         if msg.node_id() == self.node_id {
             return Ok(());
@@ -232,7 +239,10 @@ impl DiscoveryEngine {
                 } else {
                     // New peer: make sure we can actually dial what it
                     // announced. Resolver runs off the runtime; see reach.rs.
-                    let candidates: Vec<_> = super::reach::source_ip(src).into_iter().chain(addrs).collect();
+                    let candidates: Vec<_> = super::reach::source_ip(src)
+                        .into_iter()
+                        .chain(addrs)
+                        .collect();
                     let api_url = super::reach::reachable_url_async(api_url, candidates).await;
                     let mut peers = self.peers.write().await;
                     if peers.get_mut(&node_id).is_some() {

@@ -36,16 +36,13 @@ pub enum FdbMode {
     Learn,
 }
 
-
 /// `"auto"` or a fixed number. Serialised as a string or an integer.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum MtuSpec {
     #[default]
     Auto,
     Fixed(u16),
 }
-
 
 impl Serialize for MtuSpec {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
@@ -69,10 +66,9 @@ impl<'de> Deserialize<'de> for MtuSpec {
                 .map(MtuSpec::Fixed)
                 .map_err(|_| serde::de::Error::custom("mtu out of range")),
             Raw::Str(s) if s.eq_ignore_ascii_case("auto") => Ok(MtuSpec::Auto),
-            Raw::Str(s) => s
-                .parse::<u16>()
-                .map(MtuSpec::Fixed)
-                .map_err(|_| serde::de::Error::custom(format!("mtu must be \"auto\" or an integer, got {s:?}"))),
+            Raw::Str(s) => s.parse::<u16>().map(MtuSpec::Fixed).map_err(|_| {
+                serde::de::Error::custom(format!("mtu must be \"auto\" or an integer, got {s:?}"))
+            }),
         }
     }
 }
@@ -184,7 +180,13 @@ pub struct WireguardSpec {
 
 impl Default for WireguardSpec {
     fn default() -> Self {
-        Self { listen_port: d_wg_port(), address: None, prefix: d_wg_prefix(), mtu: d_wg_mtu(), keepalive: d_wg_keepalive() }
+        Self {
+            listen_port: d_wg_port(),
+            address: None,
+            prefix: d_wg_prefix(),
+            mtu: d_wg_mtu(),
+            keepalive: d_wg_keepalive(),
+        }
     }
 }
 
@@ -271,7 +273,9 @@ impl MeshSpec {
     }
     /// Local WireGuard address (`wireguard.address` or `10.22.<box>.1`).
     pub fn wg_address(&self) -> Option<Ipv4Addr> {
-        self.wireguard.as_ref().map(|w| w.address.unwrap_or_else(|| underlay_addr(self.box_id)))
+        self.wireguard
+            .as_ref()
+            .map(|w| w.address.unwrap_or_else(|| underlay_addr(self.box_id)))
     }
     /// The single v1 network. Validation guarantees it exists; callers that
     /// run before validation get the default.
@@ -300,7 +304,13 @@ impl MeshSpec {
 #[cfg(test)]
 impl PeerSpec {
     pub fn new(box_id: u8, remote: Ipv4Addr) -> Self {
-        Self { box_id, remote, probe: None, pubkey: None, endpoint: None }
+        Self {
+            box_id,
+            remote,
+            probe: None,
+            pubkey: None,
+            endpoint: None,
+        }
     }
 }
 
@@ -351,7 +361,9 @@ pub fn derived_macs(box_id: u8) -> Vec<String> {
 
 /// `mesh_mtu = mtu(underlay) − 50 − option_bytes` (option_bytes = 0 in v1).
 pub fn auto_mtu(underlay_mtu: u32) -> u16 {
-    underlay_mtu.saturating_sub(GENEVE_OVERHEAD as u32).min(u16::MAX as u32) as u16
+    underlay_mtu
+        .saturating_sub(GENEVE_OVERHEAD as u32)
+        .min(u16::MAX as u32) as u16
 }
 
 // ---------- status ----------
@@ -597,7 +609,10 @@ impl MeshConfig {
                 up_after: self.probe_up_after,
             },
             // Managed WireGuard underlay unless the operator brings their own.
-            wireguard: self.wireguard.clone().or_else(|| (!self.allow_plain_underlay).then(WireguardSpec::default)),
+            wireguard: self
+                .wireguard
+                .clone()
+                .or_else(|| (!self.allow_plain_underlay).then(WireguardSpec::default)),
             peers: self.peers.clone(),
         }
         .normalize()
@@ -652,7 +667,10 @@ mod tests {
             .unwrap();
         assert_eq!(t, MtuSpec::Auto);
         assert_eq!(serde_json::to_string(&MtuSpec::Auto).unwrap(), "\"auto\"");
-        assert_eq!(serde_json::to_string(&MtuSpec::Fixed(9000)).unwrap(), "9000");
+        assert_eq!(
+            serde_json::to_string(&MtuSpec::Fixed(9000)).unwrap(),
+            "9000"
+        );
     }
 
     #[test]
@@ -679,7 +697,10 @@ probe = "10.23.1.1"
         assert_eq!(s.vni(), 23);
         assert_eq!(s.fdb, FdbMode::Learn);
         assert_eq!(s.peers.len(), 1);
-        assert_eq!(s.probe_addr(&s.peers[0]), "10.23.1.1".parse::<Ipv4Addr>().unwrap());
+        assert_eq!(
+            s.probe_addr(&s.peers[0]),
+            "10.23.1.1".parse::<Ipv4Addr>().unwrap()
+        );
     }
 
     #[test]
@@ -701,7 +722,10 @@ probe = "10.23.1.1"
         assert_eq!(s.peers[0].remote, Ipv4Addr::new(10, 22, 1, 1));
         assert_eq!(s.peers[1].remote, Ipv4Addr::new(192, 0, 2, 9));
         let w = s.wireguard.as_ref().unwrap();
-        assert_eq!((w.listen_port, w.prefix, w.mtu, w.keepalive), (51820, 16, 1420, 25));
+        assert_eq!(
+            (w.listen_port, w.prefix, w.mtu, w.keepalive),
+            (51820, 16, 1420, 25)
+        );
         assert_eq!(s.wg_address(), Some(Ipv4Addr::new(10, 22, 0, 1)));
         let back: MeshSpec = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(back, s);
@@ -709,7 +733,10 @@ probe = "10.23.1.1"
         let s2: MeshSpec = serde_json::from_str(r#"{"peers":[{"box":1}]}"#).unwrap();
         assert!(s2.normalize().peers[0].remote.is_unspecified());
         // TOML shape
-        let t: MeshConfig = toml::from_str("box = 3\n[wireguard]\nlisten_port = 51821\n[[peers]]\nbox = 1\npubkey = \"k\"\n").unwrap();
+        let t: MeshConfig = toml::from_str(
+            "box = 3\n[wireguard]\nlisten_port = 51821\n[[peers]]\nbox = 1\npubkey = \"k\"\n",
+        )
+        .unwrap();
         let sp = t.to_spec();
         assert_eq!(sp.wireguard.unwrap().listen_port, 51821);
         assert_eq!(sp.peers[0].remote, Ipv4Addr::new(10, 22, 1, 1));
