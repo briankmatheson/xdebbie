@@ -435,7 +435,8 @@ impl Api {
                         });
                     }
                     Ok((code, v)) if code.is_success() => {
-                        let st: LeaderStatus = serde_json::from_value(v).context("parsing /v1/leader")?;
+                        let st: LeaderStatus =
+                            serde_json::from_value(v).context("parsing /v1/leader")?;
                         if !follow_leader {
                             return Ok(st);
                         }
@@ -461,7 +462,11 @@ impl Api {
                 }
             }
             if !retry {
-                let what = if follow_leader { "no leader reachable" } else { "no xdebbied reachable" };
+                let what = if follow_leader {
+                    "no leader reachable"
+                } else {
+                    "no xdebbied reachable"
+                };
                 bail!("{what}:\n  {}", errs.join("\n  "));
             }
             std::thread::sleep(std::time::Duration::from_secs(1));
@@ -765,7 +770,9 @@ fn cmd_version(api: &mut Api, cli: &Cli) -> Result<()> {
 
     // Query the box at --url directly (no leader redirect).
     let local_st = api.find_box(&cli.url).ok();
-    let local_ver: Option<Value> = local_st.as_ref().and_then(|_| api.call(Method::GET, "/version", None).ok());
+    let local_ver: Option<Value> = local_st
+        .as_ref()
+        .and_then(|_| api.call(Method::GET, "/version", None).ok());
     let local_url = api.url.clone();
 
     // If the local box is a follower, also query the leader directly.
@@ -797,7 +804,10 @@ fn cmd_version(api: &mut Api, cli: &Cli) -> Result<()> {
         return Ok(());
     }
 
-    println!("{:<10} {:<14} {:<20} {}", "component", "version", "hostname", "url");
+    println!(
+        "{:<10} {:<14} {:<20} {}",
+        "component", "version", "hostname", "url"
+    );
     println!("{:-<10} {:-<14} {:-<20} {:-<36}", "", "", "", "");
     println!("{:<10} {:<14} {:<20}", "xdctl", xdctl_ver, "(client)");
 
@@ -852,7 +862,11 @@ fn main() -> Result<()> {
     }
     // `/v1/mesh` is this box's own state; everything else is cluster state
     // the leader owns.
-    let asked = if matches!(cli.cmd, Cmd::Mesh(_)) { api.find_box(&cli.url)? } else { api.find_leader(&cli.url)? };
+    let asked = if matches!(cli.cmd, Cmd::Mesh(_)) {
+        api.find_box(&cli.url)?
+    } else {
+        api.find_leader(&cli.url)?
+    };
     let out = |v: Value| -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&v)?);
         Ok(())
