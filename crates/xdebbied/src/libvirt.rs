@@ -569,6 +569,26 @@ pub fn network_config(vm: &Vm, mtu: Option<u16>) -> String {
 
 /// `overlay_mtu`: when set, `<mtu size=.../>` goes on the interface so
 /// virtio-net hands the mesh MTU to the guest.
+/// Spare pcie-root-ports in every domain. On q35 each hot-plugged PCI device
+/// (an abe volume attached for abe-csi) needs a free root port, and libvirt
+/// only adds enough for the devices in the definition plus one or two, so
+/// the third volume failed with "No more available PCI slots". Root ports
+/// cannot be hot-plugged themselves, so they have to be there from the start.
+pub const HOTPLUG_ROOT_PORTS: usize = 16;
+
+/// The pcie-root plus HOTPLUG_ROOT_PORTS root ports, indexed explicitly (an
+/// unindexed first controller would take index 0, which must be pcie-root).
+/// libvirt appends whatever else the defined devices need.
+fn root_ports_xml() -> String {
+    let mut s = String::from("    <controller type='pci' index='0' model='pcie-root'/>\n");
+    for i in 1..=HOTPLUG_ROOT_PORTS {
+        s.push_str(&format!(
+            "    <controller type='pci' index='{i}' model='pcie-root-port'/>\n"
+        ));
+    }
+    s
+}
+
 pub fn domain_xml(
     host: &Host,
     vm: &Vm,
@@ -674,7 +694,7 @@ pub fn domain_xml(
   <clock offset='utc'/>
   <on_poweroff>destroy</on_poweroff><on_reboot>restart</on_reboot><on_crash>restart</on_crash>
   <devices>
-{root_disk}{data_disk}<disk type='volume' device='cdrom'>
+{root_ports}{root_disk}{data_disk}<disk type='volume' device='cdrom'>
       <driver name='qemu' type='raw'/>
       <source pool='{pool}' volume='{seed}'/>
       <target dev='sda' bus='sata'/><readonly/>
@@ -700,6 +720,7 @@ pub fn domain_xml(
         mem = vm.spec.memory_mib,
         cpu = vm.spec.vcpus,
         pool = esc(&host.storage_pool),
+        root_ports = root_ports_xml(),
         root_disk = root_disk_xml,
         data_disk = data_disk_xml,
         seed = esc(&Virsh::seed_vol(vm)),
@@ -1343,6 +1364,10 @@ mod tests {
             mk(DiskRole::Data, "fedcba9876543210fedcba9876543210"),
         ];
         let xml = domain_xml(&host, &vm, Some("vg-that-must-be-ignored"), None);
+        assert_eq!(
+            xml.matches("model='pcie-root-port'").count(),
+            HOTPLUG_ROOT_PORTS
+        );
         assert!(xml.contains(
             "<source dev='/dev/disk/by-id/nvme-uuid.01234567-89ab-cdef-0123-456789abcdef'/>"
         ));

@@ -5,6 +5,16 @@ All notable changes to XDebbie will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.4] - 2026-11-13
+
+### Fixed
+- Domains are defined with 16 spare pcie-root-ports. On q35 every hot-plugged
+  PCI device needs a free root port and libvirt only adds one or two beyond
+  the defined devices, so attaching a third abe volume to a VM (abe-csi)
+  failed with "No more available PCI slots". Root ports cannot be
+  hot-plugged, so VMs defined before this need `virsh define` with the extra
+  controllers and a restart to get them.
+
 ## [0.16.3] - 2026-11-13
 
 ### Fixed
