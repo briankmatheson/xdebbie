@@ -176,6 +176,16 @@ pub fn join(o: &JoinOptions<'_>) -> Result<Joined> {
     let mut e = match resumed {
         Some(e) => e,
         None => {
+            // Never silently re-key: a cert the CA already issued for the
+            // key here would become an orphan needing a second approval.
+            if !o.force && o.paths.server_key.exists() {
+                bail!(
+                    "{} exists but no enrolment to resume (state {} unreadable, different CA, or denied); \
+                     pass --force to start over with a new key",
+                    o.paths.server_key.display(),
+                    state_path(o.state_dir).display()
+                );
+            }
             let csr = api_tls::make_csr(o.hostname)?;
             crate::token::write_private(&o.paths.server_key, &csr.key_pem)
                 .with_context(|| format!("writing {}", o.paths.server_key.display()))?;

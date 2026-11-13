@@ -40,7 +40,7 @@ fn package_installed(pkg: &str) -> bool {
 }
 
 /// Check if running as root
-fn is_root() -> bool {
+pub fn is_root() -> bool {
     unsafe { libc::geteuid() == 0 }
 }
 

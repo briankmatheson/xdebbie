@@ -15,7 +15,7 @@ pub mod libvirt_setup;
 pub mod tls_certs;
 pub mod token;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
@@ -179,6 +179,9 @@ fn chown_config_dir(cfg_dir: &Path) {
 /// Perform full bootstrap process
 pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     info!("=== xdebbied Bootstrap ===");
+    if !deps::is_root() {
+        bail!("bootstrap writes /etc/xdebbie and talks to libvirt; run it as root: sudo xdebbied bootstrap ...");
+    }
 
     // Step 0: Ensure the xdebbie system group exists before writing any files
     // so that write_group_readable() gets the right gid on the first run.
