@@ -5,6 +5,16 @@ All notable changes to XDebbie will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.2] - 2026-11-12
+
+### Added
+- Discovery `ANNOUNCE` carries the sender's addresses (`addrs`). When a
+  peer's `api_url` hostname does not resolve locally, the daemon dials it by
+  the datagram's source address (or an announced one) instead; API
+  certificates already list every local address as a SAN. `xdctl leader`
+  shows the address form when this happens. The bootstrap discovery listen
+  does the same for the join URL it offers. Pre-0.14.2 daemons interoperate.
+
 ## [0.14.1] - 2026-11-12
 
 ### Added
