@@ -5,7 +5,19 @@ All notable changes to XDebbie will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.16.0] - unreleased
+## [0.16.1] - 2026-11-13
+
+### Changed
+- `xdctl host ls`: the NAME column widens to the longest host name
+  (FQDNs no longer push the row out from under the headers); the VCPU
+  and MEM GiB headers sit over their `used/total` cells.
+- The leader's `abe utilization failed` / inventory warnings log the
+  whole error chain (`error=abe utilization on gram…: tls: …` rather
+  than just the outer context).
+- `tests/abe/set-host-abe.sh <host> <url>` rewrites a host record's `abe`
+  URL on the leader (GET, edit, PUT with the `XDEBBIE_*` environment).
+
+## [0.16.0] - 2026-11-13
 
 For ABE 0.5.0 (`abe-block-exporter`), whose API is now HTTPS with mutual
 TLS and whose nvmet ports are fenced to the box that asked for them. Spec:
@@ -41,7 +53,7 @@ TLS and whose nvmet ports are fenced to the box that asked for them. Spec:
   refresh — no new call sites).
 - Debian revision back to 1 for 0.16.0.
 
-## [0.15.0] - unreleased
+## [0.15.0] - 2026-11-12
 
 ### Added
 - ABE 0.4.0 client. `GET /version` is probed once a minute per server;
