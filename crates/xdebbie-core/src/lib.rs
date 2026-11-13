@@ -8,4 +8,6 @@ pub mod model;
 pub mod scheduler;
 
 pub use model::*;
-pub use scheduler::{PlacementError, PlacementPolicy, Scored, place};
+pub use scheduler::{
+    PlacementError, PlacementPolicy, Scored, abe_pending, abe_request, abe_roles, place,
+};

@@ -2,7 +2,10 @@
 //! on each hypervisor (`[[hosts]].abe`), attached on the host that runs the
 //! VM. Two halves:
 //!
-//! * [`Client`] — the tiny ABE HTTP API (`/configure`, `/id/<id>`, `/volumes`).
+//! * [`Client`] — the ABE HTTP API: `/configure` (plain, `?name=` for
+//!   idempotent creates, `?base=` for per-image base volumes), `/id/<id>`,
+//!   `/seal/<id>`, `/clone/<id>`, `/utilization` and `/version` (which
+//!   tells us whether the ABE predates 0.4.0 and has none of the extras).
 //! * [`Nvme`]  — the host side: `nvme connect`/`disconnect`, waiting for the
 //!   stable `/dev/disk/by-id/nvme-uuid.<id>` link, filling a root disk from
 //!   the base image with `qemu-img`.
@@ -14,9 +17,44 @@
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
-use std::{path::Path, time::Duration};
+use std::{
+    collections::{BTreeSet, HashMap, HashSet},
+    path::Path,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 use tokio::process::Command;
-use xdebbie_core::Disk;
+use xdebbie_core::{AbeCapacity, Disk, DiskRole};
+
+/// How long a `/version` answer is trusted before asking again.
+const FEATURE_TTL: Duration = Duration::from_secs(60);
+
+/// A non-2xx reply from ABE, kept in the error chain so callers can map
+/// 404 / 409 / 503 / 507 to their own status codes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AbeHttpError {
+    pub status: u16,
+    pub body: String,
+}
+
+impl std::fmt::Display for AbeHttpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let msg = serde_json::from_str::<serde_json::Value>(&self.body)
+            .ok()
+            .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_owned))
+            .unwrap_or_else(|| self.body.clone());
+        write!(f, "{} {}", self.status, msg.trim())
+    }
+}
+
+impl std::error::Error for AbeHttpError {}
+
+/// The HTTP status behind an error from [`Client`], if it was one.
+pub fn http_status(e: &anyhow::Error) -> Option<u16> {
+    e.chain()
+        .find_map(|c| c.downcast_ref::<AbeHttpError>())
+        .map(|h| h.status)
+}
 
 /// Reply of `GET /configure` and `GET /id/<id>`.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -30,14 +68,128 @@ pub struct Export {
     /// Size ABE actually made (abe >= 0.3.2).
     #[serde(default)]
     pub bytes: Option<u64>,
-    /// fio characterization, when ABE ran one (abe >= 0.3.1).
-    #[serde(default)]
+    /// fio characterization, when ABE ran one (abe >= 0.3.1). Lenient:
+    /// a `perf` from another abe version reads as `None`.
+    #[serde(default, deserialize_with = "lenient_perf")]
     pub perf: Option<xdebbie_core::VolumePerf>,
+    /// `?name=`/`?base=` matched a volume that already existed (abe >= 0.4.0).
+    #[serde(default)]
+    pub existing: bool,
+}
+
+fn lenient_perf<'de, D>(d: D) -> Result<Option<xdebbie_core::VolumePerf>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<serde_json::Value>::deserialize(d)?;
+    Ok(v.and_then(|v| serde_json::from_value(v).ok()))
+}
+
+/// Reply of `GET /configure?base=<image>`: the export plus what makes it a
+/// base. A sealed base comes back with an empty `port`.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct BaseVol {
+    #[serde(flatten)]
+    pub export: Export,
+    pub base: String,
+    #[serde(default)]
+    pub sealed: bool,
+    /// Size of the base (`export.bytes` is filled from this too).
+    #[serde(default)]
+    pub bytes: u64,
+}
+
+impl BaseVol {
+    #[cfg(test)]
+    pub fn id(&self) -> &str {
+        &self.export.id
+    }
+}
+
+/// `GET /version`: what an ABE can do.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct AbeFeatures {
+    pub version: String,
+    #[serde(default)]
+    pub features: BTreeSet<String>,
+}
+
+/// `GET /utilization`, the parts capacity accounting needs. Unknown fields
+/// are ignored, so newer ABEs keep parsing.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct AbeUtilization {
+    #[serde(default)]
+    pub vg: String,
+    #[serde(default)]
+    pub thin_pool: Option<String>,
+    pub bytes: u64,
+    #[serde(default)]
+    pub used_bytes: u64,
+    #[serde(default)]
+    pub free_bytes: u64,
+    #[serde(default)]
+    pub data_percent: f64,
+    #[serde(default)]
+    pub metadata_percent: Option<f64>,
+    #[serde(default)]
+    pub provisioned_bytes: u64,
+    #[serde(default)]
+    pub volumes: usize,
+}
+
+impl AbeUtilization {
+    pub fn capacity(&self, seen: chrono::DateTime<chrono::Utc>) -> AbeCapacity {
+        AbeCapacity {
+            thin: self.thin_pool.is_some(),
+            bytes: self.bytes,
+            used_bytes: self.used_bytes,
+            free_bytes: self.free_bytes,
+            provisioned_bytes: self.provisioned_bytes,
+            data_percent: self.data_percent,
+            metadata_percent: self.metadata_percent,
+            seen,
+        }
+    }
+}
+
+/// Does `s` satisfy ABE's tag-value charset (`[A-Za-z0-9._+:-]{1,128}`)?
+pub fn valid_abe_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 128
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._+:-".contains(&b))
+}
+
+/// The idempotency name sent to ABE for a standalone volume: `vol-<name>`
+/// when that is a valid tag value, else `vol-<sha256(name)[..32]>`.
+pub fn volume_abe_name(name: &str) -> String {
+    let plain = format!("vol-{name}");
+    if valid_abe_name(&plain) {
+        return plain;
+    }
+    use sha2::Digest;
+    let h = hex::encode(sha2::Sha256::digest(name.as_bytes()));
+    format!("vol-{}", &h[..32])
+}
+
+/// The idempotency name for a VM disk: `vm-<uuid>-root` / `vm-<uuid>-data`.
+pub fn vm_disk_abe_name(vm: uuid::Uuid, role: DiskRole) -> String {
+    let r = match role {
+        DiskRole::Root => "root",
+        DiskRole::Data => "data",
+        DiskRole::Volume => "volume",
+    };
+    format!("vm-{vm}-{r}")
 }
 
 #[derive(Clone)]
 pub struct Client {
     http: reqwest::Client,
+    /// `/version` per ABE url, with when it was asked. `None`: a pre-0.4.0
+    /// ABE (404).
+    features: Arc<Mutex<HashMap<String, (Instant, Option<AbeFeatures>)>>>,
+    /// ABEs we already warned about being old, so the log says it once.
+    legacy_logged: Arc<Mutex<HashSet<String>>>,
 }
 
 impl Default for Client {
@@ -50,9 +202,12 @@ impl Client {
     pub fn new() -> Self {
         Self {
             http: reqwest::Client::builder()
-                .timeout(Duration::from_secs(60))
+                // a create waits for fio plus the trim
+                .timeout(Duration::from_secs(120))
                 .build()
                 .expect("reqwest client"),
+            features: Arc::default(),
+            legacy_logged: Arc::default(),
         }
     }
 
@@ -60,9 +215,15 @@ impl Client {
         format!("{}{}", base.trim_end_matches('/'), path)
     }
 
-    /// Create a blank volume of `bytes` and export it.
-    pub async fn create(&self, base: &str, bytes: u64) -> Result<Export> {
-        let url = Self::url(base, &format!("/configure?bytes={bytes}&raw=true"));
+    /// GET and parse a JSON reply; a non-2xx status becomes an
+    /// [`AbeHttpError`] in the chain.
+    async fn get_json<T: serde::de::DeserializeOwned>(
+        &self,
+        base: &str,
+        path: &str,
+        what: &str,
+    ) -> Result<T> {
+        let url = Self::url(base, path);
         let r = self
             .http
             .get(&url)
@@ -72,17 +233,158 @@ impl Client {
         let st = r.status();
         let body = r.text().await.unwrap_or_default();
         if !st.is_success() {
-            bail!("abe {base}: configure returned {st}: {body}");
+            return Err(AbeHttpError {
+                status: st.as_u16(),
+                body,
+            })
+            .with_context(|| format!("abe {base}: {what}"));
         }
-        let e: Export =
-            serde_json::from_str(&body).with_context(|| format!("abe reply: {body}"))?;
+        serde_json::from_str(&body).with_context(|| format!("abe {base}: {what} reply: {body}"))
+    }
+
+    fn check_traddr(base: &str, e: &Export) -> Result<()> {
         if e.traddr.is_empty() || e.traddr == "0.0.0.0" {
             bail!(
                 "abe {base} advertises traddr {:?}; set ABE_ADVERTISE in /etc/default/abe",
                 e.traddr
             );
         }
+        Ok(())
+    }
+
+    /// Create a blank volume of `bytes` and export it (any abe version).
+    pub async fn create(&self, base: &str, bytes: u64) -> Result<Export> {
+        let e: Export = self
+            .get_json(
+                base,
+                &format!("/configure?bytes={bytes}&raw=true"),
+                "configure",
+            )
+            .await?;
+        Self::check_traddr(base, &e)?;
         Ok(e)
+    }
+
+    /// Idempotent create (abe >= 0.4.0): the same `name` returns the same
+    /// volume with `existing: true` instead of making another.
+    pub async fn create_named(&self, base: &str, bytes: u64, name: &str) -> Result<Export> {
+        let e: Export = self
+            .get_json(
+                base,
+                &format!("/configure?bytes={bytes}&raw=true&name={name}"),
+                "configure",
+            )
+            .await?;
+        Self::check_traddr(base, &e)?;
+        Ok(e)
+    }
+
+    /// (Re-)export an existing volume: the port and address it is on now.
+    pub async fn export(&self, base: &str, id: &str) -> Result<Export> {
+        let e: Export = self.get_json(base, &format!("/id/{id}"), "export").await?;
+        Self::check_traddr(base, &e)?;
+        Ok(e)
+    }
+
+    /// The base volume for `image` (made raw, no fio, `bytes` big), the
+    /// same one every time. Exported while unsealed; `port` empty once
+    /// sealed.
+    pub async fn base(&self, base: &str, image: &str, bytes: u64) -> Result<BaseVol> {
+        let mut b: BaseVol = self
+            .get_json(
+                base,
+                &format!("/configure?base={image}&bytes={bytes}"),
+                "base",
+            )
+            .await?;
+        if b.export.bytes.is_none() && b.bytes > 0 {
+            b.export.bytes = Some(b.bytes);
+        }
+        if let Some(n) = b.export.bytes
+            && b.bytes == 0
+        {
+            b.bytes = n;
+        }
+        if !b.sealed {
+            Self::check_traddr(base, &b.export)?;
+        }
+        Ok(b)
+    }
+
+    /// Freeze a filled base: unexported, clone-only. Idempotent.
+    pub async fn seal(&self, base: &str, id: &str) -> Result<()> {
+        let _: serde_json::Value = self.get_json(base, &format!("/seal/{id}"), "seal").await?;
+        Ok(())
+    }
+
+    /// A thin snapshot of `origin`, `bytes` big, idempotent on `name`.
+    pub async fn clone(&self, base: &str, origin: &str, bytes: u64, name: &str) -> Result<Export> {
+        let e: Export = self
+            .get_json(
+                base,
+                &format!("/clone/{origin}?bytes={bytes}&name={name}"),
+                "clone",
+            )
+            .await?;
+        Self::check_traddr(base, &e)?;
+        Ok(e)
+    }
+
+    /// Pool / VG usage.
+    pub async fn utilization(&self, base: &str) -> Result<AbeUtilization> {
+        self.get_json(base, "/utilization", "utilization").await
+    }
+
+    /// `GET /version`; `Ok(None)` for an ABE before 0.4.0 (404).
+    pub async fn version(&self, base: &str) -> Result<Option<AbeFeatures>> {
+        match self
+            .get_json::<AbeFeatures>(base, "/version", "version")
+            .await
+        {
+            Ok(f) => Ok(Some(f)),
+            Err(e) if http_status(&e) == Some(404) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// `version()` through a 60 s cache. Logs once per ABE that predates
+    /// 0.4.0.
+    pub async fn features(&self, base: &str) -> Result<Option<AbeFeatures>> {
+        if let Some((at, f)) = self
+            .features
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(base)
+            && at.elapsed() < FEATURE_TTL
+        {
+            return Ok(f.clone());
+        }
+        let f = self.version(base).await?;
+        if f.is_none()
+            && self
+                .legacy_logged
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(base.to_string())
+        {
+            tracing::warn!(
+                "abe at {base} predates 0.4.0: no thin root clones, no name idempotency"
+            );
+        }
+        self.features
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(base.to_string(), (Instant::now(), f.clone()));
+        Ok(f)
+    }
+
+    /// Does the ABE at `base` advertise `feature`? `false` for a pre-0.4.0
+    /// ABE; an error only if it cannot be asked at all.
+    pub async fn has(&self, base: &str, feature: &str) -> Result<bool> {
+        Ok(self
+            .features(base)
+            .await?
+            .is_some_and(|f| f.features.contains(feature)))
     }
 
     /// Unexport and remove. A volume that is already gone is not an error.
@@ -190,6 +492,25 @@ impl Nvme {
         Ok(())
     }
 
+    /// `nvme disconnect` whether or not sysfs shows a controller: drops
+    /// one stuck reconnecting to a port the exporter no longer serves,
+    /// which `ctrl-loss-tmo -1` would otherwise keep retrying for ever.
+    pub async fn disconnect_force(&self, nqn: &str) -> Result<()> {
+        let out = Command::new(&self.nvme_bin)
+            .args(["disconnect", "-n", nqn])
+            .output()
+            .await
+            .with_context(|| format!("running {}", self.nvme_bin))?;
+        if !out.status.success() && self.connected(nqn) {
+            bail!(
+                "nvme disconnect {nqn}: {} {}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(())
+    }
+
     /// Wait for udev to create the by-id link after a connect.
     pub async fn wait_dev(&self, d: &Disk, timeout: Duration) -> Result<String> {
         let path = d.dev_path();
@@ -230,6 +551,57 @@ impl Nvme {
     }
 }
 
+impl Nvme {
+    /// The guest-visible size of an image (`qemu-img info --output=json`
+    /// `virtual-size`), rounded up to a whole MiB.
+    pub async fn virtual_size(&self, src: &str, src_format: &str) -> Result<u64> {
+        let out = Command::new(&self.qemu_img_bin)
+            .args(["info", "-f", src_format, "--output=json", src])
+            .output()
+            .await
+            .with_context(|| format!("running {}", self.qemu_img_bin))?;
+        if !out.status.success() {
+            bail!(
+                "qemu-img info {src}: {} {}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout)
+            .with_context(|| format!("qemu-img info {src}: not JSON"))?;
+        let n = v
+            .get("virtual-size")
+            .and_then(|n| n.as_u64())
+            .ok_or_else(|| anyhow!("qemu-img info {src}: no virtual-size"))?;
+        Ok(round_up_mib(n))
+    }
+
+    /// Push everything written to `dev` out of the page cache
+    /// (`blockdev --flushbufs`) before the exporter stops serving it.
+    /// Best effort: `populate` already writes with `-t none`.
+    pub async fn flush(&self, dev: &str) {
+        match Command::new("blockdev")
+            .args(["--flushbufs", dev])
+            .output()
+            .await
+        {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => tracing::warn!(
+                "blockdev --flushbufs {dev}: {} {}",
+                o.status,
+                String::from_utf8_lossy(&o.stderr).trim()
+            ),
+            Err(e) => tracing::warn!("blockdev --flushbufs {dev}: {e}"),
+        }
+    }
+}
+
+/// Round up to a whole MiB (what ABE does with sizes too).
+pub fn round_up_mib(n: u64) -> u64 {
+    const MIB: u64 = 1 << 20;
+    n.div_ceil(MIB) * MIB
+}
+
 /// Scan `<sys_class>/nvme*/subsysnqn` for `nqn`.
 fn connected_in(sys_class: &Path, nqn: &str) -> bool {
     let Ok(rd) = std::fs::read_dir(sys_class) else {
@@ -258,7 +630,6 @@ fn _assert_send() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xdebbie_core::DiskRole;
 
     fn disk(id: &str) -> Disk {
         Disk {
@@ -269,6 +640,7 @@ mod tests {
             id: id.into(),
             bytes: 1,
             populated: false,
+            origin: None,
         }
     }
 
@@ -365,5 +737,195 @@ mod tests {
         let old: Export =
             serde_json::from_str(r#"{"message":"","id":"abc","port":"44001"}"#).unwrap();
         assert_eq!(old.traddr, "");
+    }
+
+    #[test]
+    fn export_reply_carries_existing_and_tolerates_a_foreign_perf() {
+        let e: Export = serde_json::from_str(
+            r#"{"id":"abc","port":"44001","traddr":"10.22.1.1","nqn":"abc","bytes":4194304,"existing":true,"perf":{"bs":"4M","seconds":5.0}}"#,
+        )
+        .unwrap();
+        assert!(e.existing);
+        assert_eq!(e.perf, None);
+        let b: BaseVol = serde_json::from_str(
+            r#"{"message":"","id":"b1","port":"","traddr":"10.22.1.1","nqn":"b1","bytes":1073741824,"existing":true,"base":"debian-13","sealed":true}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            (b.id(), b.base.as_str(), b.sealed, b.bytes),
+            ("b1", "debian-13", true, 1 << 30)
+        );
+    }
+
+    #[test]
+    fn abe_names_follow_the_tag_charset() {
+        assert_eq!(volume_abe_name("pvc-1b2c"), "vol-pvc-1b2c");
+        let odd = volume_abe_name("has space/and#hash");
+        assert!(
+            odd.starts_with("vol-") && odd.len() == 4 + 32 && valid_abe_name(&odd),
+            "{odd}"
+        );
+        assert_eq!(volume_abe_name("has space/and#hash"), odd, "deterministic");
+        let long = "x".repeat(200);
+        assert!(valid_abe_name(&volume_abe_name(&long)));
+        let id = uuid::Uuid::nil();
+        assert_eq!(
+            vm_disk_abe_name(id, DiskRole::Root),
+            "vm-00000000-0000-0000-0000-000000000000-root"
+        );
+        assert!(valid_abe_name(&vm_disk_abe_name(id, DiskRole::Data)));
+        assert!(!valid_abe_name(""));
+        assert!(!valid_abe_name("a b"));
+        assert_eq!(round_up_mib(1), 1 << 20);
+        assert_eq!(round_up_mib(2 << 20), 2 << 20);
+        assert_eq!(round_up_mib((2 << 20) + 1), 3 << 20);
+    }
+
+    /// A few routes of abe 0.4.0 and of a pre-0.4.0 abe, served by axum.
+    async fn fake_abe(legacy: bool) -> String {
+        use axum::{Router, extract::Path, extract::Query, routing::get};
+        use std::collections::HashMap;
+        let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+        let c = calls.clone();
+        let configure = move |Query(q): Query<HashMap<String, String>>| {
+            let c = c.clone();
+            async move {
+                c.lock().unwrap().push(format!("configure {q:?}"));
+                let existing = q.get("name").is_some_and(|n| n == "vol-again");
+                if let Some(img) = q.get("base") {
+                    return axum::Json(serde_json::json!({
+                        "message": "", "id": "b1", "port": if img == "sealed" { "" } else { "44009" },
+                        "traddr": "10.22.1.1", "nqn": "b1", "bytes": 1073741824u64,
+                        "existing": true, "base": img, "sealed": img == "sealed"
+                    }));
+                }
+                axum::Json(serde_json::json!({
+                    "message": "", "id": "v1", "port": "44001", "traddr": "10.22.1.1", "nqn": "v1",
+                    "bytes": q.get("bytes").and_then(|b| b.parse::<u64>().ok()).unwrap_or(0), "existing": existing
+                }))
+            }
+        };
+        let mut r = Router::new()
+            .route("/configure", get(configure))
+            .route(
+                "/id/{id}",
+                get(|Path(id): Path<String>| async move {
+                    if id == "gone" {
+                        return (axum::http::StatusCode::NOT_FOUND, axum::Json(serde_json::json!({"error": "no volume gone"})));
+                    }
+                    if id == "sealed" {
+                        return (axum::http::StatusCode::CONFLICT, axum::Json(serde_json::json!({"error": "sealed is a sealed base; clone it"})));
+                    }
+                    (axum::http::StatusCode::OK, axum::Json(serde_json::json!({"message": "", "id": id, "port": "44002", "traddr": "10.22.1.1", "nqn": "x"})))
+                }),
+            )
+            .route(
+                "/utilization",
+                get(|| async {
+                    axum::Json(serde_json::json!({
+                        "vg": "vg", "thin_pool": "pool", "bytes": 1000u64, "used_bytes": 100u64, "free_bytes": 900u64,
+                        "data_percent": 10.0, "metadata_percent": 2.5, "metadata_bytes": 1u64, "provisioned_bytes": 600u64,
+                        "vg_bytes": 2000u64, "vg_free_bytes": 1000u64, "volumes": 3, "max_layers": 1, "warnings": [],
+                        "reexport": {"exported": 1, "already": 0, "failed": [], "moved": 0, "at": "x"}
+                    }))
+                }),
+            );
+        if !legacy {
+            r = r
+                .route(
+                    "/version",
+                    get(|| async {
+                        axum::Json(serde_json::json!({"version": "0.4.0", "features": ["reexport", "ports", "name", "trim", "base", "clone"]}))
+                    }),
+                )
+                .route("/seal/{id}", get(|| async { axum::Json(serde_json::json!({"id": "b1", "base": "img", "sealed": true, "bytes": 1})) }))
+                .route(
+                    "/clone/{id}",
+                    get(|Path(id): Path<String>, Query(q): Query<HashMap<String, String>>| async move {
+                        if id == "unsealed" {
+                            return (axum::http::StatusCode::CONFLICT, axum::Json(serde_json::json!({"error": "base unsealed is not sealed yet"})));
+                        }
+                        (axum::http::StatusCode::OK, axum::Json(serde_json::json!({
+                            "message": "", "id": "c1", "port": "44003", "traddr": "10.22.1.1", "nqn": "c1",
+                            "bytes": q.get("bytes").and_then(|b| b.parse::<u64>().ok()).unwrap_or(0),
+                            "origin": id, "layers": 1, "existing": q.get("name").is_some_and(|n| n.ends_with("again"))
+                        })))
+                    }),
+                );
+        }
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", l.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(l, r).await.unwrap() });
+        url
+    }
+
+    #[tokio::test]
+    async fn client_speaks_abe_0_4_and_maps_statuses() {
+        let url = fake_abe(false).await;
+        let c = Client::new();
+        let f = c.version(&url).await.unwrap().unwrap();
+        assert_eq!(f.version, "0.4.0");
+        assert!(c.has(&url, "clone").await.unwrap());
+        assert!(!c.has(&url, "teleport").await.unwrap());
+        let e = c.create_named(&url, 5 << 20, "vol-new").await.unwrap();
+        assert_eq!(
+            (e.id.as_str(), e.existing, e.bytes),
+            ("v1", false, Some(5 << 20))
+        );
+        assert!(c.create_named(&url, 1, "vol-again").await.unwrap().existing);
+        assert_eq!(c.export(&url, "v1").await.unwrap().port, "44002");
+        let e = c.export(&url, "gone").await.unwrap_err();
+        assert_eq!(http_status(&e), Some(404));
+        assert!(e.to_string().contains("export"), "{e:#}");
+        assert_eq!(
+            http_status(&c.export(&url, "sealed").await.unwrap_err()),
+            Some(409)
+        );
+        let b = c.base(&url, "img", 1 << 30).await.unwrap();
+        assert_eq!(
+            (b.id(), b.sealed, b.export.port.as_str(), b.bytes),
+            ("b1", false, "44009", 1 << 30)
+        );
+        let b = c.base(&url, "sealed", 1 << 30).await.unwrap();
+        assert!(b.sealed && b.export.port.is_empty());
+        c.seal(&url, "b1").await.unwrap();
+        let cl = c.clone(&url, "b1", 10 << 30, "vm-x-root").await.unwrap();
+        assert_eq!(
+            (cl.id.as_str(), cl.port.as_str(), cl.bytes),
+            ("c1", "44003", Some(10 << 30))
+        );
+        assert_eq!(
+            http_status(&c.clone(&url, "unsealed", 1, "n").await.unwrap_err()),
+            Some(409)
+        );
+        let u = c.utilization(&url).await.unwrap();
+        assert_eq!(
+            (
+                u.thin_pool.as_deref(),
+                u.provisioned_bytes,
+                u.metadata_percent
+            ),
+            (Some("pool"), 600, Some(2.5))
+        );
+        let cap = u.capacity(chrono::Utc::now());
+        assert!(cap.thin && cap.bytes == 1000 && cap.free_bytes == 900);
+    }
+
+    #[tokio::test]
+    async fn a_pre_0_4_abe_has_no_features_and_is_cached() {
+        let url = fake_abe(true).await;
+        let c = Client::new();
+        assert_eq!(c.version(&url).await.unwrap(), None);
+        assert!(!c.has(&url, "name").await.unwrap());
+        assert!(!c.has(&url, "base").await.unwrap());
+        assert_eq!(c.features.lock().unwrap().len(), 1);
+        assert_eq!(c.legacy_logged.lock().unwrap().len(), 1);
+        // an unreachable abe is an error, not "legacy"
+        let e = c.has("http://127.0.0.1:1", "name").await.unwrap_err();
+        assert_eq!(http_status(&e), None);
+        // old create still works
+        let e = c.create(&url, 7).await.unwrap();
+        assert_eq!(e.id, "v1");
+        assert!(!e.existing);
     }
 }

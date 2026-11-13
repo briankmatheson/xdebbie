@@ -41,6 +41,27 @@ pub struct Host {
     /// are scheduled on; any host can attach them later.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub abe: Option<String>,
+    /// What this host's ABE reported last (`GET /utilization`); filled by
+    /// the inventory loop, never set from config.
+    #[serde(
+        alias = "abe_capacity",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub abe_capacity: Option<AbeCapacity>,
+    /// Thin pools: the sum of volume sizes may reach `bytes × overcommit`.
+    /// Ignored for thick pools.
+    #[serde(alias = "abe_overcommit", default = "one")]
+    pub abe_overcommit: f64,
+    /// Refuse new ABE allocations at or above this pool data fill (%).
+    #[serde(alias = "abe_max_data_percent", default = "default_abe_max_data")]
+    pub abe_max_data_percent: f64,
+    /// The same for thin metadata (%); a full metadata LV breaks the pool.
+    #[serde(
+        alias = "abe_max_metadata_percent",
+        default = "default_abe_max_metadata"
+    )]
+    pub abe_max_metadata_percent: f64,
     /// Memory overcommit ratio. Keep at 1.0 unless you know why not.
     #[serde(alias = "mem_overcommit", default = "one")]
     pub mem_overcommit: f64,
@@ -82,6 +103,12 @@ fn default_reserved_cpu() -> u32 {
 fn one() -> f64 {
     1.0
 }
+fn default_abe_max_data() -> f64 {
+    85.0
+}
+fn default_abe_max_metadata() -> f64 {
+    80.0
+}
 fn yes() -> bool {
     true
 }
@@ -94,7 +121,102 @@ pub struct Capacity {
     pub disk_free_gib: u64,
 }
 
+/// What an ABE's `GET /utilization` said about its pool (thin) or VG
+/// (thick), as seen by the inventory loop.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AbeCapacity {
+    /// `thin_pool != null` in the reply: sizes are promises, not blocks.
+    pub thin: bool,
+    /// Pool (or VG) size.
+    pub bytes: u64,
+    pub used_bytes: u64,
+    pub free_bytes: u64,
+    /// Sum of the virtual sizes of every volume (thin), or `used_bytes`
+    /// (thick).
+    pub provisioned_bytes: u64,
+    pub data_percent: f64,
+    #[serde(default)]
+    pub metadata_percent: Option<f64>,
+    pub seen: DateTime<Utc>,
+}
+
+impl AbeCapacity {
+    /// Space the pool may still promise (thin: `bytes × overcommit`;
+    /// thick: `bytes`).
+    pub fn limit(&self, overcommit: f64) -> u64 {
+        if self.thin {
+            (self.bytes as f64 * overcommit.max(0.0)) as u64
+        } else {
+            self.bytes
+        }
+    }
+    /// What is already promised: provisioned (thin) or used (thick).
+    pub fn committed(&self) -> u64 {
+        if self.thin {
+            self.provisioned_bytes
+        } else {
+            self.bytes.saturating_sub(self.free_bytes)
+        }
+    }
+    /// Is the reading older than `stale_after_secs`?
+    pub fn is_stale(&self, now: DateTime<Utc>, stale_after_secs: i64) -> bool {
+        (now - self.seen).num_seconds() > stale_after_secs
+    }
+}
+
 impl Host {
+    /// Would `request` more bytes fit on this host's ABE, with `pending`
+    /// bytes already promised but not yet visible in its utilization?
+    /// `Ok(headroom)` is what would be left afterwards; `Err` is the
+    /// scheduler's reject reason.
+    pub fn abe_fit(&self, pending: u64, request: u64) -> Result<u64, &'static str> {
+        if self.abe.is_none() {
+            return Err("no abe");
+        }
+        let Some(c) = &self.abe_capacity else {
+            return Err("abe capacity unknown");
+        };
+        if c.thin {
+            if c.data_percent >= self.abe_max_data_percent
+                || c.metadata_percent
+                    .is_some_and(|m| m >= self.abe_max_metadata_percent)
+            {
+                return Err("abe pool full");
+            }
+            let limit = c.limit(self.abe_overcommit);
+            let need = c
+                .provisioned_bytes
+                .saturating_add(pending)
+                .saturating_add(request);
+            if need > limit {
+                return Err("abe capacity");
+            }
+            Ok(limit - need)
+        } else {
+            let need = pending.saturating_add(request);
+            if need > c.free_bytes {
+                return Err("abe capacity");
+            }
+            Ok(c.free_bytes - need)
+        }
+    }
+
+    /// Fraction of the ABE pool in use after `pending + request` more
+    /// bytes (0..=1), for the spread/pack score. `None` without a fresh
+    /// reading.
+    pub fn abe_used_fraction(&self, pending: u64, request: u64) -> Option<f64> {
+        let c = self.abe_capacity.as_ref()?;
+        let need = pending.saturating_add(request);
+        if c.thin {
+            let limit = c.limit(self.abe_overcommit).max(1) as f64;
+            Some(((c.provisioned_bytes.saturating_add(need)) as f64 / limit).min(1.0))
+        } else {
+            let bytes = c.bytes.max(1) as f64;
+            Some((1.0 - (c.free_bytes.saturating_sub(need)) as f64 / bytes).clamp(0.0, 1.0))
+        }
+    }
+
     /// Schedulable capacity after reservations and overcommit.
     pub fn allocatable(&self) -> Option<Capacity> {
         let c = self.capacity?;
@@ -213,6 +335,10 @@ pub struct Disk {
     /// happened so an interrupted provision never boots a blank disk.
     #[serde(default)]
     pub populated: bool,
+    /// Root disks that are thin clones: the sealed base volume (on the same
+    /// ABE) this one was snapshotted from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
 }
 
 impl Disk {
@@ -297,6 +423,10 @@ pub struct Volume {
     pub attached: Option<Attachment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// A `DELETE` has started: ABE has been (or is being) asked to remove
+    /// it. Never attached again; a retried `DELETE` finishes the job.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deleting: bool,
     pub created: DateTime<Utc>,
     pub updated: DateTime<Utc>,
 }
@@ -321,6 +451,7 @@ impl Volume {
             id: self.id.clone(),
             bytes: self.bytes,
             populated: true,
+            origin: None,
         }
     }
     /// virtio-blk serial: the id truncated to what the guest can read, so
@@ -623,6 +754,7 @@ mod disk_tests {
             id: "0123456789abcdef0123456789abcdef".into(),
             bytes: 1,
             populated: false,
+            origin: None,
         };
         assert_eq!(
             d.dev_path(),
@@ -645,6 +777,7 @@ mod disk_tests {
             attach_to: None,
             attached: None,
             message: None,
+            deleting: false,
             created: now,
             updated: now,
         };
@@ -737,5 +870,199 @@ mod volume_tests {
         let none = serde_json::json!({"id": "x", "name": "pvc-3", "server": "s", "traddr": "t", "port": "p", "bytes": 1,
             "created": "2026-11-12T01:00:00Z", "updated": "2026-11-12T01:00:00Z"});
         assert_eq!(serde_json::from_value::<Volume>(none).unwrap().perf, None);
+    }
+}
+
+#[cfg(test)]
+mod abe_capacity_tests {
+    use super::*;
+
+    fn cap(thin: bool) -> AbeCapacity {
+        AbeCapacity {
+            thin,
+            bytes: 100 << 30,
+            used_bytes: 10 << 30,
+            free_bytes: 90 << 30,
+            provisioned_bytes: 60 << 30,
+            data_percent: 10.0,
+            metadata_percent: Some(5.0),
+            seen: Utc::now(),
+        }
+    }
+    fn host(cap: Option<AbeCapacity>) -> Host {
+        let mut h: Host =
+            serde_json::from_value(serde_json::json!({"name": "a", "uri": "test:///"})).unwrap();
+        h.abe = Some("http://10.22.1.1:80".into());
+        h.abe_capacity = cap;
+        h
+    }
+
+    #[test]
+    fn no_abe_and_unknown_capacity_are_distinct_reasons() {
+        let mut h = host(Some(cap(true)));
+        h.abe = None;
+        assert_eq!(h.abe_fit(0, 1), Err("no abe"));
+        assert_eq!(host(None).abe_fit(0, 1), Err("abe capacity unknown"));
+    }
+
+    #[test]
+    fn thin_pool_checks_fill_then_provisioned_against_overcommit() {
+        let h = host(Some(cap(true)));
+        // 60 provisioned + 0 pending + 40 == 100: fits exactly, no headroom
+        assert_eq!(h.abe_fit(0, 40 << 30), Ok(0));
+        assert_eq!(h.abe_fit(0, 41 << 30), Err("abe capacity"));
+        // pending counts
+        assert_eq!(h.abe_fit(10 << 30, 30 << 30), Ok(0));
+        assert_eq!(h.abe_fit(10 << 30, 31 << 30), Err("abe capacity"));
+        // overcommit raises the limit
+        let mut o = h.clone();
+        o.abe_overcommit = 2.0;
+        assert_eq!(o.abe_fit(0, 100 << 30), Ok(40 << 30));
+        // a full pool refuses regardless of promises
+        let mut full = h.clone();
+        full.abe_capacity.as_mut().unwrap().data_percent = 85.0;
+        assert_eq!(full.abe_fit(0, 1), Err("abe pool full"));
+        let mut meta = h.clone();
+        meta.abe_capacity.as_mut().unwrap().metadata_percent = Some(80.0);
+        assert_eq!(meta.abe_fit(0, 1), Err("abe pool full"));
+        let mut lax = meta.clone();
+        lax.abe_max_metadata_percent = 90.0;
+        assert!(lax.abe_fit(0, 1).is_ok());
+        // thin metadata unknown: only the data threshold applies
+        let mut nometa = h.clone();
+        nometa.abe_capacity.as_mut().unwrap().metadata_percent = None;
+        assert!(nometa.abe_fit(0, 1).is_ok());
+    }
+
+    #[test]
+    fn thick_pool_uses_free_bytes_and_ignores_overcommit() {
+        let mut h = host(Some(cap(false)));
+        h.abe_overcommit = 4.0;
+        assert_eq!(h.abe_fit(0, 90 << 30), Ok(0));
+        assert_eq!(h.abe_fit(1, 90 << 30), Err("abe capacity"));
+        assert_eq!(h.abe_fit(40 << 30, 40 << 30), Ok(10 << 30));
+        // fill thresholds do not apply to thick pools
+        h.abe_capacity.as_mut().unwrap().data_percent = 99.0;
+        assert!(h.abe_fit(0, 1).is_ok());
+    }
+
+    #[test]
+    fn used_fraction_feeds_the_score() {
+        let h = host(Some(cap(true)));
+        assert!((h.abe_used_fraction(0, 20 << 30).unwrap() - 0.8).abs() < 1e-9);
+        let t = host(Some(cap(false)));
+        // 90 free - 40 = 50 free of 100 -> 0.5 used
+        assert!((t.abe_used_fraction(0, 40 << 30).unwrap() - 0.5).abs() < 1e-9);
+        assert_eq!(host(None).abe_used_fraction(0, 1), None);
+    }
+
+    #[test]
+    fn staleness_is_by_seen() {
+        let mut c = cap(true);
+        c.seen = Utc::now() - chrono::Duration::seconds(100);
+        assert!(c.is_stale(Utc::now(), 60));
+        assert!(!c.is_stale(Utc::now(), 120));
+    }
+
+    #[test]
+    fn config_keys_take_snake_case() {
+        let h: Host = toml::from_str(
+            "name = \"t\"\nuri = \"qemu:///system\"\nabe = \"http://10.22.1.1:80\"\nabe_overcommit = 2.5\nabe_max_data_percent = 70\nabe_max_metadata_percent = 60\n",
+        )
+        .unwrap();
+        assert_eq!(h.abe_overcommit, 2.5);
+        assert_eq!(h.abe_max_data_percent, 70.0);
+        assert_eq!(h.abe_max_metadata_percent, 60.0);
+        assert_eq!(h.abe_capacity, None);
+    }
+}
+
+#[cfg(test)]
+mod compat_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    /// The state document as written by xdebbie 0.14: hosts without any
+    /// `abe*` capacity keys, disks without `origin`, volumes without
+    /// `deleting`. It must load unchanged and survive a save/load cycle.
+    #[test]
+    fn v0_14_state_loads_and_round_trips() {
+        #[derive(Debug, Serialize, Deserialize, PartialEq)]
+        struct State {
+            hosts: BTreeMap<String, Host>,
+            vms: BTreeMap<Uuid, Vm>,
+            #[serde(default)]
+            volumes: BTreeMap<String, Volume>,
+        }
+        let doc = serde_json::json!({
+          "hosts": {
+            "timesink": {
+              "name": "timesink", "uri": "qemu:///system", "failureDomain": "default",
+              "controlPlaneEligible": true, "labels": {}, "storagePool": "default", "bridge": "virbr-xdebbie",
+              "cpuOvercommit": 4.0, "abe": "http://10.22.0.1:80", "memOvercommit": 1.0,
+              "reservedMemoryMib": 4096, "reservedCpus": 2, "cordoned": false,
+              "capacity": {"cpus": 32, "memoryMib": 128000, "diskFreeGib": 800},
+              "lastSeen": "2026-11-12T10:00:00Z"
+            }
+          },
+          "vms": {
+            "6ba7b810-9dad-11d1-80b4-00c04fd430c8": {
+              "id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+              "spec": {"name": "w0", "vcpus": 2, "memoryMib": 2048, "diskGib": 10, "image": "debian-13",
+                       "dataDiskGib": 4, "placement": {}, "storage": "abe"},
+              "phase": "Running", "power": "On", "host": "timesink",
+              "addresses": [{"type": "InternalIP", "address": "10.23.0.5"}],
+              "ip": "10.23.0.5",
+              "disks": [
+                {"role": "root", "server": "http://10.22.0.1:80", "traddr": "10.22.0.1", "port": "44001",
+                 "id": "0123456789abcdef0123456789abcdef", "bytes": 10737418240u64, "populated": true},
+                {"role": "data", "server": "http://10.22.0.1:80", "traddr": "10.22.0.1", "port": "44002",
+                 "id": "fedcba9876543210fedcba9876543210", "bytes": 4294967296u64, "populated": true}
+              ],
+              "message": null, "migrateTo": null, "rebootGeneration": 0, "observedRebootGeneration": 0,
+              "created": "2026-11-12T10:00:00Z", "updated": "2026-11-12T10:00:00Z"
+            }
+          },
+          "volumes": {
+            "00a108b720bd4d3ab4113ebbfeee1f64": {
+              "id": "00a108b720bd4d3ab4113ebbfeee1f64", "name": "pvc-1", "server": "http://10.22.0.1:80",
+              "traddr": "10.22.0.1", "port": "44003", "bytes": 5368709120u64,
+              "perf": {"bs": "4k", "iodepth": 1, "seconds": 5.0, "write_mib_s": 19.5, "write_iops": 5000.0, "write_lat_us": 187.5},
+              "attachTo": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+              "attached": {"vm": "6ba7b810-9dad-11d1-80b4-00c04fd430c8", "host": "timesink", "target": "vdc"},
+              "created": "2026-11-12T10:00:00Z", "updated": "2026-11-12T10:00:00Z"
+            }
+          }
+        });
+        let st: State = serde_json::from_value(doc.clone()).expect("v0.14 state must load");
+        let h = &st.hosts["timesink"];
+        assert_eq!(h.abe_capacity, None);
+        assert_eq!(h.abe_overcommit, 1.0);
+        assert_eq!(h.abe_max_data_percent, 85.0);
+        assert_eq!(h.abe_max_metadata_percent, 80.0);
+        let vm = st.vms.values().next().unwrap();
+        assert!(vm.disks.iter().all(|d| d.origin.is_none()));
+        let vol = st.volumes.values().next().unwrap();
+        assert!(!vol.deleting);
+        assert!(vol.perf.is_some());
+
+        // Round trip: what we write reads back identical, and the new
+        // fields stay out of the document while unset.
+        let again = serde_json::to_value(&st).unwrap();
+        let st2: State = serde_json::from_value(again.clone()).unwrap();
+        assert_eq!(st, st2);
+        let hj = &again["hosts"]["timesink"];
+        assert!(hj.get("abeCapacity").is_none());
+        assert_eq!(hj["abeOvercommit"], 1.0);
+        assert!(
+            again["vms"].as_object().unwrap().values().next().unwrap()["disks"][0]
+                .get("origin")
+                .is_none()
+        );
+        assert!(
+            again["volumes"]["00a108b720bd4d3ab4113ebbfeee1f64"]
+                .get("deleting")
+                .is_none()
+        );
     }
 }
