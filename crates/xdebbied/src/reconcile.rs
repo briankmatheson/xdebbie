@@ -54,6 +54,7 @@ pub fn hosts_for_placement(
             {
                 h.abe_capacity = None;
             }
+            h.abe_remote = !crate::libvirt::uri_is_local(&h.uri);
             h
         })
         .collect()

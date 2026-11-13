@@ -5,6 +5,17 @@ All notable changes to XDebbie will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.3] - 2026-11-13
+
+### Fixed
+- The scheduler no longer places a `storage = abe` VM on a host whose
+  libvirt URI is remote from the leader. The leader runs `nvme connect`
+  on its own box and then `virsh start` over `qemu+tls://`, so the VM
+  failed every pass with `Cannot access storage file
+  /dev/disk/by-id/nvme-uuid.…`. Such hosts are rejected with `abe on a
+  remote host (nvme connect runs on the leader)` until the follower
+  daemon does the attach (docs/storage.md, "What is not done").
+
 ## [0.16.2] - 2026-11-13
 
 ### Added

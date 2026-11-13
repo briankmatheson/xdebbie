@@ -218,6 +218,10 @@ pub fn place(
         if abe {
             // Only the seed ISO lands in the libvirt pool; the disks come
             // from the host's ABE, which has its own accounting.
+            if h.abe_remote {
+                reject("abe on a remote host (nvme connect runs on the leader)");
+                continue;
+            }
             let pend = pending.get(h.name.as_str()).copied().unwrap_or(0);
             let req = abe_request(spec);
             if let Err(r) = h.abe_fit(pend, req) {
@@ -298,6 +302,7 @@ mod tests {
             cpu_overcommit: 1.0,
             abe: None,
             abe_capacity: None,
+            abe_remote: false,
             abe_overcommit: 1.0,
             abe_max_data_percent: 85.0,
             abe_max_metadata_percent: 80.0,
@@ -576,6 +581,39 @@ mod tests {
             r,
             Err(PlacementError::NoFit(
                 "1×abe capacity unknown, 1×no abe".into()
+            ))
+        );
+    }
+
+    #[test]
+    fn abe_vm_is_not_placed_on_a_host_remote_from_the_leader() {
+        let mut far = abe_host("far", Some(abe_cap(true, 1000, 0)));
+        far.abe_remote = true;
+        let near = abe_host("near", Some(abe_cap(true, 1000, 0)));
+        let r = place(
+            &abe_spec("v", 10, None),
+            &[far.clone(), near],
+            &[],
+            PlacementPolicy::Spread,
+            ok,
+            None,
+            &none(),
+        )
+        .unwrap();
+        assert_eq!(r[0].host, "near");
+        let r = place(
+            &abe_spec("v", 10, None),
+            &[far],
+            &[],
+            PlacementPolicy::Spread,
+            ok,
+            None,
+            &none(),
+        );
+        assert_eq!(
+            r,
+            Err(PlacementError::NoFit(
+                "1×abe on a remote host (nvme connect runs on the leader)".into()
             ))
         );
     }

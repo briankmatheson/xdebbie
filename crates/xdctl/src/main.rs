@@ -1269,6 +1269,7 @@ fn main() -> Result<()> {
                     cordoned: false,
                     capacity: None,
                     abe_capacity: None,
+                    abe_remote: false,
                     abe_overcommit: 1.0,
                     abe_max_data_percent: 85.0,
                     abe_max_metadata_percent: 80.0,
