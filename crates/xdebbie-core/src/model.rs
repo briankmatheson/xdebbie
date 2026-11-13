@@ -533,9 +533,10 @@ pub struct TokenRotated {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EnrollRequest {
     pub hostname: String,
-    /// Mesh box id (0-253).
-    #[serde(rename = "box")]
-    pub box_id: u8,
+    /// Mesh box id (0-253) the joiner would like; `None` = CA box picks
+    /// the lowest free one. Either way the answer is in `Enrollment.box_id`.
+    #[serde(rename = "box", default, skip_serializing_if = "Option::is_none")]
+    pub box_id: Option<u8>,
     /// Where the joiner's API will be once it starts.
     pub api_url: String,
     /// PEM certificate signing request.
@@ -571,6 +572,7 @@ impl std::fmt::Display for EnrollStatus {
 pub struct Enrollment {
     pub id: String,
     pub hostname: String,
+    /// Mesh box id assigned to this box (bridge MAC, underlay address).
     #[serde(rename = "box")]
     pub box_id: u8,
     pub api_url: String,

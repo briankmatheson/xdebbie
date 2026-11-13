@@ -146,8 +146,8 @@ stop all kernel writes: `GeneveModuleMissing`, `UnderlayMissing`,
 `BridgeMacMismatch` (the bridge is not `52:54:00:23:<box>:fe`, so in
 `derived` mode *peers* cannot reach this box's bridge address — its gateway
 and DNS — fix with `virsh net-edit` on the `<mac>` and `ip link set <bridge>
-address …` to apply live; `xdebbied bootstrap --box` sets it when it creates
-the network), `NameConflict`, and `BridgeStpEnabled` — which only
+address …` to apply live; bootstrap sets it when it creates the network,
+from the box id the cluster CA assigned at enrolment), `NameConflict`, and `BridgeStpEnabled` — which only
 stays set if turning STP off failed: the mesh **forces STP off** on its
 bridge every tick, since isolated tunnel ports make it loop-free and BPDUs
 crossing tunnels would only make STP misbehave. Peers carry `state` (`Pending`/`Up`/`Down`/`Error`), `rtt_ms`,

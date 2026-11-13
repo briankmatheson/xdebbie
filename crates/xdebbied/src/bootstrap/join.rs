@@ -6,7 +6,8 @@
 //!    after this verifies against that CA.
 //! 2. Generate a key and CSR, `POST /v1/enroll`, remember the id.
 //! 3. Poll until an operator runs `xdctl approve <hostname>`; install the
-//!    issued certificate and the CA.
+//!    issued certificate and the CA. The approval also carries the box id
+//!    the CA assigned (the bridge MAC and underlay address derive from it).
 //! 4. Fetch the cluster token over mTLS (`GET /v1/enroll/token`).
 //!
 //! Re-running resumes a pending enrolment (the id is kept in
@@ -42,7 +43,8 @@ pub struct JoinOptions<'a> {
     pub ca_url: &'a str,
     pub expect_fingerprint: Option<&'a str>,
     pub hostname: &'a str,
-    pub box_id: u8,
+    /// Box id to ask for; `None` lets the CA box pick the next free one.
+    pub box_id: Option<u8>,
     pub api_url: &'a str,
     pub force: bool,
     pub paths: &'a ApiTlsPaths,
@@ -140,8 +142,15 @@ fn get_enrollment(c: &Client, ca_url: &str, id: &str) -> Result<Option<Enrollmen
     }
 }
 
-/// Run the whole enrolment; returns the cluster token set to install.
-pub fn join(o: &JoinOptions<'_>) -> Result<TokenSet> {
+/// What enrolment hands back: the cluster token set and the box id the CA
+/// assigned (kept across re-enrolments of the same host).
+pub struct Joined {
+    pub tokens: TokenSet,
+    pub box_id: u8,
+}
+
+/// Run the whole enrolment.
+pub fn join(o: &JoinOptions<'_>) -> Result<Joined> {
     let ca_url = o.ca_url.trim_end_matches('/');
     if !ca_url.starts_with("https://") {
         bail!("--join must be an https:// URL (got {ca_url}); enrolment never runs over plain http");
@@ -232,7 +241,7 @@ pub fn join(o: &JoinOptions<'_>) -> Result<TokenSet> {
         bail!("CA returned with the approval differs from the one pinned; not installing");
     }
     api_tls::install_issued(o.paths, cert, ca)?;
-    info!("Enrolment {} approved; certificate installed", e.id);
+    info!("Enrolment {} approved as box {}; certificate installed", e.id, e.box_id);
 
     // Now we are a member: fetch the token with our certificate.
     let key = std::fs::read_to_string(&o.paths.server_key)?;
@@ -244,5 +253,5 @@ pub fn join(o: &JoinOptions<'_>) -> Result<TokenSet> {
     }
     let set: TokenSet = r.json().context("parsing token")?;
     info!("Received the cluster token ({})", crate::token::fingerprint(&set.current));
-    Ok(set)
+    Ok(Joined { tokens: set, box_id: e.box_id })
 }

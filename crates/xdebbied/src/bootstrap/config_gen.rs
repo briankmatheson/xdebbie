@@ -118,7 +118,7 @@ advertise_url = "{advertise_url}"
 # turns it off.
 [mesh]
 enabled = true
-box = {box_id}                        # this host's box id (0-253), unique per host
+box = {box_id}                        # this host's box id (0-253): assigned by the cluster CA at enrolment
 bridge = "{bridge}"
 vni = 23
 dstport = 6081
@@ -217,6 +217,53 @@ const KEEP_TABLES: &[&str] = &["network", "mesh", "hosts"];
 #[cfg(test)]
 pub fn carry_over(old: &str, generated: &str) -> Result<String> {
     carry_over_except(old, generated, &[])
+}
+
+/// `content` with `[mesh] box` set to `box_id`, everything else (comments
+/// included) untouched. A `[mesh]` section without a `box` line gets one;
+/// no `[mesh]` section at all gets a minimal one appended.
+pub fn set_mesh_box(content: &str, box_id: u8) -> String {
+    let mut out = Vec::with_capacity(content.lines().count() + 3);
+    let mut in_mesh = false;
+    let mut seen_mesh = false;
+    let mut done = false;
+    for l in content.lines() {
+        if let Some(name) = table_header(l) {
+            if in_mesh && !done {
+                out.push(format!("box = {box_id}"));
+                done = true;
+            }
+            in_mesh = name == "mesh";
+            seen_mesh |= in_mesh;
+            out.push(l.to_string());
+            continue;
+        }
+        if in_mesh && !done {
+            let key = l.trim_start().split(['=', '#']).next().unwrap_or("").trim();
+            if key == "box" && !l.trim_start().starts_with('#') {
+                let comment = l.find('#').map(|i| &l[i..]).unwrap_or("");
+                let pad = if comment.is_empty() { "" } else { "   " };
+                out.push(format!("box = {box_id}{pad}{comment}"));
+                done = true;
+                continue;
+            }
+        }
+        out.push(l.to_string());
+    }
+    if in_mesh && !done {
+        out.push(format!("box = {box_id}"));
+        done = true;
+    }
+    if !seen_mesh && !done {
+        out.push(String::new());
+        out.push("[mesh]".to_string());
+        out.push(format!("box = {box_id}"));
+    }
+    let mut s = out.join("\n");
+    if content.ends_with('\n') {
+        s.push('\n');
+    }
+    s
 }
 
 /// Regenerated config with the operator's settings from `old` carried
@@ -352,6 +399,31 @@ mod tests {
         // tls_cert and tls_key must be live (not commented out)
         assert!(config.contains("\ntls_cert = \"/etc/xdebbie/api-cert.pem\""), "tls_cert not set:\n{config}");
         assert!(config.contains("\ntls_key"), "tls_key not set:\n{config}");
+    }
+
+    #[test]
+    fn set_mesh_box_rewrites_only_the_box_line() {
+        let c = "listen = \"0.0.0.0:7443\"\n\n[mesh]\nenabled = true\nbox = 0   # old comment\nvni = 23\n\n[[mesh.peers]]\nbox = 7\n";
+        let out = set_mesh_box(c, 3);
+        assert_eq!(out, "listen = \"0.0.0.0:7443\"\n\n[mesh]\nenabled = true\nbox = 3   # old comment\nvni = 23\n\n[[mesh.peers]]\nbox = 7\n");
+        let t: toml::Table = toml::from_str(&out).unwrap();
+        assert_eq!(t["mesh"]["box"].as_integer(), Some(3));
+
+        // [mesh] without a box line gets one; no [mesh] at all gets a section.
+        let out = set_mesh_box("[mesh]\nenabled = true\n\n[network]\ncidr = \"10.0.0.0/16\"\n", 5);
+        let t: toml::Table = toml::from_str(&out).unwrap();
+        assert_eq!(t["mesh"]["box"].as_integer(), Some(5));
+        assert_eq!(t["network"]["cidr"].as_str(), Some("10.0.0.0/16"));
+        let out = set_mesh_box("listen = \"0.0.0.0:7443\"\n", 9);
+        let t: toml::Table = toml::from_str(&out).unwrap();
+        assert_eq!(t["mesh"]["box"].as_integer(), Some(9));
+        assert_eq!(t["listen"].as_str(), Some("0.0.0.0:7443"));
+
+        // The generated template round-trips.
+        let resources = LibvirtResources { networks: vec![], pools: vec![] };
+        let g = generate_config(&resources, "qemu:///system", None, 0, None);
+        let t: toml::Table = toml::from_str(&set_mesh_box(&g, 4)).unwrap();
+        assert_eq!(t["mesh"]["box"].as_integer(), Some(4));
     }
 
     #[test]

@@ -64,7 +64,7 @@ Bootstrap the system with automatic resource discovery and creation.
 - `--subnet <CIDR>` - Network subnet (default: `192.168.100.0/24`)
 - `--pool <NAME>` - Storage pool name (default: `xdebbie`)
 - `--pool-path <PATH>` - Storage pool path (default: `/var/lib/libvirt/xdebbie`)
-- `--box <0-253>` - This host's mesh box id (default: `0`; unique per host). Written to `[mesh]`, and the libvirt network bootstrap creates gets the bridge MAC `52:54:00:23:<box>:fe` the mesh's derived FDB scheme expects. For a network that already exists bootstrap only warns when the MAC differs
+- `--box <0-253>` - Mesh box id to ask for. Normally not needed: the first box takes `0` and every box that joins is **assigned the next free id by the CA box** at approval (a host that re-enrols keeps the id it had). The id goes into `[mesh]`, and the libvirt network bootstrap creates gets the bridge MAC `52:54:00:23:<box>:fe` the mesh's derived FDB scheme expects — which is why enrolment happens before the network is created. For a network that already exists bootstrap only warns when the MAC differs. With `--join`, `--box` is a wish the CA box honours only if that id is free
 
 **Examples:**
 
@@ -192,7 +192,7 @@ token. That is how a new box gets the token in the first place.
 
 ### Joining a cluster: enrolment and approval
 
-Nothing to copy by hand. A plain `sudo xdebbied bootstrap --box 1` on a
+Nothing to copy by hand. A plain `sudo xdebbied bootstrap` on a
 new box first **listens 20 s on the discovery group** (239.0.0.42:7442)
 for a running cluster. If it hears one it shows what it found (leader
 first) and asks `Join it via https://gram…:7443? [Y/n/other URL]`; if it
@@ -208,7 +208,7 @@ Explicitly, with the CA fingerprint that bootstrap printed on the CA box
 (or `xdctl ca`):
 
 ```bash
-sudo xdebbied bootstrap --box 1 --join https://gram.example.net:7443 \
+sudo xdebbied bootstrap --join https://gram.example.net:7443 \
      --ca-fingerprint sha256:3fa1…        # optional; without it you are asked y/N
 ```
 
@@ -225,8 +225,12 @@ xdctl enroll ls --all           # include approved / denied
 xdctl ca                        # CA PEM + fingerprint, to check against --join
 ```
 
-On approval the CA box signs the CSR; the joiner picks up the certificate
-within seconds, installs `api-cert.pem` + `api-ca.pem`, then fetches the
+On approval the CA box signs the CSR and **assigns the box id** (lowest
+free `0-253`, counting its own `[mesh]` box and peers plus every pending or
+approved enrolment; `enroll ls` shows it in the BOX column). The joiner
+picks up the certificate within seconds, installs `api-cert.pem` +
+`api-ca.pem`, writes the id to `[mesh] box` and creates its bridge with the
+matching MAC, then fetches the
 **cluster token** over mTLS (`GET /v1/enroll/token`, client-certificate
 only) and writes `/etc/xdebbie/token` and `xdebbie_env`. Bootstrap then
 finishes as usual. The joiner's config gets `ca_url = "https://gram…"`

@@ -46,8 +46,9 @@ pub struct BootstrapOptions {
     pub pool_path: String,
     pub listen_addr: String,
     pub force: bool,
-    /// Mesh box id (0-253): written to `[mesh]` and fixes the bridge MAC.
-    pub box_id: u8,
+    /// Mesh box id (0-253) to ask for. A joiner gets one assigned by the
+    /// CA box (this is only a wish); the first box defaults to 0.
+    pub box_id: Option<u8>,
     /// Join an existing cluster through the CA box at this URL.
     pub join: Option<String>,
     /// Pinned `sha256:` fingerprint of that cluster CA.
@@ -74,7 +75,7 @@ impl Default for BootstrapOptions {
             pool_path: DEFAULT_POOL_PATH.to_string(),
             listen_addr: "0.0.0.0:7443".to_string(),
             force: false,
-            box_id: 0,
+            box_id: None,
             join: None,
             ca_fingerprint: None,
             standalone: false,
@@ -247,8 +248,97 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
         resources.pools.len()
     );
 
+    // Create state directory
+    std::fs::create_dir_all(&opts.state_dir).context("creating state directory")?;
+
+    let api_tls_paths = api_tls::ApiTlsPaths::default();
+    let hostname = libvirt_setup::get_hostname();
+    let cfg_dir = opts.config_path.parent().unwrap_or_else(|| Path::new(DEFAULT_CONFIG_DIR));
+
+    // Step 4: identity. A joining box gets its certificate, the token and
+    // its box id from the cluster CA (after `xdctl approve`); the first box
+    // mints its own. This comes before the overlay network exists because
+    // the box id fixes the bridge MAC.
+    std::fs::create_dir_all(cfg_dir).with_context(|| format!("creating {}", cfg_dir.display()))?;
+    let existing_box: Option<u8> =
+        crate::config::Config::load(&opts.config_path).ok().and_then(|c| c.mesh.as_ref().map(|m| m.box_id));
+    let (token, box_id) = if let Some(ca_url) = &opts.join {
+        info!("Step 4/8: Enrolling with the cluster CA at {ca_url}");
+        if api_tls_paths.all_exist() && token::token_exists(&opts.token_path) && !opts.force {
+            info!("Already enrolled (certificate and token present); reusing. Use --force to re-enrol");
+            let b = existing_box.or(opts.box_id).unwrap_or(0);
+            (token::read_token(&opts.token_path)?, b)
+        } else {
+            let api_url = match crate::config::Config::load(&opts.config_path) {
+                Ok(cfg) => cfg.advertise_url(cfg.effective_listen()),
+                Err(_) => derive_advertise_url(&opts.listen_addr),
+            };
+            let joined = join::join(&join::JoinOptions {
+                ca_url,
+                expect_fingerprint: opts.ca_fingerprint.as_deref(),
+                hostname: &hostname,
+                box_id: opts.box_id.or(existing_box),
+                api_url: &api_url,
+                force: opts.force,
+                paths: &api_tls_paths,
+                state_dir: &opts.state_dir,
+            })
+            .context("joining the cluster")?;
+            if opts.token_path.exists() {
+                let bak = config_gen::back_up(&opts.token_path)?;
+                info!("Replacing the local token with the cluster's; previous one saved as {}", bak.display());
+            }
+            let set = joined.tokens;
+            token::write_token(&opts.token_path, &set.current)?;
+            let prev_path = opts.token_path.with_file_name("token.previous");
+            match set.previous {
+                Some(p) => crate::token::write_private(&prev_path, &p)?,
+                None => {
+                    let _ = std::fs::remove_file(&prev_path);
+                }
+            }
+            match existing_box {
+                Some(b) if b != joined.box_id => {
+                    warn!("the cluster assigned box id {} (this config had {b}); the bridge MAC changes with it", joined.box_id)
+                }
+                _ => info!("The cluster assigned this host box id {}", joined.box_id),
+            }
+            (set.current, joined.box_id)
+        }
+    } else {
+        info!("Step 4/8: Generating API token");
+        let token = if token::token_exists(&opts.token_path) && !opts.force {
+            info!("Token already exists at {}, reusing", opts.token_path.display());
+            token::read_token(&opts.token_path)?
+        } else {
+            if opts.token_path.exists() {
+                let bak = config_gen::back_up(&opts.token_path)?;
+                warn!(
+                    "Replacing the API token (--force); previous one saved as {}. Clients holding the old token (xdctl env, abe-csi, CAPX) must be updated",
+                    bak.display()
+                );
+            }
+            let new_token = token::generate_token()?;
+            token::write_token(&opts.token_path, &new_token)?;
+            new_token
+        };
+
+        // API TLS: the cluster CA (kept here) and this box's cert.
+        info!("Generating API TLS certificates");
+        if let Err(e) = api_tls::ensure_api_tls(&hostname, opts.force, &api_tls_paths) {
+            warn!("Failed to generate API TLS certs: {e:#}");
+            warn!("xdebbied will serve plain HTTP until certs are fixed; re-run bootstrap");
+        }
+        // The first box takes 0 unless told otherwise; later boxes are
+        // numbered by the CA as they enrol.
+        let b = opts.box_id.or(existing_box).unwrap_or(0);
+        (token, b)
+    };
+    info!("Mesh box id: {box_id}");
+
+
     // Step 4: Create resources if needed
-    info!("Step 4/8: Ensuring required resources exist");
+    info!("Step 5/8: Ensuring required resources exist");
     
     // Check if we need to create default network
     let network_exists = resources
@@ -259,7 +349,7 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     // No libvirt DHCP range: xdebbied's own responder serves the bridge
     // (`[network]` in the generated config). Two DHCP servers on one bridge
     // — worse, on one meshed L2 — is the thing we are avoiding.
-    let want_mac = crate::mesh::bridge_mac(opts.box_id);
+    let want_mac = crate::mesh::bridge_mac(box_id);
     let created_subnet = if !network_exists {
         libvirt_setup::ensure_network(&opts.libvirt_uri, &opts.network_name, &opts.network_subnet, "", "", &want_mac)?;
         Some(opts.network_subnet.clone())
@@ -271,7 +361,7 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
                 "network '{}' has MAC {mac}; the mesh (box {}) expects {want_mac}. Fix with: \
                  `virsh net-edit {}` (set <mac address='{want_mac}'/>) and, to apply now, \
                  `ip link set <bridge> address {want_mac}`",
-                opts.network_name, opts.box_id, opts.network_name
+                opts.network_name, box_id, opts.network_name
             ),
             _ => {}
         }
@@ -296,11 +386,17 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     let resources = libvirt_setup::discover_libvirt(&opts.libvirt_uri)?;
 
     // Step 5: Generate configuration
-    info!("Step 5/8: Generating configuration");
+    info!("Step 6/8: Generating configuration");
     
     let exists = opts.config_path.exists();
     if exists && !opts.force {
         match config_gen::config_parses(&opts.config_path) {
+            Ok(()) if existing_box.is_some_and(|b| b != box_id) => {
+                // Only the box id moves: the cluster numbers boxes, not the file.
+                let old = std::fs::read_to_string(&opts.config_path)?;
+                config_gen::write_config(&opts.config_path, &config_gen::set_mesh_box(&old, box_id))?;
+                info!("Configuration kept at {}; [mesh] box set to {box_id}", opts.config_path.display());
+            }
             Ok(()) => info!(
                 "Configuration already exists at {}, skipping (use --force to regenerate)",
                 opts.config_path.display()
@@ -311,7 +407,7 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
         }
     } else {
         let generated =
-            config_gen::generate_config(&resources, &opts.libvirt_uri, created_subnet.as_deref(), opts.box_id, opts.join.as_deref());
+            config_gen::generate_config(&resources, &opts.libvirt_uri, created_subnet.as_deref(), box_id, opts.join.as_deref());
         let content = if exists {
             let bak = config_gen::back_up(&opts.config_path)?;
             info!("Previous configuration saved as {}", bak.display());
@@ -320,7 +416,9 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
             match config_gen::carry_over_except(&old, &generated, fresh) {
                 Ok(c) => {
                     info!("Regenerated configuration; operator settings carried over");
-                    c
+                    // `[mesh]` is carried over whole; the box id is not the
+                    // operator's to keep.
+                    config_gen::set_mesh_box(&c, box_id)
                 }
                 Err(e) => {
                     warn!("{e:#}; regenerated from scratch (previous file is in the backup)");
@@ -333,78 +431,8 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
         config_gen::write_config(&opts.config_path, &content)?;
     }
 
-    // Create state directory
-    std::fs::create_dir_all(&opts.state_dir).context("creating state directory")?;
-
-    let api_tls_paths = api_tls::ApiTlsPaths::default();
-    let hostname = libvirt_setup::get_hostname();
-    let cfg_dir = opts.config_path.parent().unwrap_or_else(|| Path::new(DEFAULT_CONFIG_DIR));
-
-    // Step 6 + 7a: token and API certificate. A joining box gets both from
-    // the cluster CA (after `xdctl approve`); the first box mints its own.
-    let token = if let Some(ca_url) = &opts.join {
-        info!("Step 6/8: Enrolling with the cluster CA at {ca_url}");
-        if api_tls_paths.all_exist() && token::token_exists(&opts.token_path) && !opts.force {
-            info!("Already enrolled (certificate and token present); reusing. Use --force to re-enrol");
-            token::read_token(&opts.token_path)?
-        } else {
-            let api_url = match crate::config::Config::load(&opts.config_path) {
-                Ok(cfg) => cfg.advertise_url(cfg.effective_listen()),
-                Err(_) => derive_advertise_url(&opts.listen_addr),
-            };
-            let set = join::join(&join::JoinOptions {
-                ca_url,
-                expect_fingerprint: opts.ca_fingerprint.as_deref(),
-                hostname: &hostname,
-                box_id: opts.box_id,
-                api_url: &api_url,
-                force: opts.force,
-                paths: &api_tls_paths,
-                state_dir: &opts.state_dir,
-            })
-            .context("joining the cluster")?;
-            if opts.token_path.exists() {
-                let bak = config_gen::back_up(&opts.token_path)?;
-                info!("Replacing the local token with the cluster's; previous one saved as {}", bak.display());
-            }
-            token::write_token(&opts.token_path, &set.current)?;
-            let prev_path = opts.token_path.with_file_name("token.previous");
-            match set.previous {
-                Some(p) => crate::token::write_private(&prev_path, &p)?,
-                None => {
-                    let _ = std::fs::remove_file(&prev_path);
-                }
-            }
-            set.current
-        }
-    } else {
-        info!("Step 6/8: Generating API token");
-        let token = if token::token_exists(&opts.token_path) && !opts.force {
-            info!("Token already exists at {}, reusing", opts.token_path.display());
-            token::read_token(&opts.token_path)?
-        } else {
-            if opts.token_path.exists() {
-                let bak = config_gen::back_up(&opts.token_path)?;
-                warn!(
-                    "Replacing the API token (--force); previous one saved as {}. Clients holding the old token (xdctl env, abe-csi, CAPX) must be updated",
-                    bak.display()
-                );
-            }
-            let new_token = token::generate_token()?;
-            token::write_token(&opts.token_path, &new_token)?;
-            new_token
-        };
-
-        // Step 7a: API TLS: the cluster CA (kept here) and this box's cert.
-        info!("Step 7/8: Generating API TLS certificates");
-        if let Err(e) = api_tls::ensure_api_tls(&hostname, opts.force, &api_tls_paths) {
-            warn!("Failed to generate API TLS certs: {e:#}");
-            warn!("xdebbied will serve plain HTTP until certs are fixed; re-run bootstrap");
-        }
-        token
-    };
-
-    // Step 7b: Generate libvirt TLS certificates for multi-host connections.
+    // Step 7: Generate libvirt TLS certificates for multi-host connections.
+    info!("Step 7/8: Generating libvirt TLS certificates");
     if let Err(e) = tls_certs::ensure_tls_certificates(opts.force) {
         warn!("Failed to generate libvirt TLS certificates: {}", e);
         warn!("Multi-host libvirt connections may not work until certificates are set up manually");
@@ -455,6 +483,7 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     info!("Token:         {}", opts.token_path.display());
     info!("State:         {}", opts.state_dir.display());
     info!("Env file:      {}", env_path.display());
+    info!("Mesh box id:   {box_id}");
     info!("");
     info!("To start xdebbied:");
     info!("  sudo systemctl enable --now xdebbied");
@@ -478,7 +507,8 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
         info!("This box holds the cluster CA ({}).", api_tls_paths.ca_key.display());
         info!("  CA fingerprint: {fp}");
         info!("To add another box, run there:");
-        info!("  sudo xdebbied bootstrap --box <N> --join {advertise_url} --ca-fingerprint {fp}");
+        info!("  sudo xdebbied bootstrap --join {advertise_url} --ca-fingerprint {fp}");
+        info!("(it gets the next free box id; `xdctl enroll ls` shows it)");
         info!("then approve it from any member:");
         info!("  xdctl enroll ls");
         info!("  xdctl approve <hostname>");
@@ -489,7 +519,7 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
         info!("");
         info!("No cluster CA key here. Either this is the CA box upgraded from 0.13 (run");
         info!("`bootstrap --force` once to create the key) or it should join another:");
-        info!("  sudo xdebbied bootstrap --box <N> --join https://<ca-box>:7443");
+        info!("  sudo xdebbied bootstrap --join https://<ca-box>:7443");
     }
 
     Ok(())

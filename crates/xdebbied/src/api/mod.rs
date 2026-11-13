@@ -1042,7 +1042,7 @@ mod tests {
             abe: abe::Client::new(),
             leadership,
             http: reqwest::Client::new(),
-            enroll: Arc::new(Enrollments::load(dir.path().join("enroll.json"), None).unwrap()),
+            enroll: Arc::new(Enrollments::load(dir.path().join("enroll.json"), None, vec![]).unwrap()),
         };
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", l.local_addr().unwrap());
@@ -1075,7 +1075,7 @@ mod tests {
             abe: abe::Client::new(),
             leadership: Leadership::standalone("ca-box", "https://unused"),
             http: reqwest::Client::new(),
-            enroll: Arc::new(Enrollments::load(dir.path().join("enroll.json"), Some(signer)).unwrap()),
+            enroll: Arc::new(Enrollments::load(dir.path().join("enroll.json"), Some(signer), vec![0]).unwrap()),
         };
         let roots = crate::tls::client_roots(&paths.ca_cert, &dir.path().join("nonexistent"));
         let sc = crate::tls::server_config(&paths.server_cert, &paths.server_key, roots).unwrap();
@@ -1103,11 +1103,12 @@ mod tests {
 
         // Joiner: key + CSR, submit, poll.
         let csr = crate::bootstrap::api_tls::make_csr("joiner.test").unwrap();
-        let req = EnrollRequest { hostname: "joiner.test".into(), box_id: 3, api_url: "https://joiner.test:7443".into(), csr: csr.csr_pem, wg_pubkey: None };
+        let req = EnrollRequest { hostname: "joiner.test".into(), box_id: None, api_url: "https://joiner.test:7443".into(), csr: csr.csr_pem, wg_pubkey: None };
         let r = anon.post(format!("{url}/v1/enroll")).json(&req).send().await.unwrap();
         assert_eq!(r.status(), 202);
         let e: Enrollment = r.json().await.unwrap();
         assert_eq!((e.status, e.fingerprint.as_str()), (EnrollStatus::Pending, csr.fingerprint.as_str()));
+        assert_eq!(e.box_id, 1, "assigned by the CA box (which is 0)");
         let polled: Enrollment = anon.get(format!("{url}/v1/enroll/{}", e.id)).send().await.unwrap().json().await.unwrap();
         assert_eq!(polled.status, EnrollStatus::Pending);
         assert_eq!(anon.post(format!("{url}/v1/enroll/{}/approve", e.id)).send().await.unwrap().status(), 401);

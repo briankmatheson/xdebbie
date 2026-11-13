@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Cluster enrolment with operator approval.** One CA per cluster: the
   first box bootstrapped keeps the CA key (`/etc/xdebbie/api-ca-key.pem`,
   root:root 0400). A new box runs
-  `xdebbied bootstrap --box N --join https://first:7443 [--ca-fingerprint …]`:
+  `xdebbied bootstrap --join https://first:7443 [--ca-fingerprint …]`:
   it pins the CA (y/N prompt or pinned fingerprint), generates a key and
   CSR, `POST /v1/enroll`s it and waits. An operator runs `xdctl enroll ls`
   and `xdctl approve <host>` (or `xdctl enroll deny`) from any member; the
@@ -27,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `POST /v1/enroll/{id}/{approve,deny}` (forwarded to the CA box via the
   new `ca_url` config key), `GET /v1/enroll/token` (client cert only),
   `GET /v1/ca` (public; `X-Xdebbie-CA-Fingerprint` header).
+- **Box ids are assigned by the cluster.** `--box` is no longer needed:
+  the first box is 0 and the CA box hands each joiner the lowest free id at
+  enrolment (own id + configured peers + every live enrolment are taken; a
+  host that re-enrols keeps its id). Bootstrap now enrols *before* creating
+  the libvirt network so the assigned id drives the bridge MAC and `[mesh]
+  box`; an existing config has only its `box` line rewritten.
 - `xdebbied bootstrap` with no `--join` listens 20 s for a running
   cluster's discovery announcements and offers to join it (leader first);
   hearing nothing, it asks for a URL, Enter = first box. Non-interactive

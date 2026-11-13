@@ -72,10 +72,12 @@ enum Cmd {
         /// Storage pool path
         #[arg(long, default_value = "/var/lib/libvirt/xdebbie")]
         pool_path: String,
-        /// Mesh box id (0-253, unique per host): written to [mesh] and used
-        /// for the bridge MAC 52:54:00:23:<box>:fe when the network is created
-        #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u8).range(0..=253))]
-        r#box: u8,
+        /// Mesh box id (0-253, unique per cluster). Normally not needed:
+        /// the first box takes 0 and a joining box is assigned one by the
+        /// CA box at approval. Written to [mesh] and used for the bridge
+        /// MAC 52:54:00:23:<box>:fe when the network is created.
+        #[arg(long, value_parser = clap::value_parser!(u8).range(0..=253))]
+        r#box: Option<u8>,
         /// Join an existing cluster: API URL of the box bootstrapped first
         /// (it holds the cluster CA), e.g. https://node0:7443. This box
         /// gets a certificate from it once an operator runs
@@ -378,8 +380,10 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         (None, Some(u)) => info!(ca_url = %u, "enrolment requests are forwarded to the CA box"),
         (None, None) => info!("no cluster CA key and no ca_url: enrolment unavailable on this box"),
     }
+    let mesh_cfg = cfg.mesh_config();
+    let reserved: Vec<u8> = std::iter::once(mesh_cfg.box_id).chain(mesh_cfg.peers.iter().map(|p| p.box_id)).collect();
     let enroll = Arc::new(
-        enroll::Enrollments::load(cfg.state_dir().join("enroll.json"), signer).unwrap_or_else(|e| fatal_config(e)),
+        enroll::Enrollments::load(cfg.state_dir().join("enroll.json"), signer, reserved).unwrap_or_else(|e| fatal_config(e)),
     );
 
     let app = api::router(api::App {

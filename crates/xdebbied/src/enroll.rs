@@ -37,7 +37,13 @@ pub struct Enrollments {
     path: PathBuf,
     recs: RwLock<Vec<Record>>,
     signer: Option<CaSigner>,
+    /// Box ids in use before any enrolment: this box's own and its
+    /// configured mesh peers.
+    reserved: Vec<u8>,
 }
+
+/// Highest mesh box id (`10.22.<box>.1`, `52:54:00:23:<box>:fe`).
+pub const MAX_BOX: u8 = 253;
 
 pub enum Decision {
     Approve,
@@ -46,13 +52,41 @@ pub enum Decision {
 
 impl Enrollments {
     /// Load `path` (missing = empty). `signer` is `None` on a member box.
-    pub fn load(path: PathBuf, signer: Option<CaSigner>) -> Result<Self> {
+    /// `reserved`: box ids already taken on this box (own id, config peers).
+    pub fn load(path: PathBuf, signer: Option<CaSigner>, reserved: Vec<u8>) -> Result<Self> {
         let recs = match std::fs::read(&path) {
             Ok(b) => serde_json::from_slice(&b).with_context(|| format!("parsing {}", path.display()))?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => vec![],
             Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
         };
-        Ok(Self { path, recs: RwLock::new(recs), signer })
+        Ok(Self { path, recs: RwLock::new(recs), signer, reserved })
+    }
+
+    /// Pick a box id for `hostname`: the one it had when last approved, else
+    /// the requested one if free, else the lowest free. Denied requests do
+    /// not hold an id.
+    fn allocate(&self, recs: &[Record], hostname: &str, want: Option<u8>) -> Result<u8> {
+        if let Some(prev) = recs
+            .iter()
+            .rev()
+            .find(|r| r.view.hostname == hostname && r.view.status == EnrollStatus::Approved)
+        {
+            return Ok(prev.view.box_id);
+        }
+        let taken = |b: u8| {
+            self.reserved.contains(&b)
+                || recs.iter().any(|r| r.view.status != EnrollStatus::Denied && r.view.box_id == b)
+        };
+        if let Some(w) = want {
+            if w > MAX_BOX {
+                bail!("box {w} out of range (0-{MAX_BOX})");
+            }
+            if taken(w) {
+                bail!("box {w} is already in use in this cluster");
+            }
+            return Ok(w);
+        }
+        (0..=MAX_BOX).find(|b| !taken(*b)).ok_or_else(|| anyhow::anyhow!("no free box id left (0-{MAX_BOX})"))
     }
 
     /// This box holds the CA key.
@@ -91,10 +125,11 @@ impl Enrollments {
         if recs.iter().filter(|r| r.view.status == EnrollStatus::Pending).count() >= MAX_PENDING {
             bail!("too many pending enrolments ({MAX_PENDING}); deny some first");
         }
+        let box_id = self.allocate(&recs, &req.hostname, req.box_id)?;
         let view = Enrollment {
             id: uuid::Uuid::new_v4().to_string()[..8].to_string(),
             hostname: req.hostname,
-            box_id: req.box_id,
+            box_id,
             api_url: req.api_url,
             fingerprint,
             status: EnrollStatus::Pending,
@@ -180,7 +215,7 @@ mod tests {
     fn req(host: &str) -> (EnrollRequest, String) {
         let csr = api_tls::make_csr(host).unwrap();
         (
-            EnrollRequest { hostname: host.into(), box_id: 1, api_url: format!("https://{host}:7443"), csr: csr.csr_pem, wg_pubkey: None },
+            EnrollRequest { hostname: host.into(), box_id: None, api_url: format!("https://{host}:7443"), csr: csr.csr_pem, wg_pubkey: None },
             csr.fingerprint,
         )
     }
@@ -190,13 +225,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (_, signer) = ca_in(dir.path());
         let path = dir.path().join("state/enroll.json");
-        let e = Enrollments::load(path.clone(), Some(signer)).unwrap();
+        let e = Enrollments::load(path.clone(), Some(signer), vec![0]).unwrap();
         assert!(e.can_sign());
 
         let (r, fp) = req("joiner");
         let a = e.submit(r.clone()).await.unwrap();
         assert_eq!(a.status, EnrollStatus::Pending);
         assert_eq!(a.fingerprint, fp);
+        assert_eq!(a.box_id, 1, "0 is the CA box's");
         // Same key again: same enrolment, not a duplicate.
         assert_eq!(e.submit(r).await.unwrap().id, a.id);
         // New key, same host, still pending: replaces.
@@ -213,7 +249,7 @@ mod tests {
         assert_eq!(e.list(true).await.len(), 1);
 
         // Survives a reload (without the signer, as a member would).
-        let e2 = Enrollments::load(path, None).unwrap();
+        let e2 = Enrollments::load(path, None, vec![]).unwrap();
         assert_eq!(e2.get(&b.id).await.unwrap().status, EnrollStatus::Approved);
         assert!(e2.decide(&b.id, Decision::Deny).await.is_err());
         assert!(e.decide("nobody", Decision::Deny).await.is_err());
@@ -223,11 +259,35 @@ mod tests {
     async fn deny_by_id() {
         let dir = tempfile::tempdir().unwrap();
         let (_, signer) = ca_in(dir.path());
-        let e = Enrollments::load(dir.path().join("enroll.json"), Some(signer)).unwrap();
+        let e = Enrollments::load(dir.path().join("enroll.json"), Some(signer), vec![0]).unwrap();
         let (r, _) = req("bad");
         let a = e.submit(r).await.unwrap();
         let d = e.decide(&a.id, Decision::Deny).await.unwrap();
         assert_eq!(d.status, EnrollStatus::Denied);
         assert!(d.cert.is_none());
+    }
+
+    #[tokio::test]
+    async fn box_ids_are_allocated_and_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, signer) = ca_in(dir.path());
+        let e = Enrollments::load(dir.path().join("enroll.json"), Some(signer), vec![0, 2]).unwrap();
+        // Lowest free, skipping reserved.
+        let a = e.submit(req("a").0).await.unwrap();
+        assert_eq!(a.box_id, 1);
+        let b = e.submit(req("b").0).await.unwrap();
+        assert_eq!(b.box_id, 3);
+        // A wish is honoured when free, refused when not.
+        let mut r = req("c").0;
+        r.box_id = Some(7);
+        assert_eq!(e.submit(r).await.unwrap().box_id, 7);
+        let mut r = req("d").0;
+        r.box_id = Some(2);
+        assert!(e.submit(r).await.unwrap_err().to_string().contains("already in use"));
+        // A denied request frees its id; a re-enrolling approved host keeps its own.
+        e.decide("b", Decision::Deny).await.unwrap();
+        e.decide("a", Decision::Approve).await.unwrap();
+        assert_eq!(e.submit(req("e").0).await.unwrap().box_id, 3);
+        assert_eq!(e.submit(req("a").0).await.unwrap().box_id, 1);
     }
 }
