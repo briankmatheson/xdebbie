@@ -8,5 +8,6 @@ pub mod engine;
 pub mod messages;
 pub mod multicast;
 pub mod peer;
+pub mod reach;
 
 pub use engine::{DiscoveryConfig, DiscoveryEngine};

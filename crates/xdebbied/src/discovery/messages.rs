@@ -11,6 +11,12 @@ pub enum DiscoveryMessage {
         node_id: Uuid,
         hostname: String,
         api_url: String,
+        /// Addresses `api_url` can be reached at when its hostname does
+        /// not resolve on the receiver (docs/autodiscovery.md). Absent
+        /// from daemons before 0.15; the packet's source address still
+        /// serves as a candidate.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        addrs: Vec<std::net::IpAddr>,
         capacity: NodeCapacity,
         score: f64,
         sequence: u64,

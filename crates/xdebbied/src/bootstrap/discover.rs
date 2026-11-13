@@ -40,9 +40,11 @@ pub fn listen(multicast_addr: &str, timeout: Duration, own_hostname: &str) -> Re
     let mut leaders: Vec<Uuid> = vec![];
     while start.elapsed() < timeout {
         match sock.recv()? {
-            Some((DiscoveryMessage::Announce { node_id, hostname, api_url, .. }, _)) => {
+            Some((DiscoveryMessage::Announce { node_id, hostname, api_url, addrs, .. }, src)) => {
                 if hostname != own_hostname {
                     nodes.entry(node_id).or_insert_with(|| {
+                        let candidates = crate::discovery::reach::source_ip(src).into_iter().chain(addrs);
+                        let api_url = crate::discovery::reach::reachable_url(&api_url, candidates);
                         info!(host = %hostname, url = %api_url, "heard a running xdebbied");
                         Found { hostname, api_url, is_leader: false }
                     });
@@ -166,9 +168,9 @@ mod tests {
         let cap = NodeCapacity { total_cpus: 1, total_memory_mib: 1, available_cpus: 1.0, available_memory_mib: 1, vm_count: 0, control_plane_eligible: false };
         let sender = std::thread::spawn(move || {
             for _ in 0..30 {
-                let _ = tx.send(&DiscoveryMessage::Announce { node_id: a, hostname: "alpha".into(), api_url: "https://alpha:7443".into(), capacity: cap.clone(), score: 1.0, sequence: 1 });
-                let _ = tx.send(&DiscoveryMessage::Announce { node_id: b, hostname: "beta".into(), api_url: "https://beta:7443".into(), capacity: cap.clone(), score: 1.0, sequence: 1 });
-                let _ = tx.send(&DiscoveryMessage::Announce { node_id: Uuid::new_v4(), hostname: "me".into(), api_url: "https://me:7443".into(), capacity: cap.clone(), score: 1.0, sequence: 1 });
+                let _ = tx.send(&DiscoveryMessage::Announce { node_id: a, hostname: "alpha".into(), api_url: "https://192.0.2.1:7443".into(), addrs: vec![], capacity: cap.clone(), score: 1.0, sequence: 1 });
+                let _ = tx.send(&DiscoveryMessage::Announce { node_id: b, hostname: "beta".into(), api_url: "https://192.0.2.2:7443".into(), addrs: vec![], capacity: cap.clone(), score: 1.0, sequence: 1 });
+                let _ = tx.send(&DiscoveryMessage::Announce { node_id: Uuid::new_v4(), hostname: "me".into(), api_url: "https://me:7443".into(), addrs: vec![], capacity: cap.clone(), score: 1.0, sequence: 1 });
                 let _ = tx.send(&DiscoveryMessage::Heartbeat { node_id: b, score: 1.0, is_leader: true, sequence: 2 });
                 std::thread::sleep(Duration::from_millis(200));
             }
@@ -177,8 +179,8 @@ mod tests {
         sender.join().unwrap();
         let get = |h: &str| found.iter().find(|f| f.hostname == h).unwrap_or_else(|| panic!("{h} not heard: {found:?}")).clone();
         assert!(!found.iter().any(|f| f.hostname == "me"));
-        assert_eq!(get("beta"), Found { hostname: "beta".into(), api_url: "https://beta:7443".into(), is_leader: true });
-        assert_eq!(get("alpha"), Found { hostname: "alpha".into(), api_url: "https://alpha:7443".into(), is_leader: false });
+        assert_eq!(get("beta"), Found { hostname: "beta".into(), api_url: "https://192.0.2.2:7443".into(), is_leader: true });
+        assert_eq!(get("alpha"), Found { hostname: "alpha".into(), api_url: "https://192.0.2.1:7443".into(), is_leader: false });
         // Leaders sort first.
         let bi = found.iter().position(|f| f.hostname == "beta").unwrap();
         let ai = found.iter().position(|f| f.hostname == "alpha").unwrap();

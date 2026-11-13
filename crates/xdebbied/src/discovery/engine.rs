@@ -28,6 +28,9 @@ pub struct DiscoveryConfig {
     pub bind_addr: Option<String>,
     pub hostname: String,
     pub api_url: String,
+    /// Addresses announced alongside `api_url`; filled by
+    /// [`reach::local_addrs`] when left empty.
+    pub addrs: Vec<std::net::IpAddr>,
     pub enable_discovery: bool,
 }
 
@@ -41,6 +44,7 @@ impl Default for DiscoveryConfig {
                 .and_then(|h| h.into_string().ok())
                 .unwrap_or_else(|| "unknown".to_string()),
             api_url: "http://127.0.0.1:7443".to_string(),
+            addrs: vec![],
             enable_discovery: true,
         }
     }
@@ -57,8 +61,11 @@ pub struct DiscoveryEngine {
 }
 
 impl DiscoveryEngine {
-    pub fn new(config: DiscoveryConfig) -> Result<Self> {
+    pub fn new(mut config: DiscoveryConfig) -> Result<Self> {
         let node_id = Uuid::new_v4();
+        if config.addrs.is_empty() {
+            config.addrs = super::reach::local_addrs(&config.multicast_addr);
+        }
         let bind_addr = match &config.bind_addr {
             Some(b) => b.clone(),
             None => {
@@ -136,6 +143,7 @@ impl DiscoveryEngine {
             node_id: self.node_id,
             hostname: self.config.hostname.clone(),
             api_url: self.config.api_url.clone(),
+            addrs: self.config.addrs.clone(),
             capacity,
             score,
             sequence,
@@ -199,7 +207,7 @@ impl DiscoveryEngine {
     }
 
     /// Process received message
-    async fn process_message(&self, msg: DiscoveryMessage) -> Result<()> {
+    async fn process_message(&self, msg: DiscoveryMessage, src: std::net::SocketAddr) -> Result<()> {
         // Ignore our own messages
         if msg.node_id() == self.node_id {
             return Ok(());
@@ -210,14 +218,22 @@ impl DiscoveryEngine {
                 node_id,
                 hostname,
                 api_url,
+                addrs,
                 capacity: _,
                 score,
                 sequence,
             } => {
-                let mut peers = self.peers.write().await;
-                if let Some(peer) = peers.get_mut(&node_id) {
+                if let Some(peer) = self.peers.write().await.get_mut(&node_id) {
                     peer.update_heartbeat(score, false, sequence);
                 } else {
+                    // New peer: make sure we can actually dial what it
+                    // announced. Resolver runs off the runtime; see reach.rs.
+                    let candidates: Vec<_> = super::reach::source_ip(src).into_iter().chain(addrs).collect();
+                    let api_url = super::reach::reachable_url_async(api_url, candidates).await;
+                    let mut peers = self.peers.write().await;
+                    if peers.get_mut(&node_id).is_some() {
+                        return Ok(());
+                    }
                     let peer = PeerInfo::new(node_id, hostname, api_url, score);
                     info!("Discovered new peer: {} ({})", peer.hostname, peer.node_id);
                     peers.insert(peer);
@@ -341,8 +357,8 @@ impl DiscoveryEngine {
 
                 _ = tokio::time::sleep(Duration::from_millis(100)) => {
                     // Process incoming messages
-                    while let Ok(Some((msg, _addr))) = self.socket.recv() {
-                        if let Err(e) = self.process_message(msg).await {
+                    while let Ok(Some((msg, addr))) = self.socket.recv() {
+                        if let Err(e) = self.process_message(msg, addr).await {
                             warn!("Failed to process message: {}", e);
                         }
                     }

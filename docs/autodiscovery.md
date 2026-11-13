@@ -72,12 +72,23 @@ so a replacement daemon can join while the old one is still running.
 
 | Message | When | Carries |
 |---|---|---|
-| `ANNOUNCE` | every 5 s | `node_id`, `hostname`, `api_url`, capacity, score |
+| `ANNOUNCE` | every 5 s | `node_id`, `hostname`, `api_url`, `addrs`, capacity, score |
 | `HEARTBEAT` | every 1 s | `node_id`, score, `is_leader` |
 | `ELECTION_PROPOSE` | a follower has not heard a leader for 5 s | `node_id`, score |
 | `ELECTION_VOTE` | reply to a proposal with a higher score than our own | `voted_for` |
 
 `node_id` is a fresh UUID per process. Peers unseen for 15 s are dropped.
+
+`api_url` is built from the sender's hostname, which may resolve nowhere
+but on the sender. `addrs` lists the sender's addresses (the one its
+multicast route leaves by first, then every global IPv4 address); the
+receiver also notes the datagram's source address. When the URL's host does
+not resolve locally the receiver swaps it for the first usable address —
+source first, then `addrs` — and logs a warning naming the host. API
+certificates carry every local address as a SAN, so TLS still verifies.
+`xdctl leader` then shows the address form. `bootstrap`'s discovery listen
+does the same, so the offered join URL is dialable. Daemons older than 0.15
+send no `addrs`; their source address still works.
 
 ## Election
 
