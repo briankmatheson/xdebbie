@@ -2,23 +2,23 @@
 //! xdctl — command-line client for xdebbied.
 
 use anyhow::{Context, Result, bail};
-use clap::{Parser, Subcommand, CommandFactory};
-use clap_complete::{generate, Shell};
-use xdebbie_core::*;
+use chrono::{DateTime, Utc};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::{Shell, generate};
 use reqwest::{Method, blocking::Client};
 use serde_json::Value;
-use chrono::{DateTime, Utc};
+use xdebbie_core::*;
 
 /// Format a timestamp as a Kubernetes-style age (e.g., "5m", "2h", "3d")
 fn format_age(created: DateTime<Utc>) -> String {
     let now = Utc::now();
     let duration = now.signed_duration_since(created);
-    
+
     let seconds = duration.num_seconds();
     if seconds < 0 {
         return "0s".to_string();
     }
-    
+
     if seconds < 60 {
         format!("{}s", seconds)
     } else if seconds < 3600 {
@@ -42,7 +42,11 @@ struct Cli {
     /// PEM CA certificate(s) to trust for https:// (comma-separated files
     /// or directories of *.pem). Bootstrap writes /etc/xdebbie/api-ca.pem
     /// and exports it as XDEBBIE_CA; peer CAs live in /etc/xdebbie/peers.
-    #[arg(long, env = "XDEBBIE_CA", default_value = "/etc/xdebbie/api-ca.pem,/etc/xdebbie/peers")]
+    #[arg(
+        long,
+        env = "XDEBBIE_CA",
+        default_value = "/etc/xdebbie/api-ca.pem,/etc/xdebbie/peers"
+    )]
     ca: String,
     /// Skip TLS certificate verification (lab use only).
     #[arg(long, env = "XDEBBIE_INSECURE")]
@@ -351,12 +355,19 @@ const LEADER_WAIT_SECS: u32 = 20;
 /// (comma-separated files or directories). Missing paths are skipped: a
 /// box that still serves plain http has no CA and must keep working.
 fn http_client(ca: &str, insecure: bool) -> Result<Client> {
-    let mut b = Client::builder().use_rustls_tls().danger_accept_invalid_certs(insecure);
+    let mut b = Client::builder()
+        .use_rustls_tls()
+        .danger_accept_invalid_certs(insecure);
     for entry in ca.split(',').map(str::trim).filter(|s| !s.is_empty()) {
         let p = std::path::Path::new(entry);
         let files: Vec<std::path::PathBuf> = if p.is_dir() {
             std::fs::read_dir(p)
-                .map(|rd| rd.flatten().map(|e| e.path()).filter(|f| f.extension().is_some_and(|x| x == "pem")).collect())
+                .map(|rd| {
+                    rd.flatten()
+                        .map(|e| e.path())
+                        .filter(|f| f.extension().is_some_and(|x| x == "pem"))
+                        .collect()
+                })
                 .unwrap_or_default()
         } else if p.is_file() {
             vec![p.to_path_buf()]
@@ -365,7 +376,8 @@ fn http_client(ca: &str, insecure: bool) -> Result<Client> {
         };
         for f in files {
             let pem = std::fs::read(&f).with_context(|| format!("reading CA {}", f.display()))?;
-            let cert = reqwest::Certificate::from_pem(&pem).with_context(|| format!("parsing CA {}", f.display()))?;
+            let cert = reqwest::Certificate::from_pem(&pem)
+                .with_context(|| format!("parsing CA {}", f.display()))?;
             b = b.add_root_certificate(cert);
         }
     }
@@ -393,16 +405,30 @@ impl Api {
                 self.url = seed.to_string();
                 match self.call_raw(Method::GET, "/leader", None, None) {
                     Ok((code, _)) if code == reqwest::StatusCode::NOT_FOUND => {
-                        let this = LeaderRef { node_id: None, hostname: "(pre-0.10 daemon)".into(), api_url: seed.into() };
-                        return Ok(LeaderStatus { this: this.clone(), state: "unknown".into(), is_leader: true, leader: Some(this), peers: 0 });
+                        let this = LeaderRef {
+                            node_id: None,
+                            hostname: "(pre-0.10 daemon)".into(),
+                            api_url: seed.into(),
+                        };
+                        return Ok(LeaderStatus {
+                            this: this.clone(),
+                            state: "unknown".into(),
+                            is_leader: true,
+                            leader: Some(this),
+                            peers: 0,
+                        });
                     }
                     Ok((code, v)) if code.is_success() => {
-                        let st: LeaderStatus = serde_json::from_value(v).context("parsing /v1/leader")?;
+                        let st: LeaderStatus =
+                            serde_json::from_value(v).context("parsing /v1/leader")?;
                         if let Some(l) = &st.leader {
                             self.url = l.api_url.clone();
                             return Ok(st);
                         }
-                        errs.push(format!("{seed}: no leader elected yet (state: {})", st.state));
+                        errs.push(format!(
+                            "{seed}: no leader elected yet (state: {})",
+                            st.state
+                        ));
                         if waited == 0 {
                             eprintln!("waiting for a leader election at {seed}...");
                         }
@@ -431,7 +457,13 @@ impl Api {
         Ok(v)
     }
     /// Like `call` but returns the status so callers can handle 409 etc.
-    fn call_raw(&self, m: Method, path: &str, body: Option<Value>, if_match: Option<u64>) -> Result<(reqwest::StatusCode, Value)> {
+    fn call_raw(
+        &self,
+        m: Method,
+        path: &str,
+        body: Option<Value>,
+        if_match: Option<u64>,
+    ) -> Result<(reqwest::StatusCode, Value)> {
         let mut r = self
             .c
             .request(m, format!("{}/v1{path}", self.url.trim_end_matches('/')));
@@ -446,7 +478,11 @@ impl Api {
         }
         let resp = r.send().context("contacting xdebbied")?;
         let code = resp.status();
-        if let Some(fp) = resp.headers().get("x-xdebbie-ca-fingerprint").and_then(|v| v.to_str().ok()) {
+        if let Some(fp) = resp
+            .headers()
+            .get("x-xdebbie-ca-fingerprint")
+            .and_then(|v| v.to_str().ok())
+        {
             *self.last_ca_fingerprint.borrow_mut() = Some(fp.to_string());
         }
         let text = resp.text()?;
@@ -522,8 +558,14 @@ fn print_net(v: &Value) {
         s(&v["pool_start"]),
         s(&v["pool_end"]),
         v["lease_secs"],
-        v["dns"].as_array().map(|a| a.iter().map(s).collect::<Vec<_>>().join(",")).unwrap_or_default(),
-        v["domain"].as_str().map(|d| format!(" domain={d}")).unwrap_or_default()
+        v["dns"]
+            .as_array()
+            .map(|a| a.iter().map(s).collect::<Vec<_>>().join(","))
+            .unwrap_or_default(),
+        v["domain"]
+            .as_str()
+            .map(|d| format!(" domain={d}"))
+            .unwrap_or_default()
     );
     if let Some(r) = v["reserved"].as_array().filter(|r| !r.is_empty()) {
         println!("reserved={}", r.iter().map(s).collect::<Vec<_>>().join(","));
@@ -541,19 +583,34 @@ fn print_net(v: &Value) {
         "dhcp: {state} bridge={} server_id={} mtu={} leader_only={}",
         s(&d["bridge"]),
         s(&d["server_id"]),
-        d["mtu"].as_u64().map(|m| m.to_string()).unwrap_or_else(|| "-".into()),
+        d["mtu"]
+            .as_u64()
+            .map(|m| m.to_string())
+            .unwrap_or_else(|| "-".into()),
         d["leader_only"]
     );
     let c = &d["counters"];
     println!(
         "counters: offers={} acks={} naks={} unknown_mac={} standby={} other_server={} parse_errors={} send_errors={}",
-        c["offers"], c["acks"], c["naks"], c["ignored_unknown"], c["ignored_standby"], c["ignored_other"], c["parse_errors"], c["send_errors"]
+        c["offers"],
+        c["acks"],
+        c["naks"],
+        c["ignored_unknown"],
+        c["ignored_standby"],
+        c["ignored_other"],
+        c["parse_errors"],
+        c["send_errors"]
     );
 }
 
 fn print_seen(v: &Value) {
-    let Some(seen) = v["dhcp"]["seen"].as_array() else { return };
-    println!("{:<18} {:<16} {:<24} {:<22} {:<20} LAST SEEN", "MAC", "IP", "VM", "CLIENT HOSTNAME", "LAST");
+    let Some(seen) = v["dhcp"]["seen"].as_array() else {
+        return;
+    };
+    println!(
+        "{:<18} {:<16} {:<24} {:<22} {:<20} LAST SEEN",
+        "MAC", "IP", "VM", "CLIENT HOSTNAME", "LAST"
+    );
     let mut rows: Vec<&Value> = seen.iter().collect();
     rows.sort_by(|a, b| b["last_seen"].as_str().cmp(&a["last_seen"].as_str()));
     for r in rows {
@@ -575,9 +632,15 @@ fn print_wg_peers(w: &Value) {
         return;
     }
     println!();
-    println!("{:<5} {:<46} {:<24} {:>10} {:>12} {:>12}", "BOX", "PUBKEY", "ENDPOINT", "HANDSHAKE", "RX", "TX");
+    println!(
+        "{:<5} {:<46} {:<24} {:>10} {:>12} {:>12}",
+        "BOX", "PUBKEY", "ENDPOINT", "HANDSHAKE", "RX", "TX"
+    );
     for p in &peers {
-        let hs = p["handshake_age_s"].as_u64().map(|s| format!("{s}s ago")).unwrap_or_else(|| "never".into());
+        let hs = p["handshake_age_s"]
+            .as_u64()
+            .map(|s| format!("{s}s ago"))
+            .unwrap_or_else(|| "never".into());
         println!(
             "{:<5} {:<46} {:<24} {:>10} {:>12} {:>12}",
             p["box"].to_string(),
@@ -612,7 +675,10 @@ fn print_mesh(doc: &Value) {
         "BOX", "DEVICE", "REMOTE", "PROBE", "STATE", "RTT", "FDB"
     );
     for p in st["peers"].as_array().into_iter().flatten() {
-        let rtt = p["rtt_ms"].as_f64().map(|r| format!("{r:.2}ms")).unwrap_or_else(|| "-".into());
+        let rtt = p["rtt_ms"]
+            .as_f64()
+            .map(|r| format!("{r:.2}ms"))
+            .unwrap_or_else(|| "-".into());
         let state = match p["reason"].as_str() {
             Some(r) => format!("{} ({r})", p["state"].as_str().unwrap_or("?")),
             None => p["state"].as_str().unwrap_or("?").to_string(),
@@ -649,7 +715,10 @@ fn print_mesh(doc: &Value) {
     println!();
     println!("CONDITIONS");
     for c in st["conditions"].as_array().into_iter().flatten() {
-        let msg = c["message"].as_str().map(|m| format!("  {m}")).unwrap_or_default();
+        let msg = c["message"]
+            .as_str()
+            .map(|m| format!("  {m}"))
+            .unwrap_or_default();
         println!(
             "  {:<20} {:<5} {}{}",
             c["type"].as_str().unwrap_or("?"),
@@ -662,7 +731,13 @@ fn print_mesh(doc: &Value) {
         && !m.is_empty()
     {
         println!();
-        println!("VM NICs with stale MTU (fixed on recreate): {}", m.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", "));
+        println!(
+            "VM NICs with stale MTU (fixed on recreate): {}",
+            m.iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
     }
 }
 
@@ -716,7 +791,8 @@ fn main() -> Result<()> {
                 } else {
                     std::fs::read_to_string(&file).with_context(|| format!("reading {file}"))?
                 };
-                let body: Value = serde_json::from_str(&text).context("mesh document is not valid JSON")?;
+                let body: Value =
+                    serde_json::from_str(&text).context("mesh document is not valid JSON")?;
                 // Accept either a bare spec or a {spec, status} document.
                 let spec = body.get("spec").cloned().unwrap_or(body);
                 let v = api.call(Method::PUT, "/mesh", Some(spec))?;
@@ -725,15 +801,30 @@ fn main() -> Result<()> {
                 }
                 print_mesh(&v);
             }
-            MeshCmd::Peer(MeshPeerCmd::Add { r#box, remote, probe, pubkey, endpoint }) => {
+            MeshCmd::Peer(MeshPeerCmd::Add {
+                r#box,
+                remote,
+                probe,
+                pubkey,
+                endpoint,
+            }) => {
                 let v = mesh_modify(&api, |spec| {
                     if remote.is_none() && spec["wireguard"].is_null() {
-                        bail!("REMOTE is required unless the mesh manages WireGuard (spec.wireguard)");
+                        bail!(
+                            "REMOTE is required unless the mesh manages WireGuard (spec.wireguard)"
+                        );
                     }
-                    let peers = spec["peers"].as_array_mut().ok_or_else(|| anyhow::anyhow!("spec has no peers array"))?;
+                    let peers = spec["peers"]
+                        .as_array_mut()
+                        .ok_or_else(|| anyhow::anyhow!("spec has no peers array"))?;
                     peers.retain(|p| p["box"].as_u64() != Some(r#box as u64));
                     let mut p = serde_json::json!({ "box": r#box });
-                    for (k, v) in [("remote", &remote), ("probe", &probe), ("pubkey", &pubkey), ("endpoint", &endpoint)] {
+                    for (k, v) in [
+                        ("remote", &remote),
+                        ("probe", &probe),
+                        ("pubkey", &pubkey),
+                        ("endpoint", &endpoint),
+                    ] {
                         if let Some(v) = v {
                             p[k] = Value::String(v.clone());
                         }
@@ -748,7 +839,9 @@ fn main() -> Result<()> {
             }
             MeshCmd::Peer(MeshPeerCmd::Rm { r#box }) => {
                 let v = mesh_modify(&api, |spec| {
-                    let peers = spec["peers"].as_array_mut().ok_or_else(|| anyhow::anyhow!("spec has no peers array"))?;
+                    let peers = spec["peers"]
+                        .as_array_mut()
+                        .ok_or_else(|| anyhow::anyhow!("spec has no peers array"))?;
                     let before = peers.len();
                     peers.retain(|p| p["box"].as_u64() != Some(r#box as u64));
                     if peers.len() == before {
@@ -786,7 +879,9 @@ fn main() -> Result<()> {
             }
             MeshCmd::Delete { yes } => {
                 if !yes {
-                    eprint!("Tear down the Geneve mesh on this host and remove its API document? [y/N] ");
+                    eprint!(
+                        "Tear down the Geneve mesh on this host and remove its API document? [y/N] "
+                    );
                     let mut ans = String::new();
                     std::io::stdin().read_line(&mut ans)?;
                     if !matches!(ans.trim(), "y" | "Y" | "yes") {
@@ -798,7 +893,9 @@ fn main() -> Result<()> {
                     return out(v);
                 }
                 if v["reenabled_from_config"].as_bool() == Some(true) {
-                    println!("mesh torn down; [mesh] in xdebbied.toml has enabled = true, so it was rebuilt from config");
+                    println!(
+                        "mesh torn down; [mesh] in xdebbied.toml has enabled = true, so it was rebuilt from config"
+                    );
                 } else {
                     println!("mesh torn down");
                 }
@@ -813,7 +910,13 @@ fn main() -> Result<()> {
                 return out(serde_json::to_value(&asked)?);
             }
             let who = |r: &LeaderRef| format!("{} ({})", r.hostname, r.api_url);
-            println!("asked   {}  [{}, {} peer{}]", who(&asked.this), asked.state, asked.peers, if asked.peers == 1 { "" } else { "s" });
+            println!(
+                "asked   {}  [{}, {} peer{}]",
+                who(&asked.this),
+                asked.state,
+                asked.peers,
+                if asked.peers == 1 { "" } else { "s" }
+            );
             match &asked.leader {
                 Some(l) if asked.is_leader => println!("leader  {}  (same box)", who(l)),
                 Some(l) => println!("leader  {}", who(l)),
@@ -821,7 +924,11 @@ fn main() -> Result<()> {
             }
         }
         Cmd::Enroll(EnrollCmd::Ls { all }) => {
-            let v = api.call(Method::GET, if all { "/enroll?all=true" } else { "/enroll" }, None)?;
+            let v = api.call(
+                Method::GET,
+                if all { "/enroll?all=true" } else { "/enroll" },
+                None,
+            )?;
             if cli.json {
                 return out(v);
             }
@@ -830,13 +937,26 @@ fn main() -> Result<()> {
                 println!("no {}enrolments", if all { "" } else { "pending " });
                 return Ok(());
             }
-            println!("{:<9} {:<24} {:>3}  {:<30} {:<23} {:<9} AGE", "ID", "HOST", "BOX", "URL", "FINGERPRINT", "STATUS");
+            println!(
+                "{:<9} {:<24} {:>3}  {:<30} {:<23} {:<9} AGE",
+                "ID", "HOST", "BOX", "URL", "FINGERPRINT", "STATUS"
+            );
             for e in es {
                 let fp = e.fingerprint.trim_start_matches("sha256:");
-                let fp = format!("{}…{}", &fp[..8.min(fp.len())], &fp[fp.len().saturating_sub(8)..]);
+                let fp = format!(
+                    "{}…{}",
+                    &fp[..8.min(fp.len())],
+                    &fp[fp.len().saturating_sub(8)..]
+                );
                 println!(
                     "{:<9} {:<24} {:>3}  {:<30} {:<23} {:<9} {}",
-                    e.id, e.hostname, e.box_id, e.api_url, fp, e.status, format_age(e.requested_at)
+                    e.id,
+                    e.hostname,
+                    e.box_id,
+                    e.api_url,
+                    fp,
+                    e.status,
+                    format_age(e.requested_at)
                 );
             }
         }
@@ -846,8 +966,13 @@ fn main() -> Result<()> {
                 return out(v);
             }
             let e: Enrollment = serde_json::from_value(v)?;
-            println!("approved {} (box {}, {})", e.hostname, e.box_id, e.fingerprint);
-            println!("Its `xdebbied bootstrap --join` picks the certificate up within a few seconds.");
+            println!(
+                "approved {} (box {}, {})",
+                e.hostname, e.box_id, e.fingerprint
+            );
+            println!(
+                "Its `xdebbied bootstrap --join` picks the certificate up within a few seconds."
+            );
         }
         Cmd::Enroll(EnrollCmd::Deny { host }) => {
             let v = api.call(Method::POST, &format!("/enroll/{host}/deny"), None)?;
@@ -876,7 +1001,11 @@ fn main() -> Result<()> {
                 return out(v);
             }
             let st: TokenStatus = serde_json::from_value(v)?;
-            println!("current   {}{}", st.id, if st.current_used { "  (in use)" } else { "" });
+            println!(
+                "current   {}{}",
+                st.id,
+                if st.current_used { "  (in use)" } else { "" }
+            );
             match &st.previous {
                 Some(p) => println!("previous  {}  (still accepted: rotation in progress)", p),
                 None => println!("previous  none"),
@@ -903,7 +1032,9 @@ fn main() -> Result<()> {
             println!();
             println!("The old token keeps working until every node has the new one, then it is");
             println!("retired. /etc/xdebbie/xdebbie_env is updated on each node as it switches;");
-            println!("re-source it, and update any other holder (abe-csi secret, CAPX). Watch with");
+            println!(
+                "re-source it, and update any other holder (abe-csi secret, CAPX). Watch with"
+            );
             println!("`xdctl token status`.");
         }
         Cmd::Fd => {
@@ -923,7 +1054,9 @@ fn main() -> Result<()> {
             }
         }
         Cmd::Host(h) => match h {
-            HostCmd::Describe { name } => out(api.call(Method::GET, &format!("/hosts/{name}"), None)?)?,
+            HostCmd::Describe { name } => {
+                out(api.call(Method::GET, &format!("/hosts/{name}"), None)?)?
+            }
             HostCmd::Ls => {
                 let v = api.call(Method::GET, "/hosts", None)?;
                 if cli.json {
@@ -1140,7 +1273,10 @@ fn main() -> Result<()> {
                     return out(v);
                 }
                 let vols: Vec<Volume> = serde_json::from_value(v)?;
-                println!("{:<32} {:<24} {:>8} {:<36} {:<8} {:<6} MESSAGE", "ID", "NAME", "GIB", "ATTACHED", "TARGET", "AGE");
+                println!(
+                    "{:<32} {:<24} {:>8} {:<36} {:<8} {:<6} MESSAGE",
+                    "ID", "NAME", "GIB", "ATTACHED", "TARGET", "AGE"
+                );
                 for v in vols {
                     let gib = v.bytes as f64 / (1u64 << 30) as f64;
                     let (vm, target) = match (&v.attached, v.attach_to) {
@@ -1150,12 +1286,19 @@ fn main() -> Result<()> {
                     };
                     println!(
                         "{:<32} {:<24} {:>8.1} {:<36} {:<8} {:<6} {}",
-                        v.id, v.name, gib, vm, target, format_age(v.created),
+                        v.id,
+                        v.name,
+                        gib,
+                        vm,
+                        target,
+                        format_age(v.created),
                         v.message.as_deref().unwrap_or("")
                     );
                 }
             }
-            VolumeCmd::Describe { id } => out(api.call(Method::GET, &format!("/volumes/{id}"), None)?)?,
+            VolumeCmd::Describe { id } => {
+                out(api.call(Method::GET, &format!("/volumes/{id}"), None)?)?
+            }
             VolumeCmd::Create { name, gib, host } => out(api.call(
                 Method::POST,
                 "/volumes",
@@ -1169,11 +1312,9 @@ fn main() -> Result<()> {
                 &format!("/volumes/{id}/attach"),
                 Some(serde_json::json!({ "vm": api.resolve(&vm)?, "force": force })),
             )?)?,
-            VolumeCmd::Detach { id } => out(api.call(
-                Method::POST,
-                &format!("/volumes/{id}/detach"),
-                None,
-            )?)?,
+            VolumeCmd::Detach { id } => {
+                out(api.call(Method::POST, &format!("/volumes/{id}/detach"), None)?)?
+            }
         },
         Cmd::Completion { .. } => unreachable!("handled before contacting xdebbied"),
     }

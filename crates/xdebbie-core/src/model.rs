@@ -225,7 +225,11 @@ impl Disk {
         if id.len() == 32 {
             format!(
                 "/dev/disk/by-id/nvme-uuid.{}-{}-{}-{}-{}",
-                &id[0..8], &id[8..12], &id[12..16], &id[16..20], &id[20..32]
+                &id[0..8],
+                &id[8..12],
+                &id[12..16],
+                &id[16..20],
+                &id[20..32]
             )
         } else {
             format!("/dev/disk/by-id/nvme-uuid.{id}")
@@ -279,7 +283,11 @@ pub struct Volume {
     pub bytes: u64,
     /// Lenient on read: a `perf` written by another abe/xdebbie version
     /// becomes `None` rather than making the whole state file unreadable.
-    #[serde(default, deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub perf: Option<VolumePerf>,
     /// Desired: the VM this volume should be plugged into.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -641,9 +649,19 @@ mod disk_tests {
             updated: now,
         };
         assert_eq!(v.serial(), "0123456789abcdef0123");
-        assert_eq!(v.guest_dev_path(), "/dev/disk/by-id/virtio-0123456789abcdef0123");
+        assert_eq!(
+            v.guest_dev_path(),
+            "/dev/disk/by-id/virtio-0123456789abcdef0123"
+        );
         assert_eq!(v.disk().role, DiskRole::Volume);
-        assert_eq!(v.disk().dev_path(), Disk { role: DiskRole::Root, ..v.disk() }.dev_path());
+        assert_eq!(
+            v.disk().dev_path(),
+            Disk {
+                role: DiskRole::Root,
+                ..v.disk()
+            }
+            .dev_path()
+        );
         let j = serde_json::to_value(&v).unwrap();
         assert!(j.get("attachTo").is_none(), "unset fields are omitted");
     }
@@ -651,7 +669,10 @@ mod disk_tests {
     #[test]
     fn storage_defaults_to_local_and_round_trips() {
         let v: serde_json::Value = serde_json::from_str(r#"{"storage":"abe"}"#).unwrap();
-        assert_eq!(serde_json::from_value::<Storage>(v["storage"].clone()).unwrap(), Storage::Abe);
+        assert_eq!(
+            serde_json::from_value::<Storage>(v["storage"].clone()).unwrap(),
+            Storage::Abe
+        );
         assert_eq!("local".parse::<Storage>().unwrap(), Storage::Local);
         assert!("nfs".parse::<Storage>().is_err());
         assert_eq!(Storage::default(), Storage::Local);

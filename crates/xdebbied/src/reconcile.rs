@@ -11,9 +11,11 @@ use std::{sync::Arc, time::Duration};
 
 use chrono::Utc;
 use futures::future::join_all;
-use xdebbie_core::{Address, Attachment, Disk, Host, PowerIntent, Storage, Vm, VmPhase, Volume, place};
 use tracing::{info, warn};
 use uuid::Uuid;
+use xdebbie_core::{
+    Address, Attachment, Disk, Host, PowerIntent, Storage, Vm, VmPhase, Volume, place,
+};
 
 use crate::{
     config::Config,
@@ -91,10 +93,17 @@ pub struct VolPatch {
 
 impl VolPatch {
     fn msg(m: impl Into<String>) -> Self {
-        Self { message: Some(Some(m.into())), ..Default::default() }
+        Self {
+            message: Some(Some(m.into())),
+            ..Default::default()
+        }
     }
     fn detached() -> Self {
-        Self { attached: Some(None), message: Some(None), ..Default::default() }
+        Self {
+            attached: Some(None),
+            message: Some(None),
+            ..Default::default()
+        }
     }
     fn apply(self, v: &mut Volume) {
         let mut changed = false;
@@ -217,18 +226,28 @@ impl<H: Hypervisor> Reconciler<H> {
         {
             let Some(h) = st.hosts.get(&att.host) else {
                 warn!(volume = %vol.id, host = %att.host, "attached on an unregistered host; forgetting the attachment");
-                return VolPatch { clear_attach_to: wish_stale, ..VolPatch::detached() };
+                return VolPatch {
+                    clear_attach_to: wish_stale,
+                    ..VolPatch::detached()
+                };
             };
             if !self.healthy(h) {
                 return VolPatch::msg(format!("waiting for host {} to detach", h.name));
             }
             return match self.hv.detach_volume(h, vol, att).await {
-                Ok(()) => VolPatch { clear_attach_to: wish_stale, ..VolPatch::detached() },
+                Ok(()) => VolPatch {
+                    clear_attach_to: wish_stale,
+                    ..VolPatch::detached()
+                },
                 Err(e) => VolPatch::msg(format!("detach: {e:#}")),
             };
         }
         if wish_stale {
-            return VolPatch { clear_attach_to: true, message: Some(None), ..Default::default() };
+            return VolPatch {
+                clear_attach_to: true,
+                message: Some(None),
+                ..Default::default()
+            };
         }
         let Some(vm) = want else {
             return VolPatch::default();
@@ -244,7 +263,11 @@ impl<H: Hypervisor> Reconciler<H> {
         }
         match self.hv.attach_volume(h, vm, vol).await {
             Ok(target) => VolPatch {
-                attached: Some(Some(Attachment { vm: vm.id, host: h.name.clone(), target })),
+                attached: Some(Some(Attachment {
+                    vm: vm.id,
+                    host: h.name.clone(),
+                    target,
+                })),
                 message: Some(None),
                 ..Default::default()
             },
@@ -488,7 +511,13 @@ impl<H: Hypervisor> Reconciler<H> {
             // listed first, whatever the guest agent / ARP table saw.
             if let Some(ip) = vm.ip {
                 a.retain(|x| x.address != ip.to_string());
-                a.insert(0, Address { kind: "InternalIP".into(), address: ip.to_string() });
+                a.insert(
+                    0,
+                    Address {
+                        kind: "InternalIP".into(),
+                        address: ip.to_string(),
+                    },
+                );
             }
             a.push(Address {
                 kind: "Hostname".into(),
@@ -505,8 +534,8 @@ impl<H: Hypervisor> Reconciler<H> {
 mod tests {
     use super::*;
     use crate::libvirt::DomState;
-    use xdebbie_core::{Capacity, Placement, VmSpec};
     use std::{collections::BTreeMap, sync::Mutex};
+    use xdebbie_core::{Capacity, Placement, VmSpec};
 
     fn test_leader() -> crate::leader::Leadership {
         crate::leader::Leadership::standalone("test", "http://127.0.0.1:7443")
@@ -532,15 +561,28 @@ mod tests {
             }
             Ok("vdc".into())
         }
-        async fn detach_volume(&self, _: &Host, vol: &Volume, _: &Attachment) -> anyhow::Result<()> {
+        async fn detach_volume(
+            &self,
+            _: &Host,
+            vol: &Volume,
+            _: &Attachment,
+        ) -> anyhow::Result<()> {
             self.plugged.lock().unwrap().retain(|(_, id)| *id != vol.id);
             Ok(())
         }
-        async fn prepare_disks(&self, h: &Host, v: &Vm, disks: &mut Vec<Disk>) -> anyhow::Result<()> {
+        async fn prepare_disks(
+            &self,
+            h: &Host,
+            v: &Vm,
+            disks: &mut Vec<Disk>,
+        ) -> anyhow::Result<()> {
             if v.spec.storage != Storage::Abe {
                 return Ok(());
             }
-            let server = h.abe.clone().ok_or_else(|| anyhow::anyhow!("host {} has no ABE", h.name))?;
+            let server = h
+                .abe
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("host {} has no ABE", h.name))?;
             if !disks.iter().any(|d| d.role == xdebbie_core::DiskRole::Root) {
                 let mut n = self.allocated.lock().unwrap();
                 *n += 1;
@@ -609,10 +651,16 @@ mod tests {
                 .lock()
                 .unwrap()
                 .remove(&(h.name.clone(), v.domain_name()));
-            self.released.lock().unwrap().extend(v.disks.iter().map(|d| d.id.clone()));
+            self.released
+                .lock()
+                .unwrap()
+                .extend(v.disks.iter().map(|d| d.id.clone()));
             Ok(())
         }
-        async fn tap_owners(&self, _: &Host) -> anyhow::Result<std::collections::HashMap<String, String>> {
+        async fn tap_owners(
+            &self,
+            _: &Host,
+        ) -> anyhow::Result<std::collections::HashMap<String, String>> {
             Ok(Default::default())
         }
         async fn addresses(&self, _: &Host, _: &Vm) -> anyhow::Result<Vec<Address>> {
@@ -769,10 +817,21 @@ mod tests {
         let store = Store::open(dir.path().join("s.json")).unwrap();
         let mut h = host("a", "r1");
         h.abe = Some("http://10.22.0.1:80".into());
-        store.update(|s| { s.hosts.insert("a".into(), h); }).await.unwrap();
+        store
+            .update(|s| {
+                s.hosts.insert("a".into(), h);
+            })
+            .await
+            .unwrap();
         let fake = Arc::new(Fake::default());
         *fake.fail_populate_once.lock().unwrap() = true;
-        let r = Reconciler { store: store.clone(), hv: fake.clone(), cfg: Arc::new(cfg()), mesh: None, leadership: test_leader() };
+        let r = Reconciler {
+            store: store.clone(),
+            hv: fake.clone(),
+            cfg: Arc::new(cfg()),
+            mesh: None,
+            leadership: test_leader(),
+        };
         let v = vm(VmSpec {
             name: "abe-vm".into(),
             vcpus: 1,
@@ -788,7 +847,12 @@ mod tests {
             labels: Default::default(),
         });
         let id = v.id;
-        store.update(|s| { s.vms.insert(id, v); }).await.unwrap();
+        store
+            .update(|s| {
+                s.vms.insert(id, v);
+            })
+            .await
+            .unwrap();
 
         r.tick().await.unwrap(); // place + prepare_disks fails after allocating
         {
@@ -808,25 +872,58 @@ mod tests {
             assert!(v.disks[0].populated);
             assert_eq!(v.message, None);
         }
-        store.update(|s| { s.vms.get_mut(&id).unwrap().phase = VmPhase::Deleting; }).await.unwrap();
+        store
+            .update(|s| {
+                s.vms.get_mut(&id).unwrap().phase = VmPhase::Deleting;
+            })
+            .await
+            .unwrap();
         r.tick().await.unwrap();
         assert!(store.read().await.vms.is_empty());
-        assert_eq!(fake.released.lock().unwrap().as_slice(), [format!("{:032x}", 1)]);
+        assert_eq!(
+            fake.released.lock().unwrap().as_slice(),
+            [format!("{:032x}", 1)]
+        );
     }
 
     #[tokio::test]
     async fn abe_vm_on_a_host_without_abe_stays_provisioning_with_a_reason() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path().join("s.json")).unwrap();
-        store.update(|s| { s.hosts.insert("a".into(), host("a", "r1")); }).await.unwrap();
-        let r = Reconciler { store: store.clone(), hv: Arc::new(Fake::default()), cfg: Arc::new(cfg()), mesh: None, leadership: test_leader() };
+        store
+            .update(|s| {
+                s.hosts.insert("a".into(), host("a", "r1"));
+            })
+            .await
+            .unwrap();
+        let r = Reconciler {
+            store: store.clone(),
+            hv: Arc::new(Fake::default()),
+            cfg: Arc::new(cfg()),
+            mesh: None,
+            leadership: test_leader(),
+        };
         let v = vm(VmSpec {
-            name: "abe-vm".into(), vcpus: 1, memory_mib: 512, disk_gib: 8, data_disk_gib: None, ip: None,
-            storage: Storage::Abe, image: "img".into(), placement: Default::default(),
-            user_data: None, meta_data: Default::default(), labels: Default::default(),
+            name: "abe-vm".into(),
+            vcpus: 1,
+            memory_mib: 512,
+            disk_gib: 8,
+            data_disk_gib: None,
+            ip: None,
+            storage: Storage::Abe,
+            image: "img".into(),
+            placement: Default::default(),
+            user_data: None,
+            meta_data: Default::default(),
+            labels: Default::default(),
         });
         let id = v.id;
-        store.update(|s| { s.vms.insert(id, v); }).await.unwrap();
+        store
+            .update(|s| {
+                s.vms.insert(id, v);
+            })
+            .await
+            .unwrap();
         r.tick().await.unwrap();
         let s = store.read().await;
         assert_eq!(s.vms[&id].phase, VmPhase::Provisioning);
@@ -838,29 +935,62 @@ mod tests {
     async fn volume_follows_attach_to_and_lets_go_when_the_vm_dies() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path().join("s.json")).unwrap();
-        store.update(|s| { s.hosts.insert("a".into(), host("a", "r1")); }).await.unwrap();
+        store
+            .update(|s| {
+                s.hosts.insert("a".into(), host("a", "r1"));
+            })
+            .await
+            .unwrap();
         let fake = Arc::new(Fake::default());
-        let r = Reconciler { store: store.clone(), hv: fake.clone(), cfg: Arc::new(cfg()), mesh: None, leadership: test_leader() };
-        let mk = |name: &str| vm(VmSpec {
-            name: name.into(), vcpus: 1, memory_mib: 512, disk_gib: 8, data_disk_gib: None, ip: None,
-            storage: Storage::Local, image: "img".into(), placement: Default::default(),
-            user_data: None, meta_data: Default::default(), labels: Default::default(),
-        });
+        let r = Reconciler {
+            store: store.clone(),
+            hv: fake.clone(),
+            cfg: Arc::new(cfg()),
+            mesh: None,
+            leadership: test_leader(),
+        };
+        let mk = |name: &str| {
+            vm(VmSpec {
+                name: name.into(),
+                vcpus: 1,
+                memory_mib: 512,
+                disk_gib: 8,
+                data_disk_gib: None,
+                ip: None,
+                storage: Storage::Local,
+                image: "img".into(),
+                placement: Default::default(),
+                user_data: None,
+                meta_data: Default::default(),
+                labels: Default::default(),
+            })
+        };
         let (v1, v2) = (mk("one"), mk("two"));
         let (id1, id2) = (v1.id, v2.id);
         let now = Utc::now();
         let vol = Volume {
-            id: "0123456789abcdef0123456789abcdef".into(), name: "pv".into(),
-            server: "http://abe".into(), traddr: "10.22.0.1".into(), port: "44002".into(),
-            bytes: 1, perf: None, attach_to: Some(id1), attached: None, message: None,
-            created: now, updated: now,
+            id: "0123456789abcdef0123456789abcdef".into(),
+            name: "pv".into(),
+            server: "http://abe".into(),
+            traddr: "10.22.0.1".into(),
+            port: "44002".into(),
+            bytes: 1,
+            perf: None,
+            attach_to: Some(id1),
+            attached: None,
+            message: None,
+            created: now,
+            updated: now,
         };
         let vid = vol.id.clone();
-        store.update(|s| {
-            s.vms.insert(id1, v1);
-            s.vms.insert(id2, v2);
-            s.volumes.insert(vid.clone(), vol);
-        }).await.unwrap();
+        store
+            .update(|s| {
+                s.vms.insert(id1, v1);
+                s.vms.insert(id2, v2);
+                s.volumes.insert(vid.clone(), vol);
+            })
+            .await
+            .unwrap();
 
         r.tick().await.unwrap(); // VMs placed + provisioned; volume plugged in the same tick
         {
@@ -870,20 +1000,35 @@ mod tests {
             assert_eq!(v.attached.as_ref().map(|a| a.vm), Some(id1));
             assert_eq!(v.attached.as_ref().unwrap().target, "vdc");
             assert_eq!(v.message, None);
-            assert_eq!(fake.plugged.lock().unwrap().as_slice(), [("one".to_string(), vid.clone())]);
+            assert_eq!(
+                fake.plugged.lock().unwrap().as_slice(),
+                [("one".to_string(), vid.clone())]
+            );
         }
 
         // Re-point at the other VM: unplug this tick, plug next.
-        store.update(|s| s.volumes.get_mut(&vid).unwrap().attach_to = Some(id2)).await.unwrap();
+        store
+            .update(|s| s.volumes.get_mut(&vid).unwrap().attach_to = Some(id2))
+            .await
+            .unwrap();
         r.tick().await.unwrap();
         assert_eq!(store.read().await.volumes[&vid].attached, None);
         assert!(fake.plugged.lock().unwrap().is_empty());
         r.tick().await.unwrap();
-        assert_eq!(store.read().await.volumes[&vid].attached.as_ref().map(|a| a.vm), Some(id2));
+        assert_eq!(
+            store.read().await.volumes[&vid]
+                .attached
+                .as_ref()
+                .map(|a| a.vm),
+            Some(id2)
+        );
 
         // The VM goes away: the attachment and the wish are dropped, the
         // volume itself stays.
-        store.update(|s| s.vms.get_mut(&id2).unwrap().phase = VmPhase::Deleting).await.unwrap();
+        store
+            .update(|s| s.vms.get_mut(&id2).unwrap().phase = VmPhase::Deleting)
+            .await
+            .unwrap();
         r.tick().await.unwrap();
         r.tick().await.unwrap();
         let s = store.read().await;

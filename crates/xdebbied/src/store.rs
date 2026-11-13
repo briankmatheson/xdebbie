@@ -5,10 +5,10 @@
 use std::{collections::BTreeMap, io::Write, path::PathBuf, sync::Arc};
 
 use anyhow::Context;
-use xdebbie_core::{Host, Vm, Volume};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use uuid::Uuid;
+use xdebbie_core::{Host, Vm, Volume};
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct State {
@@ -28,9 +28,12 @@ pub struct Store {
 impl Store {
     pub fn open(path: PathBuf) -> anyhow::Result<Self> {
         let state = match std::fs::read(&path) {
-            Ok(b) => serde_json::from_slice(&b).with_context(|| format!("parsing state file {}", path.display()))?,
+            Ok(b) => serde_json::from_slice(&b)
+                .with_context(|| format!("parsing state file {}", path.display()))?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => State::default(),
-            Err(e) => return Err(e).with_context(|| format!("reading state file {}", path.display())),
+            Err(e) => {
+                return Err(e).with_context(|| format!("reading state file {}", path.display()));
+            }
         };
         Ok(Self {
             inner: Arc::new(RwLock::new(state)),

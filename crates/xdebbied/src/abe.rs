@@ -12,7 +12,7 @@
 //! that attaches a volume need not be the host whose ABE owns it, which is
 //! what makes these disks migratable.
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use std::{path::Path, time::Duration};
 use tokio::process::Command;
@@ -63,13 +63,19 @@ impl Client {
     /// Create a blank volume of `bytes` and export it.
     pub async fn create(&self, base: &str, bytes: u64) -> Result<Export> {
         let url = Self::url(base, &format!("/configure?bytes={bytes}&raw=true"));
-        let r = self.http.get(&url).send().await.with_context(|| format!("GET {url}"))?;
+        let r = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .with_context(|| format!("GET {url}"))?;
         let st = r.status();
         let body = r.text().await.unwrap_or_default();
         if !st.is_success() {
             bail!("abe {base}: configure returned {st}: {body}");
         }
-        let e: Export = serde_json::from_str(&body).with_context(|| format!("abe reply: {body}"))?;
+        let e: Export =
+            serde_json::from_str(&body).with_context(|| format!("abe reply: {body}"))?;
         if e.traddr.is_empty() || e.traddr == "0.0.0.0" {
             bail!(
                 "abe {base} advertises traddr {:?}; set ABE_ADVERTISE in /etc/default/abe",
@@ -82,7 +88,12 @@ impl Client {
     /// Unexport and remove. A volume that is already gone is not an error.
     pub async fn delete(&self, base: &str, id: &str) -> Result<()> {
         let url = Self::url(base, &format!("/id/{id}"));
-        let r = self.http.delete(&url).send().await.with_context(|| format!("DELETE {url}"))?;
+        let r = self
+            .http
+            .delete(&url)
+            .send()
+            .await
+            .with_context(|| format!("DELETE {url}"))?;
         let st = r.status();
         if st.is_success() || st == reqwest::StatusCode::NOT_FOUND {
             return Ok(());
@@ -127,8 +138,17 @@ impl Nvme {
         }
         let out = Command::new(&self.nvme_bin)
             .args([
-                "connect", "-t", "tcp", "-a", &d.traddr, "-s", &d.port, "-n", d.nqn(),
-                "--ctrl-loss-tmo", "-1",
+                "connect",
+                "-t",
+                "tcp",
+                "-a",
+                &d.traddr,
+                "-s",
+                &d.port,
+                "-n",
+                d.nqn(),
+                "--ctrl-loss-tmo",
+                "-1",
             ])
             .output()
             .await
@@ -258,12 +278,22 @@ mod tests {
         std::fs::create_dir_all(t.path().join("nvme0")).unwrap();
         std::fs::write(t.path().join("nvme0/subsysnqn"), "aaaa\n").unwrap();
         std::fs::create_dir_all(t.path().join("nvme3")).unwrap();
-        std::fs::write(t.path().join("nvme3/subsysnqn"), "0123456789abcdef0123456789abcdef\n").unwrap();
-        let n = Nvme { sys_class: t.path().to_string_lossy().into(), ..Default::default() };
+        std::fs::write(
+            t.path().join("nvme3/subsysnqn"),
+            "0123456789abcdef0123456789abcdef\n",
+        )
+        .unwrap();
+        let n = Nvme {
+            sys_class: t.path().to_string_lossy().into(),
+            ..Default::default()
+        };
         assert!(n.connected("0123456789abcdef0123456789abcdef"));
         assert!(n.connected("aaaa"));
         assert!(!n.connected("bbbb"));
-        let empty = Nvme { sys_class: "/nonexistent".into(), ..Default::default() };
+        let empty = Nvme {
+            sys_class: "/nonexistent".into(),
+            ..Default::default()
+        };
         assert!(!empty.connected("aaaa"));
     }
 
@@ -281,7 +311,8 @@ mod tests {
             format!("#!/bin/sh\necho \"$@\" >> {}\nexit 0\n", log.display()),
         )
         .unwrap();
-        std::fs::set_permissions(&stub, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(&stub, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
         let n = Nvme {
             nvme_bin: stub.to_string_lossy().into(),
             sys_class: sys.to_string_lossy().into(),
@@ -298,17 +329,27 @@ mod tests {
         n.disconnect("absent").await.unwrap(); // not in sysfs → no call
         assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 1);
         n.disconnect("present").await.unwrap();
-        assert!(std::fs::read_to_string(&log).unwrap().contains("disconnect -n present"));
+        assert!(
+            std::fs::read_to_string(&log)
+                .unwrap()
+                .contains("disconnect -n present")
+        );
     }
 
     #[tokio::test]
     async fn wait_dev_times_out_with_a_hint() {
         let n = Nvme::default();
         let e = n
-            .wait_dev(&disk("0123456789abcdef0123456789abcdef"), Duration::from_millis(50))
+            .wait_dev(
+                &disk("0123456789abcdef0123456789abcdef"),
+                Duration::from_millis(50),
+            )
             .await
             .unwrap_err();
-        assert!(e.to_string().contains("nvme-uuid.01234567-89ab-cdef-0123-456789abcdef"));
+        assert!(
+            e.to_string()
+                .contains("nvme-uuid.01234567-89ab-cdef-0123-456789abcdef")
+        );
         assert!(e.to_string().contains("device_uuid"));
     }
 
@@ -321,7 +362,8 @@ mod tests {
         assert_eq!(e.port, "44001");
         assert_eq!(e.traddr, "10.22.0.1");
         // pre-0.2.0 abe without traddr still parses (create() rejects it later)
-        let old: Export = serde_json::from_str(r#"{"message":"","id":"abc","port":"44001"}"#).unwrap();
+        let old: Export =
+            serde_json::from_str(r#"{"message":"","id":"abc","port":"44001"}"#).unwrap();
         assert_eq!(old.traddr, "");
     }
 }

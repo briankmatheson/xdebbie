@@ -3,11 +3,16 @@
 //! only thing a host needs is libvirtd, QEMU/KVM, an SSH key for the xdebbie
 //! user, a storage pool holding base images, and a bridge.
 
-use std::{collections::{BTreeMap, HashMap}, future::Future, path::Path, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    future::Future,
+    path::Path,
+    sync::Arc,
+};
 
 use anyhow::{Context, Result, anyhow, bail};
-use xdebbie_core::{Address, Attachment, Capacity, Disk, DiskRole, Host, Storage, Vm, Volume};
 use tokio::process::Command;
+use xdebbie_core::{Address, Attachment, Capacity, Disk, DiskRole, Host, Storage, Vm, Volume};
 
 use crate::{abe, lvm::LvmManager};
 
@@ -49,19 +54,32 @@ pub trait Hypervisor: Send + Sync + 'static {
     fn addresses(&self, host: &Host, vm: &Vm) -> impl Future<Output = Result<Vec<Address>>> + Send;
     /// Host-side tap device name → domain name for every running domain.
     /// Used by the mesh to name VMs whose NIC MTU is stale.
-    fn tap_owners(&self, host: &Host) -> impl Future<Output = Result<HashMap<String, String>>> + Send;
+    fn tap_owners(
+        &self,
+        host: &Host,
+    ) -> impl Future<Output = Result<HashMap<String, String>>> + Send;
     fn migrate(&self, src: &Host, dst: &Host, vm: &Vm) -> impl Future<Output = Result<()>> + Send;
     /// Make `vol` a virtio disk of `vm` (host-side NVMe connect + libvirt
     /// hot-plug). Idempotent: called every tick while the attachment is
     /// wanted, so a host reboot or a recreated domain heals itself.
     /// Returns the libvirt target (`vdc`, ...).
-    fn attach_volume(&self, host: &Host, vm: &Vm, vol: &Volume) -> impl Future<Output = Result<String>> + Send {
+    fn attach_volume(
+        &self,
+        host: &Host,
+        vm: &Vm,
+        vol: &Volume,
+    ) -> impl Future<Output = Result<String>> + Send {
         let _ = (host, vm, vol);
         async { Ok("vdc".to_string()) }
     }
     /// Unplug `vol` from the domain (which may already be gone) and drop
     /// the host-side NVMe connection.
-    fn detach_volume(&self, host: &Host, vol: &Volume, att: &Attachment) -> impl Future<Output = Result<()>> + Send {
+    fn detach_volume(
+        &self,
+        host: &Host,
+        vol: &Volume,
+        att: &Attachment,
+    ) -> impl Future<Output = Result<()>> + Send {
         let _ = (host, vol, att);
         async { Ok(()) }
     }
@@ -119,7 +137,12 @@ impl Virsh {
                     started += 1;
                 }
                 Err(e) => {
-                    tracing::warn!("could not start autostart domain {} on {}: {:#}", name, host.name, e)
+                    tracing::warn!(
+                        "could not start autostart domain {} on {}: {:#}",
+                        name,
+                        host.name,
+                        e
+                    )
                 }
             }
         }
@@ -149,11 +172,12 @@ impl Virsh {
         }
         // Use LVM if configured
         if let Some(ref lvm) = self.lvm {
-            let _device = lvm.create_root_disk(&vm.domain_name(), &vm.spec.image, vm.spec.disk_gib)
+            let _device = lvm
+                .create_root_disk(&vm.domain_name(), &vm.spec.image, vm.spec.disk_gib)
                 .map_err(|e| anyhow::anyhow!("creating LVM root disk: {:#}", e))?;
             return Ok(());
         }
-        
+
         // Fallback to qcow2
         let vol = Self::disk_vol(vm);
         if self.vol_exists(host, &vol).await {
@@ -185,7 +209,11 @@ impl Virsh {
     /// filling an ABE root disk.
     async fn base_image(&self, host: &Host, image: &str) -> Result<(String, &'static str)> {
         if let Some(ref lvm) = self.lvm {
-            let lv = if image.starts_with("base-") { image.to_string() } else { format!("base-{image}") };
+            let lv = if image.starts_with("base-") {
+                image.to_string()
+            } else {
+                format!("base-{image}")
+            };
             let path = format!("/dev/{}/{lv}", lvm.vg_name());
             if !Path::new(&path).exists() {
                 bail!("base image {path} not found (import it with lvm-import-base)");
@@ -193,7 +221,15 @@ impl Virsh {
             return Ok((path, "raw"));
         }
         let path = self
-            .run(&host.uri, &["vol-path", "--pool", &host.storage_pool, &format!("{image}.qcow2")])
+            .run(
+                &host.uri,
+                &[
+                    "vol-path",
+                    "--pool",
+                    &host.storage_pool,
+                    &format!("{image}.qcow2"),
+                ],
+            )
             .await
             .context("locating base image in the pool")?;
         Ok((path.trim().to_string(), "qcow2"))
@@ -204,7 +240,9 @@ impl Virsh {
     async fn ensure_connected(&self, vm: &Vm) -> Result<()> {
         for d in &vm.disks {
             self.nvme.connect(d).await?;
-            self.nvme.wait_dev(d, std::time::Duration::from_secs(15)).await?;
+            self.nvme
+                .wait_dev(d, std::time::Duration::from_secs(15))
+                .await?;
         }
         Ok(())
     }
@@ -309,14 +347,15 @@ impl Virsh {
         if vm.spec.storage == Storage::Abe {
             return Ok(()); // prepare_disks did it
         }
-        
+
         // Use LVM if configured
         if let Some(ref lvm) = self.lvm {
-            let _device = lvm.create_data_disk(&vm.domain_name(), size_gib)
+            let _device = lvm
+                .create_data_disk(&vm.domain_name(), size_gib)
                 .context("creating LVM data disk")?;
             return Ok(());
         }
-        
+
         // Fallback to storage pool volume
         let vol = Self::data_vol(vm);
         if self.vol_exists(host, &vol).await {
@@ -408,14 +447,19 @@ pub fn network_config(vm: &Vm, mtu: Option<u16>) -> String {
 
 /// `overlay_mtu`: when set, `<mtu size=.../>` goes on the interface so
 /// virtio-net hands the mesh MTU to the guest.
-pub fn domain_xml(host: &Host, vm: &Vm, volume_group: Option<&str>, overlay_mtu: Option<u16>) -> String {
+pub fn domain_xml(
+    host: &Host,
+    vm: &Vm,
+    volume_group: Option<&str>,
+    overlay_mtu: Option<u16>,
+) -> String {
     let esc = |s: &str| {
         s.replace('&', "&amp;")
             .replace('<', "&lt;")
             .replace('>', "&gt;")
             .replace('\'', "&apos;")
     };
-    
+
     let block_disk = |dev: &str, target: &str| {
         format!(
             r#"    <disk type='block' device='disk'>
@@ -427,35 +471,41 @@ pub fn domain_xml(host: &Host, vm: &Vm, volume_group: Option<&str>, overlay_mtu:
             dev = esc(dev)
         )
     };
-    let abe_disk = |role: DiskRole| vm.disks.iter().find(|d| d.role == role).map(|d| d.dev_path());
+    let abe_disk = |role: DiskRole| {
+        vm.disks
+            .iter()
+            .find(|d| d.role == role)
+            .map(|d| d.dev_path())
+    };
 
     // Root disk: ABE volume, LVM block device or qcow2 volume
-    let root_disk_xml = if let (Storage::Abe, Some(dev)) = (vm.spec.storage, abe_disk(DiskRole::Root)) {
-        block_disk(&dev, "vda")
-    } else if let Some(vg) = volume_group {
-        format!(
-            r#"    <disk type='block' device='disk'>
+    let root_disk_xml =
+        if let (Storage::Abe, Some(dev)) = (vm.spec.storage, abe_disk(DiskRole::Root)) {
+            block_disk(&dev, "vda")
+        } else if let Some(vg) = volume_group {
+            format!(
+                r#"    <disk type='block' device='disk'>
       <driver name='qemu' type='raw' cache='none' io='native' discard='unmap'/>
       <source dev='/dev/{vg}/{vm}-root'/>
       <target dev='vda' bus='virtio'/>
     </disk>
 "#,
-            vg = esc(vg),
-            vm = esc(&vm.domain_name())
-        )
-    } else {
-        format!(
-            r#"    <disk type='volume' device='disk'>
+                vg = esc(vg),
+                vm = esc(&vm.domain_name())
+            )
+        } else {
+            format!(
+                r#"    <disk type='volume' device='disk'>
       <driver name='qemu' type='qcow2' discard='unmap'/>
       <source pool='{pool}' volume='{disk}'/>
       <target dev='vda' bus='virtio'/>
     </disk>
 "#,
-            pool = esc(&host.storage_pool),
-            disk = esc(&Virsh::disk_vol(vm))
-        )
-    };
-    
+                pool = esc(&host.storage_pool),
+                disk = esc(&Virsh::disk_vol(vm))
+            )
+        };
+
     // Optional data disk
     let data_disk_xml = if vm.spec.data_disk_gib.is_some() {
         if let (Storage::Abe, Some(dev)) = (vm.spec.storage, abe_disk(DiskRole::Data)) {
@@ -486,7 +536,7 @@ pub fn domain_xml(host: &Host, vm: &Vm, volume_group: Option<&str>, overlay_mtu:
     } else {
         String::new()
     };
-    
+
     format!(
         r#"<domain type='kvm'>
   <name>{name}</name>
@@ -630,7 +680,9 @@ pub fn parse_domifaddr(text: &str) -> Vec<Address> {
 /// addresses. Used to decide whether host-local resources (the LVM thin
 /// pool) describe this host.
 pub fn uri_is_local(uri: &str) -> bool {
-    let Some(rest) = uri.split("://").nth(1) else { return true };
+    let Some(rest) = uri.split("://").nth(1) else {
+        return true;
+    };
     let authority = rest.split('/').next().unwrap_or("");
     let host = authority
         .rsplit('@')
@@ -655,13 +707,17 @@ pub fn uri_is_local(uri: &str) -> bool {
     if let Ok(out) = std::process::Command::new("hostname").arg("-f").output() {
         names.push(String::from_utf8_lossy(&out.stdout).trim().to_string());
     }
-    if let Ok(out) = std::process::Command::new("ip").args(["-o", "addr", "show"]).output() {
+    if let Ok(out) = std::process::Command::new("ip")
+        .args(["-o", "addr", "show"])
+        .output()
+    {
         for l in String::from_utf8_lossy(&out.stdout).lines() {
             let mut f = l.split_whitespace();
             if f.any(|w| w == "inet" || w == "inet6")
-                && let Some(a) = f.next().and_then(|a| a.split('/').next()) {
-                    names.push(a.to_string());
-                }
+                && let Some(a) = f.next().and_then(|a| a.split('/').next())
+            {
+                names.push(a.to_string());
+            }
         }
     }
     names.iter().any(|n| n == host)
@@ -724,10 +780,12 @@ impl Hypervisor for Virsh {
         if vm.spec.storage != Storage::Abe {
             return Ok(());
         }
-        let server = host
-            .abe
-            .as_deref()
-            .ok_or_else(|| anyhow!("host {} has no ABE ([[hosts]].abe) for storage = abe", host.name))?;
+        let server = host.abe.as_deref().ok_or_else(|| {
+            anyhow!(
+                "host {} has no ABE ([[hosts]].abe) for storage = abe",
+                host.name
+            )
+        })?;
         let mut wanted = vec![(DiskRole::Root, abe::gib(vm.spec.disk_gib))];
         if let Some(g) = vm.spec.data_disk_gib {
             wanted.push((DiskRole::Data, abe::gib(g)));
@@ -736,11 +794,9 @@ impl Hypervisor for Virsh {
             if disks.iter().any(|d| d.role == role) {
                 continue;
             }
-            let e = self
-                .abe
-                .create(server, bytes)
-                .await
-                .with_context(|| format!("allocating {role:?} disk for {} on {server}", vm.spec.name))?;
+            let e = self.abe.create(server, bytes).await.with_context(|| {
+                format!("allocating {role:?} disk for {} on {server}", vm.spec.name)
+            })?;
             tracing::info!(vm = %vm.spec.name, ?role, id = %e.id, traddr = %e.traddr, port = %e.port, "abe: allocated volume");
             disks.push(Disk {
                 role,
@@ -755,7 +811,10 @@ impl Hypervisor for Virsh {
         }
         for d in disks.iter_mut() {
             self.nvme.connect(d).await?;
-            let dev = self.nvme.wait_dev(d, std::time::Duration::from_secs(15)).await?;
+            let dev = self
+                .nvme
+                .wait_dev(d, std::time::Duration::from_secs(15))
+                .await?;
             if !d.populated {
                 let (src, fmt) = self.base_image(host, &vm.spec.image).await?;
                 tracing::info!(vm = %vm.spec.name, %src, %dev, "abe: filling root disk from base image");
@@ -767,9 +826,17 @@ impl Hypervisor for Virsh {
     }
 
     async fn provision(&self, host: &Host, vm: &Vm) -> Result<()> {
-        tracing::info!("provision called for VM: {} on host: {}", vm.spec.name, host.name);
+        tracing::info!(
+            "provision called for VM: {} on host: {}",
+            vm.spec.name,
+            host.name
+        );
         if vm.spec.storage == Storage::Abe {
-            if !vm.disks.iter().any(|d| d.role == DiskRole::Root && d.populated) {
+            if !vm
+                .disks
+                .iter()
+                .any(|d| d.role == DiskRole::Root && d.populated)
+            {
                 bail!("abe root disk not prepared yet");
             }
             self.ensure_connected(vm).await?;
@@ -825,7 +892,7 @@ impl Hypervisor for Virsh {
             )
             .await?;
         }
-        
+
         // Clean up LVM volumes if using LVM
         if let Some(ref lvm) = self.lvm {
             let _ = lvm.remove_disks(&vm.domain_name());
@@ -845,11 +912,17 @@ impl Hypervisor for Virsh {
 
     async fn attach_volume(&self, host: &Host, vm: &Vm, vol: &Volume) -> Result<String> {
         if !uri_is_local(&host.uri) {
-            bail!("attaching volumes on remote host {} is not supported yet (needs nvme connect there)", host.name);
+            bail!(
+                "attaching volumes on remote host {} is not supported yet (needs nvme connect there)",
+                host.name
+            );
         }
         let d = vol.disk();
         self.nvme.connect(&d).await?;
-        let dev = self.nvme.wait_dev(&d, std::time::Duration::from_secs(15)).await?;
+        let dev = self
+            .nvme
+            .wait_dev(&d, std::time::Duration::from_secs(15))
+            .await?;
         let dom = vm.domain_name();
         let blk = parse_domblklist(&self.run(&host.uri, &["domblklist", &dom]).await?);
         if let Some((t, _)) = blk.iter().find(|(_, src)| *src == dev) {
@@ -859,16 +932,22 @@ impl Hypervisor for Virsh {
         let target = free_target(&used).ok_or_else(|| anyhow!("no free virtio slot on {dom}"))?;
         let f = tempfile::Builder::new().suffix(".xml").tempfile()?;
         tokio::fs::write(f.path(), volume_disk_xml(vol, &target)).await?;
-        self.run(&host.uri, &["attach-device", &dom, p(f.path()), "--persistent"])
-            .await
-            .with_context(|| format!("hot-plugging {} into {dom}", vol.id))?;
+        self.run(
+            &host.uri,
+            &["attach-device", &dom, p(f.path()), "--persistent"],
+        )
+        .await
+        .with_context(|| format!("hot-plugging {} into {dom}", vol.id))?;
         tracing::info!(vm = %vm.spec.name, volume = %vol.id, %target, "attached volume");
         Ok(target)
     }
 
     async fn detach_volume(&self, host: &Host, vol: &Volume, att: &Attachment) -> Result<()> {
         if !uri_is_local(&host.uri) {
-            bail!("detaching volumes on remote host {} is not supported yet", host.name);
+            bail!(
+                "detaching volumes on remote host {} is not supported yet",
+                host.name
+            );
         }
         let dev = vol.disk().dev_path();
         // The domain may have been deleted already; then there is nothing to unplug.
@@ -925,7 +1004,10 @@ impl Hypervisor for Virsh {
             // The volumes are reachable from any host, but attaching them
             // there means running nvme on the destination, which this
             // driver cannot do for a remote host yet.
-            bail!("live migration of abe-backed VMs is not supported yet (needs nvme connect on {})", dst.name);
+            bail!(
+                "live migration of abe-backed VMs is not supported yet (needs nvme connect on {})",
+                dst.name
+            );
         }
         if src.storage_pool != dst.storage_pool || src.bridge != dst.bridge {
             bail!(
@@ -976,7 +1058,9 @@ mod locality_tests {
     #[test]
     fn remote_forms() {
         assert!(!uri_is_local("qemu+tls://203.0.113.9/system"));
-        assert!(!uri_is_local("qemu+ssh://root@not-this-host.invalid/system"));
+        assert!(!uri_is_local(
+            "qemu+ssh://root@not-this-host.invalid/system"
+        ));
     }
 }
 
@@ -1004,7 +1088,10 @@ mod tests {
             blk,
             vec![
                 ("vda".to_string(), "/dev/timesink-vg/node0-root".to_string()),
-                ("vdc".to_string(), "/dev/disk/by-id/nvme-uuid.0123".to_string()),
+                (
+                    "vdc".to_string(),
+                    "/dev/disk/by-id/nvme-uuid.0123".to_string()
+                ),
                 ("sda".to_string(), "-".to_string()),
             ]
         );
@@ -1030,7 +1117,9 @@ mod tests {
             updated: now,
         };
         let x = volume_disk_xml(&v, "vdc");
-        assert!(x.contains("<source dev='/dev/disk/by-id/nvme-uuid.01234567-89ab-cdef-0123-456789abcdef'/>"));
+        assert!(x.contains(
+            "<source dev='/dev/disk/by-id/nvme-uuid.01234567-89ab-cdef-0123-456789abcdef'/>"
+        ));
         assert!(x.contains("<target dev='vdc' bus='virtio'/>"));
         assert!(x.contains("<serial>0123456789abcdef0123</serial>"));
         assert!(x.contains("discard='unmap'"));
@@ -1049,22 +1138,36 @@ mod tests {
 
     #[test]
     fn domain_xml_uses_by_id_block_devices_for_abe_disks() {
-        let host: Host = serde_json::from_value(serde_json::json!({"name": "a", "uri": "test:///"})).unwrap();
+        let host: Host =
+            serde_json::from_value(serde_json::json!({"name": "a", "uri": "test:///"})).unwrap();
         let mut vm: Vm = serde_json::from_value(serde_json::json!({
             "id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
             "spec": {"name": "x", "vcpus": 1, "memoryMib": 512, "diskGib": 8, "image": "img",
                      "dataDiskGib": 4, "storage": "abe"},
             "phase": "Pending", "power": "On",
             "created": "2026-01-01T00:00:00Z", "updated": "2026-01-01T00:00:00Z"
-        })).unwrap();
+        }))
+        .unwrap();
         let mk = |role: DiskRole, id: &str| Disk {
-            role, server: "http://10.22.0.1:80".into(), traddr: "10.22.0.1".into(), port: "44001".into(),
-            id: id.into(), bytes: 1, populated: true,
+            role,
+            server: "http://10.22.0.1:80".into(),
+            traddr: "10.22.0.1".into(),
+            port: "44001".into(),
+            id: id.into(),
+            bytes: 1,
+            populated: true,
         };
-        vm.disks = vec![mk(DiskRole::Root, "0123456789abcdef0123456789abcdef"), mk(DiskRole::Data, "fedcba9876543210fedcba9876543210")];
+        vm.disks = vec![
+            mk(DiskRole::Root, "0123456789abcdef0123456789abcdef"),
+            mk(DiskRole::Data, "fedcba9876543210fedcba9876543210"),
+        ];
         let xml = domain_xml(&host, &vm, Some("vg-that-must-be-ignored"), None);
-        assert!(xml.contains("<source dev='/dev/disk/by-id/nvme-uuid.01234567-89ab-cdef-0123-456789abcdef'/>"));
-        assert!(xml.contains("<source dev='/dev/disk/by-id/nvme-uuid.fedcba98-7654-3210-fedc-ba9876543210'/>"));
+        assert!(xml.contains(
+            "<source dev='/dev/disk/by-id/nvme-uuid.01234567-89ab-cdef-0123-456789abcdef'/>"
+        ));
+        assert!(xml.contains(
+            "<source dev='/dev/disk/by-id/nvme-uuid.fedcba98-7654-3210-fedc-ba9876543210'/>"
+        ));
         assert!(xml.contains("<target dev='vda'"));
         assert!(xml.contains("<target dev='vdb'"));
         assert!(!xml.contains("vg-that-must-be-ignored"));

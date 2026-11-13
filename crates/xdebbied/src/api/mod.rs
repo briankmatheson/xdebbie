@@ -27,9 +27,9 @@ use axum::{
     routing::{get, post},
 };
 use chrono::Utc;
-use xdebbie_core::*;
 use serde::Deserialize;
 use uuid::Uuid;
+use xdebbie_core::*;
 
 use crate::{
     abe,
@@ -117,7 +117,10 @@ pub fn router(app: App) -> Router {
         .route("/volumes/{id}/attach", post(attach_volume))
         .route("/volumes/{id}/detach", post(detach_volume))
         .route("/token/rotate", post(rotate_token))
-        .layer(middleware::from_fn_with_state(app.clone(), forward_to_leader));
+        .layer(middleware::from_fn_with_state(
+            app.clone(),
+            forward_to_leader,
+        ));
     // Enrolment: decided by the box holding the CA key.
     let enroll = Router::new()
         .route("/enroll", get(enroll_list).post(enroll_submit))
@@ -134,8 +137,13 @@ pub fn router(app: App) -> Router {
         .route("/ca", get(ca_cert))
         .route("/network", get(network))
         .with_state(app.clone())
-        .merge(mesh::router(mesh::MeshApi { mesh: app.mesh.clone() }))
-        .layer(middleware::from_fn_with_state(app.token.clone(), authenticate));
+        .merge(mesh::router(mesh::MeshApi {
+            mesh: app.mesh.clone(),
+        }))
+        .layer(middleware::from_fn_with_state(
+            app.token.clone(),
+            authenticate,
+        ));
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .nest("/v1", v1)
@@ -158,7 +166,9 @@ fn is_public(method: &axum::http::Method, path: &str) -> bool {
     match (method, path) {
         (&axum::http::Method::POST, "/enroll") => true,
         (&axum::http::Method::GET, "/ca") => true,
-        (&axum::http::Method::GET, p) => p.strip_prefix("/enroll/").is_some_and(|id| !id.is_empty() && id != "token" && !id.contains('/')),
+        (&axum::http::Method::GET, p) => p
+            .strip_prefix("/enroll/")
+            .is_some_and(|id| !id.is_empty() && id != "token" && !id.contains('/')),
         _ => false,
     }
 }
@@ -166,14 +176,21 @@ fn is_public(method: &axum::http::Method, path: &str) -> bool {
 /// Auth middleware usable by any router: bearer token, else a client
 /// certificate the TLS layer verified, else 401 unless the route is public.
 /// `None` tokens = unauthenticated API (lab use only).
-pub async fn authenticate(State(tokens): State<Option<Arc<Tokens>>>, mut req: Request, next: Next) -> Response {
+pub async fn authenticate(
+    State(tokens): State<Option<Arc<Tokens>>>,
+    mut req: Request,
+    next: Next,
+) -> Response {
     let presented = req
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .map(str::to_string);
-    let peer = req.extensions().get::<ClientCert>().and_then(|c| c.0.clone());
+    let peer = req
+        .extensions()
+        .get::<ClientCert>()
+        .and_then(|c| c.0.clone());
     let authn = match (&tokens, presented, peer) {
         (None, _, _) => Authn::Token,
         (Some(t), Some(p), _) if t.accepts(&p).await => Authn::Token,
@@ -181,8 +198,11 @@ pub async fn authenticate(State(tokens): State<Option<Arc<Tokens>>>, mut req: Re
         _ => Authn::Anonymous,
     };
     if authn == Authn::Anonymous && !is_public(req.method(), req.uri().path()) {
-        return ApiErr(StatusCode::UNAUTHORIZED, "missing or invalid bearer token (or client certificate)".into())
-            .into_response();
+        return ApiErr(
+            StatusCode::UNAUTHORIZED,
+            "missing or invalid bearer token (or client certificate)".into(),
+        )
+        .into_response();
     }
     req.extensions_mut().insert(authn);
     next.run(req).await
@@ -191,7 +211,9 @@ pub async fn authenticate(State(tokens): State<Option<Arc<Tokens>>>, mut req: Re
 // ---------- tokens ----------
 
 fn tokens(a: &App) -> R<&Arc<Tokens>> {
-    a.token.as_ref().ok_or_else(|| bad("no token_file configured: this API is unauthenticated"))
+    a.token
+        .as_ref()
+        .ok_or_else(|| bad("no token_file configured: this API is unauthenticated"))
 }
 
 async fn token_status(State(a): State<App>) -> R<Json<TokenStatus>> {
@@ -213,17 +235,32 @@ async fn put_token(State(a): State<App>, Json(set): Json<TokenSet>) -> R<Json<To
 async fn rotate_token(State(a): State<App>) -> R<(StatusCode, Json<TokenRotated>)> {
     let t = tokens(&a)?;
     if t.rotating().await {
-        let pending: Vec<_> = t.status().await.nodes.into_iter().filter(|n| n.state != "current").map(|n| n.hostname).collect();
+        let pending: Vec<_> = t
+            .status()
+            .await
+            .nodes
+            .into_iter()
+            .filter(|n| n.state != "current")
+            .map(|n| n.hostname)
+            .collect();
         return Err(conflict(format!(
             "a rotation is still being distributed (waiting on: {}); see GET /v1/token",
-            if pending.is_empty() { "nobody yet checked".to_string() } else { pending.join(", ") }
+            if pending.is_empty() {
+                "nobody yet checked".to_string()
+            } else {
+                pending.join(", ")
+            }
         )));
     }
     let before = t.get().await.current;
     let token = t.rotate().await?;
     Ok((
         StatusCode::CREATED,
-        Json(TokenRotated { id: crate::token::fingerprint(&token), previous: crate::token::fingerprint(&before), token }),
+        Json(TokenRotated {
+            id: crate::token::fingerprint(&token),
+            previous: crate::token::fingerprint(&before),
+            token,
+        }),
     ))
 }
 
@@ -251,7 +288,9 @@ async fn forward_to_leader(State(a): State<App>, req: Request, next: Next) -> Re
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             [(header::RETRY_AFTER, "2")],
-            Json(ApiError { error: "no leader elected yet; retry".into() }),
+            Json(ApiError {
+                error: "no leader elected yet; retry".into(),
+            }),
         )
             .into_response();
     };
@@ -260,13 +299,21 @@ async fn forward_to_leader(State(a): State<App>, req: Request, next: Next) -> Re
         Ok(r) => r,
         Err(e) => ApiErr(
             StatusCode::BAD_GATEWAY,
-            format!("forwarding to leader {} ({}): {e:#}", leader.hostname, leader.api_url),
+            format!(
+                "forwarding to leader {} ({}): {e:#}",
+                leader.hostname, leader.api_url
+            ),
         )
         .into_response(),
     }
 }
 
-async fn forward(http: &reqwest::Client, base: &str, me: &str, req: Request) -> anyhow::Result<Response> {
+async fn forward(
+    http: &reqwest::Client,
+    base: &str,
+    me: &str,
+    req: Request,
+) -> anyhow::Result<Response> {
     let (parts, body) = req.into_parts();
     // Inside `nest("/v1")` the request URI is stripped; the original one
     // is what the leader must see.
@@ -279,9 +326,14 @@ async fn forward(http: &reqwest::Client, base: &str, me: &str, req: Request) -> 
     let url = format!("{}{pq}", base.trim_end_matches('/'));
     let body = axum::body::to_bytes(body, FORWARD_BODY_LIMIT).await?;
 
-    let mut out = http.request(parts.method.clone(), &url).header(&FORWARDED_BY, me);
+    let mut out = http
+        .request(parts.method.clone(), &url)
+        .header(&FORWARDED_BY, me);
     for (k, v) in &parts.headers {
-        if matches!(*k, header::HOST | header::CONTENT_LENGTH | header::CONNECTION | header::TRANSFER_ENCODING) {
+        if matches!(
+            *k,
+            header::HOST | header::CONTENT_LENGTH | header::CONNECTION | header::TRANSFER_ENCODING
+        ) {
             continue;
         }
         out = out.header(k.as_str(), v.as_bytes());
@@ -290,7 +342,10 @@ async fn forward(http: &reqwest::Client, base: &str, me: &str, req: Request) -> 
 
     let mut r = Response::builder().status(resp.status().as_u16());
     for (k, v) in resp.headers() {
-        if matches!(*k, header::CONTENT_LENGTH | header::CONNECTION | header::TRANSFER_ENCODING) {
+        if matches!(
+            *k,
+            header::CONTENT_LENGTH | header::CONNECTION | header::TRANSFER_ENCODING
+        ) {
             continue;
         }
         r = r.header(k.as_str(), v.as_bytes());
@@ -327,7 +382,11 @@ async fn forward_to_ca(State(a): State<App>, req: Request, next: Next) -> Respon
     let me = a.leadership.status().await.this.hostname;
     match forward(&a.http, &ca_url, &me, req).await {
         Ok(r) => r,
-        Err(e) => ApiErr(StatusCode::BAD_GATEWAY, format!("forwarding to CA box {ca_url}: {e:#}")).into_response(),
+        Err(e) => ApiErr(
+            StatusCode::BAD_GATEWAY,
+            format!("forwarding to CA box {ca_url}: {e:#}"),
+        )
+        .into_response(),
     }
 }
 
@@ -342,7 +401,10 @@ async fn enroll_list(State(a): State<App>, Query(q): Query<ListQuery>) -> Json<V
 }
 
 /// A joiner asks for its certificate: queued until an operator approves.
-async fn enroll_submit(State(a): State<App>, Json(req): Json<EnrollRequest>) -> R<(StatusCode, Json<Enrollment>)> {
+async fn enroll_submit(
+    State(a): State<App>,
+    Json(req): Json<EnrollRequest>,
+) -> R<(StatusCode, Json<Enrollment>)> {
     let e = a.enroll.submit(req).await.map_err(|e| bad(e.to_string()))?;
     if e.status == EnrollStatus::Pending {
         tracing::info!(id = %e.id, host = %e.hostname, fp = %e.fingerprint, "enrolment pending: `xdctl approve {}`", e.hostname);
@@ -351,26 +413,44 @@ async fn enroll_submit(State(a): State<App>, Json(req): Json<EnrollRequest>) -> 
 }
 
 async fn enroll_get(State(a): State<App>, Path(id): Path<String>) -> R<Json<Enrollment>> {
-    a.enroll.get(&id).await.map(Json).ok_or_else(|| nf("enrolment"))
+    a.enroll
+        .get(&id)
+        .await
+        .map(Json)
+        .ok_or_else(|| nf("enrolment"))
 }
 
 async fn enroll_approve(State(a): State<App>, Path(id): Path<String>) -> R<Json<Enrollment>> {
-    let e = a.enroll.decide(&id, Decision::Approve).await.map_err(|e| ApiErr(StatusCode::NOT_FOUND, e.to_string()))?;
+    let e = a
+        .enroll
+        .decide(&id, Decision::Approve)
+        .await
+        .map_err(|e| ApiErr(StatusCode::NOT_FOUND, e.to_string()))?;
     tracing::info!(id = %e.id, host = %e.hostname, "enrolment approved");
     Ok(Json(e))
 }
 
 async fn enroll_deny(State(a): State<App>, Path(id): Path<String>) -> R<Json<Enrollment>> {
-    let e = a.enroll.decide(&id, Decision::Deny).await.map_err(|e| ApiErr(StatusCode::NOT_FOUND, e.to_string()))?;
+    let e = a
+        .enroll
+        .decide(&id, Decision::Deny)
+        .await
+        .map_err(|e| ApiErr(StatusCode::NOT_FOUND, e.to_string()))?;
     tracing::info!(id = %e.id, host = %e.hostname, "enrolment denied");
     Ok(Json(e))
 }
 
 /// The cluster token, for a box that just got its certificate. Client
 /// certificate only: a bearer token holder has it already.
-async fn enroll_token(State(a): State<App>, axum::Extension(authn): axum::Extension<Authn>) -> R<Json<TokenSet>> {
+async fn enroll_token(
+    State(a): State<App>,
+    axum::Extension(authn): axum::Extension<Authn>,
+) -> R<Json<TokenSet>> {
     let Authn::Cert(peer) = authn else {
-        return Err(ApiErr(StatusCode::FORBIDDEN, "a client certificate signed by the cluster CA is required".into()));
+        return Err(ApiErr(
+            StatusCode::FORBIDDEN,
+            "a client certificate signed by the cluster CA is required".into(),
+        ));
     };
     let t = tokens(&a)?;
     tracing::info!(peer = %peer.hostname, "handed the cluster token to an enrolled box");
@@ -381,12 +461,19 @@ async fn enroll_token(State(a): State<App>, axum::Extension(authn): axum::Extens
 async fn ca_cert(State(a): State<App>) -> R<([(HeaderName, String); 2], String)> {
     let pem = match a.enroll.ca_pem() {
         Some(p) => p.to_string(),
-        None => std::fs::read_to_string(&a.cfg.ca_file)
-            .map_err(|e| ApiErr(StatusCode::NOT_FOUND, format!("no CA certificate at {}: {e}", a.cfg.ca_file.display())))?,
+        None => std::fs::read_to_string(&a.cfg.ca_file).map_err(|e| {
+            ApiErr(
+                StatusCode::NOT_FOUND,
+                format!("no CA certificate at {}: {e}", a.cfg.ca_file.display()),
+            )
+        })?,
     };
     let fp = crate::bootstrap::api_tls::cert_fingerprint(&pem)?;
     Ok((
-        [(header::CONTENT_TYPE, "application/x-pem-file".to_string()), (CA_FINGERPRINT, fp)],
+        [
+            (header::CONTENT_TYPE, "application/x-pem-file".to_string()),
+            (CA_FINGERPRINT, fp),
+        ],
         pem,
     ))
 }
@@ -689,12 +776,20 @@ async fn put_vm(
             let ip = match &net {
                 Some(n) => {
                     let in_use = crate::dhcp::NetworkConfig::in_use(s.vms.values());
-                    Some(n.allocate(spec.ip, &in_use).map_err(|e| conflict(e.to_string()))?)
+                    Some(
+                        n.allocate(spec.ip, &in_use)
+                            .map_err(|e| conflict(e.to_string()))?,
+                    )
                 }
                 None => None,
             };
             let addresses = ip
-                .map(|ip| vec![Address { kind: "InternalIP".into(), address: ip.to_string() }])
+                .map(|ip| {
+                    vec![Address {
+                        kind: "InternalIP".into(),
+                        address: ip.to_string(),
+                    }]
+                })
                 .unwrap_or_default();
             let now = Utc::now();
             let vm = Vm {
@@ -892,10 +987,12 @@ async fn create_volume(
             .values()
             .filter(|h| h.is_healthy(now, stale))
             .find_map(|h| h.abe.clone())
-            .ok_or_else(|| ApiErr(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "no healthy host with an ABE ([[hosts]].abe)".into(),
-            ))?,
+            .ok_or_else(|| {
+                ApiErr(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "no healthy host with an ABE ([[hosts]].abe)".into(),
+                )
+            })?,
     };
     drop(st);
     let e = a
@@ -936,7 +1033,11 @@ async fn delete_volume(State(a): State<App>, Path(id): Path<String>) -> R<Status
     if vol.attach_to.is_some() || vol.attached.is_some() {
         return Err(conflict(format!(
             "volume {id} is attached (to {}); detach it first",
-            vol.attached.as_ref().map(|a| a.vm).or(vol.attach_to).unwrap_or_default()
+            vol.attached
+                .as_ref()
+                .map(|a| a.vm)
+                .or(vol.attach_to)
+                .unwrap_or_default()
         )));
     }
     a.abe
@@ -998,7 +1099,10 @@ async fn attach_volume(
     .await
 }
 
-async fn detach_volume(State(a): State<App>, Path(id): Path<String>) -> R<(StatusCode, Json<Volume>)> {
+async fn detach_volume(
+    State(a): State<App>,
+    Path(id): Path<String>,
+) -> R<(StatusCode, Json<Volume>)> {
     mutate_volume(&a, &id, |_, v| {
         v.attach_to = None;
         Ok(())
@@ -1023,7 +1127,10 @@ mod tests {
 
     /// Serve a router on an ephemeral port; returns its base URL.
     async fn spawn(leadership: Leadership, store: Store) -> String {
-        let tokens = Arc::new(Tokens::in_memory(TokenSet { current: "secret".into(), previous: None }));
+        let tokens = Arc::new(Tokens::in_memory(TokenSet {
+            current: "secret".into(),
+            previous: None,
+        }));
         spawn_with(leadership, store, tokens).await
     }
 
@@ -1042,7 +1149,9 @@ mod tests {
             abe: abe::Client::new(),
             leadership,
             http: reqwest::Client::new(),
-            enroll: Arc::new(Enrollments::load(dir.path().join("enroll.json"), None, vec![]).unwrap()),
+            enroll: Arc::new(
+                Enrollments::load(dir.path().join("enroll.json"), None, vec![]).unwrap(),
+            ),
         };
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", l.local_addr().unwrap());
@@ -1060,7 +1169,9 @@ mod tests {
     async fn enrolment_over_mtls_ends_with_the_cluster_token() {
         let dir = tempfile::tempdir().unwrap();
         let paths = crate::bootstrap::api_tls::generate_localhost(dir.path());
-        let signer = crate::bootstrap::api_tls::CaSigner::load(&paths.ca_cert, &paths.ca_key).unwrap().unwrap();
+        let signer = crate::bootstrap::api_tls::CaSigner::load(&paths.ca_cert, &paths.ca_key)
+            .unwrap()
+            .unwrap();
         let ca_pem = signer.ca_pem().to_string();
         let f = FakeNetOps::new();
         f.add_bridge("br-int", 1500, "52:54:00:23:00:fe");
@@ -1069,13 +1180,18 @@ mod tests {
         let app = App {
             store: Store::open(dir.path().join("state.json")).unwrap(),
             cfg: Arc::new(toml::from_str("state_file = 'unused'").unwrap()),
-            token: Some(Arc::new(Tokens::in_memory(TokenSet { current: "secret".into(), previous: None }))),
+            token: Some(Arc::new(Tokens::in_memory(TokenSet {
+                current: "secret".into(),
+                previous: None,
+            }))),
             mesh,
             dhcp: None,
             abe: abe::Client::new(),
             leadership: Leadership::standalone("ca-box", "https://unused"),
             http: reqwest::Client::new(),
-            enroll: Arc::new(Enrollments::load(dir.path().join("enroll.json"), Some(signer), vec![0]).unwrap()),
+            enroll: Arc::new(
+                Enrollments::load(dir.path().join("enroll.json"), Some(signer), vec![0]).unwrap(),
+            ),
         };
         let roots = crate::tls::client_roots(&paths.ca_cert, &dir.path().join("nonexistent"));
         let sc = crate::tls::server_config(&paths.server_cert, &paths.server_key, roots).unwrap();
@@ -1092,47 +1208,162 @@ mod tests {
         let addr = handle.listening().await.unwrap();
         let url = format!("https://127.0.0.1:{}", addr.port());
         let ca = reqwest::Certificate::from_pem(ca_pem.as_bytes()).unwrap();
-        let anon = reqwest::Client::builder().use_rustls_tls().add_root_certificate(ca.clone()).build().unwrap();
+        let anon = reqwest::Client::builder()
+            .use_rustls_tls()
+            .add_root_certificate(ca.clone())
+            .build()
+            .unwrap();
 
         // No credentials: public routes only.
-        assert_eq!(anon.get(format!("{url}/v1/leader")).send().await.unwrap().status(), 401);
-        assert_eq!(anon.get(format!("{url}/v1/enroll")).send().await.unwrap().status(), 401);
-        assert_eq!(anon.get(format!("{url}/v1/enroll/token")).send().await.unwrap().status(), 401);
-        let served_ca = anon.get(format!("{url}/v1/ca")).send().await.unwrap().text().await.unwrap();
+        assert_eq!(
+            anon.get(format!("{url}/v1/leader"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            401
+        );
+        assert_eq!(
+            anon.get(format!("{url}/v1/enroll"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            401
+        );
+        assert_eq!(
+            anon.get(format!("{url}/v1/enroll/token"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            401
+        );
+        let served_ca = anon
+            .get(format!("{url}/v1/ca"))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
         assert_eq!(served_ca, ca_pem);
 
         // Joiner: key + CSR, submit, poll.
         let csr = crate::bootstrap::api_tls::make_csr("joiner.test").unwrap();
-        let req = EnrollRequest { hostname: "joiner.test".into(), box_id: None, api_url: "https://joiner.test:7443".into(), csr: csr.csr_pem, wg_pubkey: None };
-        let r = anon.post(format!("{url}/v1/enroll")).json(&req).send().await.unwrap();
+        let req = EnrollRequest {
+            hostname: "joiner.test".into(),
+            box_id: None,
+            api_url: "https://joiner.test:7443".into(),
+            csr: csr.csr_pem,
+            wg_pubkey: None,
+        };
+        let r = anon
+            .post(format!("{url}/v1/enroll"))
+            .json(&req)
+            .send()
+            .await
+            .unwrap();
         assert_eq!(r.status(), 202);
         let e: Enrollment = r.json().await.unwrap();
-        assert_eq!((e.status, e.fingerprint.as_str()), (EnrollStatus::Pending, csr.fingerprint.as_str()));
+        assert_eq!(
+            (e.status, e.fingerprint.as_str()),
+            (EnrollStatus::Pending, csr.fingerprint.as_str())
+        );
         assert_eq!(e.box_id, 1, "assigned by the CA box (which is 0)");
-        let polled: Enrollment = anon.get(format!("{url}/v1/enroll/{}", e.id)).send().await.unwrap().json().await.unwrap();
+        let polled: Enrollment = anon
+            .get(format!("{url}/v1/enroll/{}", e.id))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
         assert_eq!(polled.status, EnrollStatus::Pending);
-        assert_eq!(anon.post(format!("{url}/v1/enroll/{}/approve", e.id)).send().await.unwrap().status(), 401);
+        assert_eq!(
+            anon.post(format!("{url}/v1/enroll/{}/approve", e.id))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            401
+        );
 
         // Operator approves by hostname with the token.
-        let pending: Vec<Enrollment> = anon.get(format!("{url}/v1/enroll")).bearer_auth("secret").send().await.unwrap().json().await.unwrap();
+        let pending: Vec<Enrollment> = anon
+            .get(format!("{url}/v1/enroll"))
+            .bearer_auth("secret")
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
         assert_eq!(pending.len(), 1);
-        let r = anon.post(format!("{url}/v1/enroll/joiner.test/approve")).bearer_auth("secret").send().await.unwrap();
+        let r = anon
+            .post(format!("{url}/v1/enroll/joiner.test/approve"))
+            .bearer_auth("secret")
+            .send()
+            .await
+            .unwrap();
         assert_eq!(r.status(), 200);
-        let approved: Enrollment = anon.get(format!("{url}/v1/enroll/{}", e.id)).send().await.unwrap().json().await.unwrap();
+        let approved: Enrollment = anon
+            .get(format!("{url}/v1/enroll/{}", e.id))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
         assert_eq!(approved.status, EnrollStatus::Approved);
         let cert = approved.cert.unwrap();
         assert_eq!(approved.ca.as_deref(), Some(ca_pem.as_str()));
 
         // Token holders do not get the token route; the new member does,
         // and everything else, on its certificate alone.
-        assert_eq!(anon.get(format!("{url}/v1/enroll/token")).bearer_auth("secret").send().await.unwrap().status(), 403);
-        let ident = reqwest::Identity::from_pem(format!("{cert}\n{}", csr.key_pem).as_bytes()).unwrap();
-        let member = reqwest::Client::builder().use_rustls_tls().add_root_certificate(ca).identity(ident).build().unwrap();
-        let set: TokenSet = member.get(format!("{url}/v1/enroll/token")).send().await.unwrap().json().await.unwrap();
+        assert_eq!(
+            anon.get(format!("{url}/v1/enroll/token"))
+                .bearer_auth("secret")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            403
+        );
+        let ident =
+            reqwest::Identity::from_pem(format!("{cert}\n{}", csr.key_pem).as_bytes()).unwrap();
+        let member = reqwest::Client::builder()
+            .use_rustls_tls()
+            .add_root_certificate(ca)
+            .identity(ident)
+            .build()
+            .unwrap();
+        let set: TokenSet = member
+            .get(format!("{url}/v1/enroll/token"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
         assert_eq!(set.current, "secret");
-        let st: LeaderStatus = member.get(format!("{url}/v1/leader")).send().await.unwrap().json().await.unwrap();
+        let st: LeaderStatus = member
+            .get(format!("{url}/v1/leader"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
         assert!(st.is_leader);
-        let status: TokenStatus = member.get(format!("{url}/v1/token")).send().await.unwrap().json().await.unwrap();
+        let status: TokenStatus = member
+            .get(format!("{url}/v1/token"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
         assert_eq!(status.id, crate::token::fingerprint("secret"));
     }
 
@@ -1144,59 +1375,119 @@ mod tests {
 
         // Leader: standalone is enough, it answers for itself.
         let leader_id = Uuid::new_v4();
-        let leader_url = spawn(Leadership::standalone("leader", "http://unused"), leader_store.clone()).await;
+        let leader_url = spawn(
+            Leadership::standalone("leader", "http://unused"),
+            leader_store.clone(),
+        )
+        .await;
 
         // Follower: election says `leader_id` leads and the peer table knows its URL.
         let me = Uuid::new_v4();
-        let election = Arc::new(RwLock::new(ElectionStateMachine::new(me, Duration::from_secs(10), Duration::from_secs(5))));
+        let election = Arc::new(RwLock::new(ElectionStateMachine::new(
+            me,
+            Duration::from_secs(10),
+            Duration::from_secs(5),
+        )));
         election.write().await.activate();
-        election.write().await.received_leader_heartbeat(leader_id, 1e9);
+        election
+            .write()
+            .await
+            .received_leader_heartbeat(leader_id, 1e9);
         let peers = Arc::new(RwLock::new(PeerTable::new()));
-        peers.write().await.insert(PeerInfo::new(leader_id, "leader".into(), leader_url.clone(), 1e9));
-        let me_ref = LeaderRef { node_id: Some(me), hostname: "follower".into(), api_url: "http://unused".into() };
-        let follower_url = spawn(Leadership::for_test(me_ref, election.clone(), peers), follower_store.clone()).await;
+        peers.write().await.insert(PeerInfo::new(
+            leader_id,
+            "leader".into(),
+            leader_url.clone(),
+            1e9,
+        ));
+        let me_ref = LeaderRef {
+            node_id: Some(me),
+            hostname: "follower".into(),
+            api_url: "http://unused".into(),
+        };
+        let follower_url = spawn(
+            Leadership::for_test(me_ref, election.clone(), peers),
+            follower_store.clone(),
+        )
+        .await;
 
         let c = reqwest::Client::new();
         let auth = |r: reqwest::RequestBuilder| r.bearer_auth("secret");
 
         // /v1/leader is answered locally and points at the leader.
-        let st: LeaderStatus = auth(c.get(format!("{follower_url}/v1/leader"))).send().await.unwrap().json().await.unwrap();
+        let st: LeaderStatus = auth(c.get(format!("{follower_url}/v1/leader")))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
         assert_eq!(st.state, "follower");
         assert_eq!(st.leader.unwrap().api_url, leader_url);
 
         // A write through the follower lands in the leader's store only.
         let host = serde_json::json!({"name": "h1", "uri": "test:///", "failureDomain": "r1"});
-        let r = auth(c.put(format!("{follower_url}/v1/hosts/h1"))).json(&host).send().await.unwrap();
+        let r = auth(c.put(format!("{follower_url}/v1/hosts/h1")))
+            .json(&host)
+            .send()
+            .await
+            .unwrap();
         assert!(r.status().is_success(), "{}", r.text().await.unwrap());
         assert!(leader_store.read().await.hosts.contains_key("h1"));
         assert!(follower_store.read().await.hosts.is_empty());
 
         // Reads through the follower see the leader's data.
-        let hosts: Vec<Host> = auth(c.get(format!("{follower_url}/v1/hosts"))).send().await.unwrap().json().await.unwrap();
+        let hosts: Vec<Host> = auth(c.get(format!("{follower_url}/v1/hosts")))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
         assert_eq!(hosts.len(), 1);
 
         // Status codes and bodies come back verbatim.
-        let r = auth(c.get(format!("{follower_url}/v1/hosts/nope"))).send().await.unwrap();
+        let r = auth(c.get(format!("{follower_url}/v1/hosts/nope")))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(r.status(), StatusCode::NOT_FOUND);
         assert_eq!(r.json::<ApiError>().await.unwrap().error, "host not found");
 
         // Auth is checked before forwarding.
-        let r = c.get(format!("{follower_url}/v1/hosts")).send().await.unwrap();
+        let r = c
+            .get(format!("{follower_url}/v1/hosts"))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
 
         // A request that was already forwarded is not bounced again.
-        let r = auth(c.get(format!("{follower_url}/v1/hosts"))).header(FORWARDED_BY.as_str(), "other").send().await.unwrap();
+        let r = auth(c.get(format!("{follower_url}/v1/hosts")))
+            .header(FORWARDED_BY.as_str(), "other")
+            .send()
+            .await
+            .unwrap();
         assert_eq!(r.status(), StatusCode::SERVICE_UNAVAILABLE);
 
         // No leader known: 503 with Retry-After.
         election.write().await.start_election();
-        let r = auth(c.get(format!("{follower_url}/v1/hosts"))).send().await.unwrap();
+        let r = auth(c.get(format!("{follower_url}/v1/hosts")))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(r.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(r.headers().get(header::RETRY_AFTER).unwrap(), "2");
 
         // Once this box leads it answers from its own store.
         election.write().await.become_leader();
-        let hosts: Vec<Host> = auth(c.get(format!("{follower_url}/v1/hosts"))).send().await.unwrap().json().await.unwrap();
+        let hosts: Vec<Host> = auth(c.get(format!("{follower_url}/v1/hosts")))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
         assert!(hosts.is_empty());
     }
 
@@ -1204,72 +1495,174 @@ mod tests {
     async fn rotation_overlaps_until_every_peer_took_the_new_token() {
         use crate::token::{Distributor, Seen};
         let dir = tempfile::tempdir().unwrap();
-        let shared = || Arc::new(Tokens::in_memory(TokenSet { current: "secret".into(), previous: None }));
+        let shared = || {
+            Arc::new(Tokens::in_memory(TokenSet {
+                current: "secret".into(),
+                previous: None,
+            }))
+        };
 
         // Follower first, so the leader's peer table can name it.
         let f_tokens = shared();
-        let follower_url =
-            spawn_with(Leadership::standalone("follower", "http://unused"), Store::open(dir.path().join("f.json")).unwrap(), f_tokens.clone()).await;
+        let follower_url = spawn_with(
+            Leadership::standalone("follower", "http://unused"),
+            Store::open(dir.path().join("f.json")).unwrap(),
+            f_tokens.clone(),
+        )
+        .await;
 
         let me = Uuid::new_v4();
-        let election = Arc::new(RwLock::new(ElectionStateMachine::new(me, Duration::from_secs(10), Duration::from_secs(5))));
+        let election = Arc::new(RwLock::new(ElectionStateMachine::new(
+            me,
+            Duration::from_secs(10),
+            Duration::from_secs(5),
+        )));
         election.write().await.activate();
         election.write().await.become_leader();
         let peers = Arc::new(RwLock::new(PeerTable::new()));
-        peers.write().await.insert(PeerInfo::new(Uuid::new_v4(), "follower".into(), follower_url.clone(), 1.0));
+        peers.write().await.insert(PeerInfo::new(
+            Uuid::new_v4(),
+            "follower".into(),
+            follower_url.clone(),
+            1.0,
+        ));
         let leadership = Leadership::for_test(
-            LeaderRef { node_id: Some(me), hostname: "leader".into(), api_url: "http://unused".into() },
+            LeaderRef {
+                node_id: Some(me),
+                hostname: "leader".into(),
+                api_url: "http://unused".into(),
+            },
             election,
             peers,
         );
         let l_tokens = shared();
-        let leader_url = spawn_with(leadership.clone(), Store::open(dir.path().join("l.json")).unwrap(), l_tokens.clone()).await;
+        let leader_url = spawn_with(
+            leadership.clone(),
+            Store::open(dir.path().join("l.json")).unwrap(),
+            l_tokens.clone(),
+        )
+        .await;
 
         let c = reqwest::Client::new();
         let get = |url: &str, tok: &str| c.get(format!("{url}/v1/token")).bearer_auth(tok).send();
 
         // Rotate on the leader: new token returned once, old still accepted there.
-        let r = c.post(format!("{leader_url}/v1/token/rotate")).bearer_auth("secret").send().await.unwrap();
+        let r = c
+            .post(format!("{leader_url}/v1/token/rotate"))
+            .bearer_auth("secret")
+            .send()
+            .await
+            .unwrap();
         assert_eq!(r.status(), StatusCode::CREATED);
         let rotated: TokenRotated = r.json().await.unwrap();
         assert_eq!(rotated.previous, crate::token::fingerprint("secret"));
-        assert!(get(&leader_url, "secret").await.unwrap().status().is_success());
-        assert!(get(&leader_url, &rotated.token).await.unwrap().status().is_success());
+        assert!(
+            get(&leader_url, "secret")
+                .await
+                .unwrap()
+                .status()
+                .is_success()
+        );
+        assert!(
+            get(&leader_url, &rotated.token)
+                .await
+                .unwrap()
+                .status()
+                .is_success()
+        );
         // ...but the follower has not heard yet.
-        assert_eq!(get(&follower_url, &rotated.token).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            get(&follower_url, &rotated.token).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
         // A second rotation while this one is out is refused.
-        let r = c.post(format!("{leader_url}/v1/token/rotate")).bearer_auth(&rotated.token).send().await.unwrap();
+        let r = c
+            .post(format!("{leader_url}/v1/token/rotate"))
+            .bearer_auth(&rotated.token)
+            .send()
+            .await
+            .unwrap();
         assert_eq!(r.status(), StatusCode::CONFLICT);
 
         // Sweep 1: the follower rejects the new token, so the pair is pushed with the old one.
-        let d = Distributor { tokens: l_tokens.clone(), leadership, http: reqwest::Client::new() };
+        let d = Distributor {
+            tokens: l_tokens.clone(),
+            leadership,
+            http: reqwest::Client::new(),
+        };
         let seen = d.sweep().await;
         assert_eq!(seen[&follower_url], Seen::Installing);
-        assert!(f_tokens.accepts("secret").await && f_tokens.accepts(&rotated.token).await, "overlap on the follower");
-        assert!(l_tokens.rotating().await, "not retired until the follower is confirmed");
-        let st: TokenStatus = get(&leader_url, "secret").await.unwrap().json().await.unwrap();
-        assert_eq!((st.rotating, st.nodes[0].state.as_str()), (true, "installing"));
+        assert!(
+            f_tokens.accepts("secret").await && f_tokens.accepts(&rotated.token).await,
+            "overlap on the follower"
+        );
+        assert!(
+            l_tokens.rotating().await,
+            "not retired until the follower is confirmed"
+        );
+        let st: TokenStatus = get(&leader_url, "secret")
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(
+            (st.rotating, st.nodes[0].state.as_str()),
+            (true, "installing")
+        );
 
         // Sweep 2: confirmed with the new token on the follower -> previous retired everywhere.
         let seen = d.sweep().await;
         assert_eq!(seen[&follower_url], Seen::Current { overlap: true });
         assert!(!l_tokens.rotating().await);
         assert!(!f_tokens.rotating().await);
-        assert_eq!(get(&follower_url, "secret").await.unwrap().status(), StatusCode::UNAUTHORIZED);
-        assert_eq!(get(&leader_url, "secret").await.unwrap().status(), StatusCode::UNAUTHORIZED);
-        assert!(get(&follower_url, &rotated.token).await.unwrap().status().is_success());
+        assert_eq!(
+            get(&follower_url, "secret").await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            get(&leader_url, "secret").await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert!(
+            get(&follower_url, &rotated.token)
+                .await
+                .unwrap()
+                .status()
+                .is_success()
+        );
 
         // Steady state: a peer still holding a retired token gets tidied.
-        f_tokens.install(TokenSet { current: rotated.token.clone(), previous: Some("stray".into()) }).await.unwrap();
+        f_tokens
+            .install(TokenSet {
+                current: rotated.token.clone(),
+                previous: Some("stray".into()),
+            })
+            .await
+            .unwrap();
         let seen = d.sweep().await;
         assert_eq!(seen[&follower_url], Seen::Current { overlap: true });
         assert!(!f_tokens.rotating().await);
-        assert_eq!(d.sweep().await[&follower_url], Seen::Current { overlap: false });
+        assert_eq!(
+            d.sweep().await[&follower_url],
+            Seen::Current { overlap: false }
+        );
 
         // A peer that missed the rotation entirely is reported, not fixed.
-        f_tokens.install(TokenSet { current: "else".into(), previous: None }).await.unwrap();
+        f_tokens
+            .install(TokenSet {
+                current: "else".into(),
+                previous: None,
+            })
+            .await
+            .unwrap();
         assert_eq!(d.sweep().await[&follower_url], Seen::Stale);
-        let st: TokenStatus = get(&leader_url, &rotated.token).await.unwrap().json().await.unwrap();
+        let st: TokenStatus = get(&leader_url, &rotated.token)
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
         assert_eq!(st.nodes[0].state, "stale");
     }
 }
