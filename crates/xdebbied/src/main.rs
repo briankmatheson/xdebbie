@@ -63,8 +63,9 @@ enum Cmd {
         /// Network name to create
         #[arg(long, default_value = "xdebbie")]
         network: String,
-        /// Network subnet (CIDR)
-        #[arg(long, default_value = "192.168.100.0/24")]
+        /// Overlay subnet (CIDR). One /16 for the cluster; box N's bridge
+        /// is <subnet>.N.1 and its VMs get <subnet>.N.2-254
+        #[arg(long, default_value = "10.23.0.0/16")]
         subnet: String,
         /// Storage pool name to create
         #[arg(long, default_value = "xdebbie")]

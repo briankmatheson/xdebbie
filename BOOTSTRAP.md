@@ -10,7 +10,7 @@ The bootstrap functionality automatically:
 2. **Ensures libvirtd is running** and enabled
 3. **Discovers existing libvirt resources** (networks, storage pools)
 4. **Creates default resources** if none exist:
-   - Network: `xdebbie` on `192.168.100.0/24` with bridge `virbr-xdebbie`
+   - Network: `xdebbie` on `10.23.0.0/16` with bridge `virbr-xdebbie` at `10.23.<box>.1`
    - Storage pool: `xdebbie` at `/var/lib/libvirt/xdebbie`
 5. **Generates configuration** at `/etc/xdebbie/xdebbied.toml`
 6. **Generates secure API token** at `/etc/xdebbie/token`
@@ -61,7 +61,7 @@ Bootstrap the system with automatic resource discovery and creation.
 - `--force` - Regenerate the configuration and token. The old files are kept as `.bak-<timestamp>`; operator settings (`volume_group`, `thin_pool`, `tls_*`, `advertise_url`, `policy`, `[network]`, `[mesh]`, `[[hosts]]`) are carried into the new config. A config that exists but does not parse is never replaced without `--force`
 - `--uri <URI>` - Libvirt URI (default: `qemu:///system`)
 - `--network <NAME>` - Network name to create (default: `xdebbie`)
-- `--subnet <CIDR>` - Network subnet (default: `192.168.100.0/24`)
+- `--subnet <CIDR>` - Overlay subnet (default: `10.23.0.0/16`). One /16 for the cluster; box N's bridge is `<subnet>.N.1`, its VMs `<subnet>.N.2-254`
 - `--pool <NAME>` - Storage pool name (default: `xdebbie`)
 - `--pool-path <PATH>` - Storage pool path (default: `/var/lib/libvirt/xdebbie`)
 - `--box <0-253>` - Mesh box id to ask for. Normally not needed: the first box takes `0` and every box that joins is **assigned the next free id by the CA box** at approval (a host that re-enrols keeps the id it had). The id goes into `[mesh]`, and the libvirt network bootstrap creates gets the bridge MAC `52:54:00:23:<box>:fe` the mesh's derived FDB scheme expects — which is why enrolment happens before the network is created. For a network that already exists bootstrap only warns when the MAC differs. With `--join`, `--box` is a wish the CA box honours only if that id is free
@@ -237,10 +237,9 @@ finishes as usual. The joiner's config gets `ca_url = "https://gram…"`
 so later `xdctl approve` calls made against it are forwarded.
 
 The joiner also copies the **overlay network** from the CA box
-(`GET /v1/network` over mTLS): same `cidr`, `gateway`, `dns` and `domain`,
-the CA box's `reserved` plus its gateway, and this box's own allocation
-slice — 256 addresses at `cidr + box·256` (an eighth of the subnet when the
-prefix is longer than /21), so pools are disjoint by construction
+(`GET /v1/network` over mTLS): same `cidr` and `domain`, and this box's own
+/24 of it — bridge `<cidr>.<box>.1` as gateway and DNS, VMs
+`.<box>.2`–`.254` as the pool — so pools are disjoint by construction
 (docs/network.md). A kept config gains the block only if it has no live
 `[network]`; a regenerated one gets it in place of the template. If the CA
 box still allocates from the whole subnet, bootstrap warns with the
@@ -262,21 +261,20 @@ Created at runtime to persist VM and host state.
 
 ### Network: `xdebbie`
 
-- **Bridge**: `virbr-xdebbie`
-- **Subnet**: `192.168.100.0/24`
-- **DHCP Range**: `192.168.100.100` - `192.168.100.250`
+- **Bridge**: `virbr-xdebbie`, MAC `52:54:00:23:<box>:fe`
+- **Subnet**: `10.23.0.0/16`; this bridge at `10.23.<box>.1`
+- **DHCP**: none from libvirt — xdebbied's own responder serves `10.23.<box>.2-254` (docs/network.md)
 - **Autostart**: Enabled
 
-Created with:
+Created with (box 1 shown):
 
 ```xml
 <network>
   <name>xdebbie</name>
-  <bridge name='virbr-xdebbie' stp='on' delay='0'/>
-  <ip address='192.168.100.0' netmask='255.255.255.0'>
-    <dhcp>
-      <range start='192.168.100.100' end='192.168.100.250'/>
-    </dhcp>
+  <bridge name='virbr-xdebbie' stp='off' delay='0'/>
+  <mac address='52:54:00:23:01:fe'/>
+  <dns enable='no'/>
+  <ip address='10.23.1.1' netmask='255.255.0.0'>
   </ip>
 </network>
 ```

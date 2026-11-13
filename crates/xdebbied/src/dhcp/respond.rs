@@ -184,6 +184,7 @@ mod tests {
                 pool_start: None,
                 pool_end: None,
                 reserved: vec![],
+                upstream_dns: vec![],
                 dhcp: true,
                 bridge: None,
                 lease_secs: DEFAULT_LEASE_SECS,

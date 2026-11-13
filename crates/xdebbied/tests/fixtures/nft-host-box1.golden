@@ -1,0 +1,15 @@
+table ip xdebbie_host {
+  chain prerouting {
+    type nat hook prerouting priority dstnat; policy accept;
+    iifname "virbr-xdebbie" ip daddr 10.23.1.1 udp dport 53 counter dnat to 192.168.1.1
+    iifname "virbr-xdebbie" ip daddr 10.23.1.1 tcp dport 53 counter dnat to 192.168.1.1
+  }
+  chain forward {
+    type filter hook forward priority -10; policy accept;
+    iifname != "virbr-xdebbie" oifname "virbr-xdebbie" ct state new counter drop
+  }
+  chain postrouting {
+    type nat hook postrouting priority srcnat; policy accept;
+    ip saddr 10.23.1.0/24 oifname != "virbr-xdebbie" counter masquerade
+  }
+}

@@ -9,11 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `bootstrap --join` copies the overlay `[network]` from the CA box
-  (`GET /v1/network` over mTLS): same `cidr`/`gateway`/`dns`/`domain`, its
-  reservations plus its gateway, and this box's own pool slice
-  (`cidr + box·256`). Added to a kept config that lacks `[network]`, in
-  place of the template in a regenerated one. Warns if the CA box's pool
-  overlaps the slice.
+  (`GET /v1/network` over mTLS): same `cidr`/`domain`, and this box's own
+  /24 of it. Added to a kept config that lacks `[network]`, in place of
+  the template in a regenerated one. Warns if the CA box's pool overlaps
+  the /24.
+- Overlay addressing is one rule: a /16 (default `10.23.0.0/16`, the new
+  `--subnet` default), and box *N* owns `10.23.N.0/24` — bridge at `.N.1`
+  (its VMs' gateway and DNS, and where the mesh's derived probe already
+  looked), VMs at `.N.2`–`.254`. Replaces the first-host gateway shared
+  across boxes, the `cidr + box·256` pool slices with their 16-address
+  carve-out, and the `reserved` lists of other boxes' bridges. Bootstrap
+  creates the libvirt network at the box's address and warns, with the
+  `virsh net-edit` to run, when an adopted bridge sits elsewhere.
 
 - libvirt TLS comes from the cluster CA. Step 7 installs `api-ca.pem` as
   libvirt's CA and this box's enrolled certificate as both server and
@@ -26,7 +33,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `uri = qemu+tls://<overlay address>/system`. No more `xdctl host add`
   for a joined box.
 
+- VMs can leave the box. The libvirt network is `<forward mode='route'/>`
+  (isolated networks make libvirt reject all forwarding), `ip_forward` is
+  on, ufw forwards the box's /24 out of the bridge, and a new `ip
+  xdebbie_host` nftables table masquerades that /24 behind whatever
+  interface the packet leaves by — each box NATs its own VMs and nobody
+  else's, VM-to-VM stays on the mesh L2. VM DNS (the bridge, port 53
+  udp/tcp) is DNAT'd to `[network] upstream_dns`: the first box's own
+  resolver, copied to every joiner via `/v1/network`, so every VM asks the
+  same server. New flows into the bridge from any other interface are
+  dropped. Bootstrap warns on an adopted network without `<forward>`.
+- The LAN interface accepts only ssh, WireGuard, the API and discovery
+  multicast. libvirt TLS is accepted on the underlay and bridge only
+  (libvirtd listens on the bridge address anyway), Geneve on the
+  underlay, DHCP on the bridge. ufw rules are tagged with what they are
+  for and tagged rules no longer wanted are deleted, so existing boxes
+  converge on the next start.
+
 ### Fixed
+- API certificates now carry `127.0.0.1` and `::1` SANs, so `xdctl` with
+  its default `--url https://127.0.0.1:7443` verifies on the box itself.
+- `xdctl mesh …` always followed the leader, so from a follower it silently
+  edited the *leader's* peer list and the follower's own mesh could not be
+  enrolled with `xdctl` at all. `mesh` is per-box state: it now stays on
+  the box at `--url`/`XDEBBIE_URL`. Everything else still goes to the leader.
+- Bootstrap built `advertise_url`, the join `api_url` and the registered
+  libvirt URI from `hostname -f` even when that name resolves nowhere (or
+  only to IPv6 link-local / container addresses), leaving URLs no other box
+  could open. Bootstrap now checks the lookup first (2 s budget) and, when
+  it fails, uses the address this box announces on discovery throughout;
+  a kept `advertise_url` built from the dead name is regenerated. The
+  hostname remains the box's name (enrolment, `xdctl host ls`, cert CN).
 - Bootstrap wrote the bridge of whichever libvirt network sorted first
   (`default`/`virbr0`, usually inactive) into `[mesh]` and `[[hosts]]`
   instead of the `xdebbie` network it had just ensured. The mesh then sat on

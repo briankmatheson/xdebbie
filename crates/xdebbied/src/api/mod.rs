@@ -28,7 +28,7 @@ use axum::{
 };
 use chrono::Utc;
 use xdebbie_core::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
@@ -133,6 +133,7 @@ pub fn router(app: App) -> Router {
         .route("/enroll/token", get(enroll_token))
         .route("/ca", get(ca_cert))
         .route("/network", get(network))
+        .route("/version", get(version_info))
         .with_state(app.clone())
         .merge(mesh::router(mesh::MeshApi { mesh: app.mesh.clone() }))
         .layer(middleware::from_fn_with_state(app.token.clone(), authenticate));
@@ -647,6 +648,29 @@ fn validate(s: &VmSpec) -> R<()> {
         return Err(bad("image is a volume name in the host pool"));
     }
     Ok(())
+}
+
+/// `GET /v1/version`: daemon version and feature list. Box-local; never forwarded.
+async fn version_info(State(a): State<App>) -> Json<VersionInfo> {
+    let hostname = a.leadership.status().await.this.hostname;
+    Json(VersionInfo {
+        version: env!("CARGO_PKG_VERSION"),
+        hostname,
+        features: vec![
+            "mesh",
+            "bootstrap",
+            "volumes",
+            "dhcp",
+            "enroll",
+        ],
+    })
+}
+
+#[derive(Serialize)]
+struct VersionInfo {
+    version: &'static str,
+    hostname: String,
+    features: Vec<&'static str>,
 }
 
 /// `GET /v1/network`: overlay addressing config and DHCP responder status.

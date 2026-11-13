@@ -108,6 +108,8 @@ pub struct NetworkStatus {
     pub pool_start: Ipv4Addr,
     pub pool_end: Ipv4Addr,
     pub reserved: Vec<Ipv4Addr>,
+    #[serde(default)]
+    pub upstream_dns: Vec<Ipv4Addr>,
     pub lease_secs: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub domain: Option<String>,
@@ -149,6 +151,7 @@ impl DhcpServer {
             pool_start,
             pool_end,
             reserved: self.net.reserved.clone(),
+            upstream_dns: self.net.upstream_dns.clone(),
             lease_secs: self.net.lease_secs,
             domain: self.net.domain.clone(),
             dhcp: DhcpStatus {

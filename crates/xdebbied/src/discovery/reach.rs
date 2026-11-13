@@ -107,6 +107,37 @@ fn resolves(host: &str) -> bool {
     (host, 0u16).to_socket_addrs().map(|mut a| a.next().is_some()).unwrap_or(false)
 }
 
+/// Does `host` resolve to a usable address within `budget`? `getaddrinfo`
+/// has no timeout of its own and a dead resolver can sit for a minute, so
+/// the lookup runs on its own thread and is abandoned when the budget is
+/// spent. Link-local and loopback results do not count: a name that only
+/// yields `fe80::…` is no use to another box.
+pub fn resolves_within(host: &str, budget: std::time::Duration) -> bool {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let host = host.to_string();
+    std::thread::spawn(move || {
+        let ok = (host.as_str(), 0u16)
+            .to_socket_addrs()
+            .map(|addrs| addrs.map(|a| a.ip()).any(|ip| usable(ip) && !is_link_local(ip)))
+            .unwrap_or(false);
+        let _ = tx.send(ok);
+    });
+    rx.recv_timeout(budget).unwrap_or(false)
+}
+
+fn is_link_local(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_link_local(),
+        IpAddr::V6(v6) => (v6.segments()[0] & 0xffc0) == 0xfe80,
+    }
+}
+
+/// The address this box announces first: where the multicast route leaves
+/// from, else the first global IPv4 on the box.
+pub fn announced_addr(multicast_addr: &str) -> Option<IpAddr> {
+    local_addrs(multicast_addr).into_iter().next()
+}
+
 /// The source address of a received datagram as a candidate.
 pub fn source_ip(src: SocketAddr) -> Option<IpAddr> {
     let ip = match src.ip() {
@@ -166,6 +197,16 @@ mod tests {
     use std::net::Ipv4Addr;
 
     const IP: IpAddr = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 7));
+
+    #[test]
+    fn resolves_within_budget() {
+        let b = std::time::Duration::from_secs(2);
+        assert!(resolves_within("192.0.2.7", b));
+        assert!(!resolves_within("127.0.0.1", b), "loopback is not reachable from elsewhere");
+        assert!(!resolves_within("fe80::1", b), "link-local is not reachable from elsewhere");
+        assert!(!resolves_within("no-such-host.invalid", b));
+        assert!(!resolves_within("", b));
+    }
 
     #[test]
     fn unresolvable_name_becomes_address() {

@@ -51,6 +51,10 @@ rest of the command. An election in progress is waited out for up to 20 s
 (`waiting for a leader election at …` on stderr). A daemon that predates
 `/v1/leader` is used as-is.
 
+`xdctl mesh …` is the exception: `/v1/mesh` is the state of one box, so it
+stays on the first seed that answers and never follows the leader. To
+enrol a peer on box B, point `XDEBBIE_URL` (or `--url`) at B.
+
 ```
 $ xdctl leader
 asked   node0.example.net (http://10.23.0.1:7443)  [follower, 2 peers]

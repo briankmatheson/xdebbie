@@ -5,10 +5,12 @@
 //! discovery/creation, configuration generation, and token generation to
 //! enable single-binary deployment on stock Debian systems.
 
+pub mod addr;
 pub mod api_tls;
 pub mod config_gen;
 pub mod deps;
 pub mod discover;
+pub mod dns;
 pub mod firewall;
 pub mod join;
 pub mod libvirt_setup;
@@ -29,7 +31,8 @@ pub const DEFAULT_ENV_FILE: &str = "xdebbie_env";
 /// Default libvirt URIs and resources
 pub const DEFAULT_LIBVIRT_URI: &str = "qemu:///system";
 pub const DEFAULT_NETWORK_NAME: &str = "xdebbie";
-pub const DEFAULT_NETWORK_SUBNET: &str = "192.168.100.0/24";
+/// The overlay: one /16, box N owns `10.23.N.0/24` (see `addr`).
+pub const DEFAULT_NETWORK_SUBNET: &str = "10.23.0.0/16";
 pub const DEFAULT_POOL_NAME: &str = "xdebbie";
 pub const DEFAULT_POOL_PATH: &str = "/var/lib/libvirt/xdebbie";
 
@@ -256,6 +259,7 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
 
     let api_tls_paths = api_tls::ApiTlsPaths::default();
     let hostname = libvirt_setup::get_hostname();
+    let reach = reach_host(&hostname, &opts.multicast_addr);
     let cfg_dir = opts.config_path.parent().unwrap_or_else(|| Path::new(DEFAULT_CONFIG_DIR));
 
     // Step 4: identity. A joining box gets its certificate, the token and
@@ -272,9 +276,12 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
             let b = existing_box.or(opts.box_id).unwrap_or(0);
             (token::read_token(&opts.token_path)?, b)
         } else {
+            // A kept advertise_url is the operator's, unless the name it
+            // was built from no longer resolves: then it is a URL nobody
+            // can open, and the address wins.
             let api_url = match crate::config::Config::load(&opts.config_path) {
-                Ok(cfg) => cfg.advertise_url(cfg.effective_listen()),
-                Err(_) => derive_advertise_url(&opts.listen_addr),
+                Ok(cfg) if reach.by_name => cfg.advertise_url(cfg.effective_listen()),
+                _ => derive_advertise_url(&opts.listen_addr, &reach.host),
             };
             let joined = join::join(&join::JoinOptions {
                 ca_url,
@@ -377,7 +384,7 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     // the network is ours (just created) or an adopted one without a
     // <dhcp> range — typically ours from an earlier bootstrap.
     let created_subnet = if !network_exists {
-        libvirt_setup::ensure_network(&opts.libvirt_uri, &opts.network_name, &opts.network_subnet, "", "", &want_mac)?;
+        libvirt_setup::ensure_network(&opts.libvirt_uri, &opts.network_name, &opts.network_subnet, box_id, "", "", &want_mac)?;
         Some(opts.network_subnet.clone())
     } else {
         // Not ours to change live (a MAC change resets every guest's ARP
@@ -395,6 +402,32 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
             Some(shape) if !shape.has_dhcp => {
                 let subnet = shape.subnet.unwrap_or_else(|| opts.network_subnet.clone());
                 info!("Adopted network '{}' has no DHCP range; xdebbied serves {subnet} on its bridge", opts.network_name);
+                // Same rule as a created network: box N's bridge is <subnet>.N.1,
+                // where the mesh probes it and where its VMs are routed.
+                match (shape.address, addr::box_block_str(&subnet, box_id)) {
+                    (Some(have), Ok(want)) if have != want.bridge => warn!(
+                        "network '{}' bridge is {have}; box {box_id} owns {}/24 so it should be {}. Fix with: \
+                         `virsh net-edit {}` (set <ip address='{}'/>) and, to apply now, \
+                         `ip addr replace {}/{} dev <bridge>` — peers probe that address",
+                        opts.network_name,
+                        want.network(),
+                        want.bridge,
+                        opts.network_name,
+                        want.bridge,
+                        want.bridge,
+                        subnet.rsplit('/').next().unwrap_or("16"),
+                    ),
+                    (_, Err(e)) => warn!("network '{}': {e:#}", opts.network_name),
+                    _ => {}
+                }
+                if shape.forward.is_none() {
+                    warn!(
+                        "network '{}' has no <forward>: libvirt rejects every forwarded packet, so VMs cannot leave this box. \
+                         Fix with: `virsh net-edit {}` (add <forward mode='route'/>), then `virsh net-destroy {}; virsh net-start {}` \
+                         (VMs reattach on their next restart)",
+                        opts.network_name, opts.network_name, opts.network_name, opts.network_name
+                    );
+                }
                 Some(subnet)
             }
             Some(_) => {
@@ -424,6 +457,21 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
 
     // Step 5: Generate configuration
     info!("Step 6/9: Generating configuration");
+
+    // Where this box's VMs' DNS goes. A joiner copies the cluster's (in
+    // `cluster_net`); the first box uses its own resolvers.
+    let upstream_dns: Vec<std::net::Ipv4Addr> = match &cluster_net {
+        Some(n) if !n.upstream_dns.is_empty() => n.upstream_dns.clone(),
+        _ => {
+            let r = dns::upstream_resolvers();
+            if r.is_empty() {
+                warn!("No upstream resolver found in resolv.conf; set [network] upstream_dns or VMs get no DNS");
+            } else {
+                info!("VM DNS is forwarded to {}", r.iter().map(|d| d.to_string()).collect::<Vec<_>>().join(", "));
+            }
+            r
+        }
+    };
     
     let exists = opts.config_path.exists();
     if let Some(n) = &cluster_net {
@@ -481,13 +529,16 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
         }
     } else {
         let generated =
-            config_gen::generate_config_for(&resources, &opts.libvirt_uri, created_subnet.as_deref(), box_id, opts.join.as_deref(), &opts.network_name, &opts.pool_name, cluster_net.as_ref());
+            config_gen::generate_config_for(&resources, &opts.libvirt_uri, created_subnet.as_deref(), box_id, opts.join.as_deref(), &opts.network_name, &opts.pool_name, cluster_net.as_ref(), &reach.host, &upstream_dns);
         let content = if exists {
             let bak = config_gen::back_up(&opts.config_path)?;
             info!("Previous configuration saved as {}", bak.display());
             let old = std::fs::read_to_string(&opts.config_path)?;
-            let fresh: &[&str] = if opts.join.is_some() { &["ca_url"] } else { &[] };
-            match config_gen::carry_over_except(&old, &generated, fresh) {
+            let mut fresh: Vec<&str> = if opts.join.is_some() { vec!["ca_url"] } else { vec![] };
+            if !reach.by_name {
+                fresh.push("advertise_url");
+            }
+            match config_gen::carry_over_except(&old, &generated, &fresh) {
                 Ok(c) => {
                     info!("Regenerated configuration; operator settings carried over");
                     // `[mesh]` is carried over whole; the box id is not the
@@ -538,7 +589,7 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
             let ca = cfg.tls_cert.is_some().then(|| cfg.ca_file.clone());
             (cfg.advertise_url(cfg.effective_listen()), ca)
         }
-        Err(_) => (derive_advertise_url(&opts.listen_addr), None),
+        Err(_) => (derive_advertise_url(&opts.listen_addr, &reach.host), None),
     };
     if let Err(e) = token::write_env_file(&env_path, &advertise_url, &token, ca.as_deref()) {
         warn!("Failed to write environment file: {}", e);
@@ -566,7 +617,7 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
                 Some(local) => {
                     let mut host = local.clone();
                     host.name = hostname.clone();
-                    host.uri = tls.uri(&hostname);
+                    host.uri = tls.uri(&reach.host);
                     match join::register_host(ca_url, &api_tls_paths, &host) {
                         Ok(()) => {
                             info!("  ✓ Registered {} as {} (pool {}, bridge {})", host.name, host.uri, host.storage_pool, host.bridge);
@@ -649,13 +700,46 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     Ok(())
 }
 
+/// How long bootstrap gives the resolver to confirm this box's own name.
+const HOSTNAME_LOOKUP_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// What goes in a URL another box opens to reach this one.
+///
+/// The hostname stays the box's *name* everywhere (enrolment record,
+/// `xdctl host ls`, certificate CN). This is only about what to connect
+/// to: the FQDN when it resolves here — a name that does not resolve on
+/// its own box will not resolve on any other — else the address this box
+/// announces on discovery, which the certificate also lists as a SAN.
+struct ReachHost {
+    host: String,
+    /// `host` is the hostname (true) or the announced address (false).
+    by_name: bool,
+}
+
+fn reach_host(hostname: &str, multicast_addr: &str) -> ReachHost {
+    if crate::discovery::reach::resolves_within(hostname, HOSTNAME_LOOKUP_BUDGET) {
+        return ReachHost { host: hostname.to_string(), by_name: true };
+    }
+    match crate::discovery::reach::announced_addr(multicast_addr) {
+        Some(ip) => {
+            warn!("{hostname} does not resolve here (within {}s); other boxes will reach this one by address {ip}", HOSTNAME_LOOKUP_BUDGET.as_secs());
+            ReachHost { host: ip.to_string(), by_name: false }
+        }
+        None => {
+            warn!("{hostname} does not resolve here and no global address was found; URLs use the name anyway");
+            ReachHost { host: hostname.to_string(), by_name: true }
+        }
+    }
+}
+
 /// Build a usable advertise URL from the listen address.
 ///
 /// If the listen address binds to a wildcard (`0.0.0.0` or `[::]`) we
-/// replace it with the system's fully-qualified hostname so that peers and
-/// xdctl on other machines can actually reach this box.  A literal IP in
-/// the listen address is kept as-is.
-fn derive_advertise_url(listen_addr: &str) -> String {
+/// replace it with `host` — the FQDN or, when that does not resolve, the
+/// announced address (see [`reach_host`]) — so that peers and xdctl on
+/// other machines can actually reach this box. A literal IP in the listen
+/// address is kept as-is.
+fn derive_advertise_url(listen_addr: &str, host: &str) -> String {
     // Split off the port — listen_addr is "host:port" or "[::]:port".
     let port = listen_addr
         .rsplit(':')
@@ -663,8 +747,8 @@ fn derive_advertise_url(listen_addr: &str) -> String {
         .unwrap_or("7443");
 
     let host = if listen_addr.starts_with("0.0.0.0:") || listen_addr.starts_with("[::]:") || listen_addr == "0.0.0.0" {
-        // Wildcard: use the FQDN so remote clients can resolve us.
-        libvirt_setup::get_hostname()
+        // Wildcard: whatever other boxes can open.
+        host.to_string()
     } else {
         // Literal IP or hostname already specified — strip the port.
         let h = listen_addr.rsplit_once(':').map(|(h, _)| h).unwrap_or(listen_addr);
@@ -687,16 +771,31 @@ mod tests {
 
     #[test]
     fn test_derive_advertise_url_wildcard() {
-        let url = derive_advertise_url("0.0.0.0:7443");
-        // Should not contain 0.0.0.0
-        assert!(!url.contains("0.0.0.0"), "got: {url}");
-        assert!(url.starts_with("https://"), "got: {url}");
-        assert!(url.ends_with(":7443"), "got: {url}");
+        assert_eq!(derive_advertise_url("0.0.0.0:7443", "gram.example"), "https://gram.example:7443");
+        assert_eq!(derive_advertise_url("[::]:7443", "192.168.1.164"), "https://192.168.1.164:7443");
     }
 
     #[test]
     fn test_derive_advertise_url_literal_ip() {
-        let url = derive_advertise_url("192.168.1.10:7443");
+        let url = derive_advertise_url("192.168.1.10:7443", "gram.example");
         assert_eq!(url, "https://192.168.1.10:7443");
+    }
+
+    #[test]
+    fn reach_host_falls_back_to_address_when_name_is_dead() {
+        let r = reach_host("no-such-box.invalid", crate::discovery::multicast::DEFAULT_MULTICAST_ADDR);
+        if r.by_name {
+            // no global address on this machine (CI sandbox): the name is kept
+            assert_eq!(r.host, "no-such-box.invalid");
+        } else {
+            assert!(r.host.parse::<std::net::IpAddr>().is_ok(), "got: {}", r.host);
+        }
+    }
+
+    #[test]
+    fn reach_host_keeps_a_name_that_resolves() {
+        let r = reach_host("192.0.2.7", "239.0.0.42:7442");
+        assert!(r.by_name);
+        assert_eq!(r.host, "192.0.2.7");
     }
 }

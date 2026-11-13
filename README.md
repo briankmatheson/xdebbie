@@ -122,7 +122,7 @@ ssh node3 sudo dpkg -i /tmp/xdebbied_0.7.0-1_amd64.deb
 
 **That's it!** Each node will:
 1. Auto-install dependencies (libvirt, qemu, etc.)
-2. Create network (192.168.100.0/24) and storage pool
+2. Create network (10.23.0.0/16, this box's bridge at 10.23.<box>.1) and storage pool
 3. Generate config and secure token
 4. Start the service
 5. Discover other nodes via multicast

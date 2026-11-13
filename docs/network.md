@@ -58,11 +58,12 @@ sent to `giaddr` when a relay is involved.
 ```toml
 [network]
 cidr = "10.23.0.0/16"
-# gateway = "10.23.0.1"       # default: first host of cidr
-# dns = ["10.23.0.1"]         # default: the gateway
-# pool_start = "10.23.0.16"   # default: cidr + 16
-# pool_end = "10.23.255.254"  # default: last host
-# reserved = ["10.23.0.2"]    # other boxes' bridge addresses, appliances
+gateway = "10.23.1.1"         # this box's bridge (box 1)
+dns = ["10.23.1.1"]
+pool_start = "10.23.1.2"
+pool_end = "10.23.1.254"
+reserved = []                 # appliances pinned by hand, if any
+upstream_dns = ["192.168.1.1"]  # where VM DNS to the gateway is forwarded
 # dhcp = true                 # false = allocate only, some other server answers
 # bridge = "virbr-int"        # default: the mesh bridge, else the first host's
 # lease_secs = 86400
@@ -70,21 +71,51 @@ cidr = "10.23.0.0/16"
 # leader_only = false
 ```
 
-`cidr`, `gateway`, `dns` and `domain` describe the overlay and must be the
-same on every meshed box. `pool_start`/`pool_end` are per box: with
-independent control planes on one overlay, give each box a disjoint slice
-(`10.23.1.0–10.23.1.255` on box 1, `10.23.2.0–…` on box 2, …) so two
-allocators never pick the same address. `reserved` is where the other
-boxes' bridge addresses go. `xdebbied bootstrap --join` writes exactly this
-for a joiner, copied from the CA box's `/v1/network` (BOOTSTRAP.md,
-"Joining a cluster"); the first box should set `pool_end` to the end of its
-own slice (`10.23.0.255`) rather than allocate from the whole subnet.
+One /16 per overlay, one /24 per box. `cidr` (and `domain`) is the same on
+every meshed box; box *N* owns `<cidr>.N.0/24`: its bridge is `.N.1` — the
+gateway and DNS its VMs are told, and where the mesh probes it
+(`docs/mesh.md`) — and its VMs get `.N.2`–`.N.254`. Pools are disjoint by
+construction, so independent control planes on one overlay never pick the
+same address and there is nothing to `reserved`. Bootstrap writes exactly
+this for every box, the first one from `--subnet` and a joiner from the CA
+box's `/v1/network` (BOOTSTRAP.md, "Joining a cluster"). A narrower `cidr`
+just holds fewer boxes (a /24: box 0 only; a /20: boxes 0–15).
 
 `spec.ip` may be any free host address in `cidr`, inside the pool or not —
 pinning infrastructure addresses outside the pool is the intended use.
 
 Config is validated at startup; a bad `[network]` stops the daemon with a
 clear message.
+
+## Leaving the box: NAT and DNS
+
+Each box forwards for its own /24 and nothing else, so VM traffic leaves
+by the box the VM runs on: a VM on timesink appears as timesink's address,
+a VM on gram as gram's. VM-to-VM traffic between boxes is bridged over the
+mesh and never touches this. Bootstrap sets it up (`bootstrap/firewall.rs`):
+
+- the libvirt network is `<forward mode='route'/>` (an isolated network
+  makes libvirt reject all forwarding; bootstrap warns, with the
+  `virsh net-edit` to run, when it adopts one), `ip_forward` is on and
+  pinned in `/etc/sysctl.d/90-xdebbie-forward.conf`;
+- ufw forwards the /24 out of the bridge (`route allow in on <bridge>
+  from <cidr>.N.0/24`);
+- the `ip xdebbie_host` nftables table masquerades the /24 behind
+  whatever interface a packet leaves by, DNATs the VMs' DNS — they are told
+  the bridge, `.N.1`, port 53 udp and tcp — to `upstream_dns`, and drops new
+  flows into the bridge from any other interface, so a LAN host with a
+  route to the overlay still cannot open a connection to a VM.
+
+`upstream_dns` is the first box's own resolver (from
+`/run/systemd/resolve/resolv.conf`, else `/etc/resolv.conf`; loopback
+skipped) and is copied to every joiner with the rest of `[network]`, so all
+VMs in the cluster ask the same server box 0 does. Change it on box 0 and
+re-join, or set it by hand everywhere. Empty = no DNAT: VM DNS goes nowhere.
+
+```
+sudo nft list table ip xdebbie_host     # counters per rule
+sudo ufw status                         # "# xdebbie vm egress …" is the forward rule
+```
 
 ## Operating it
 
@@ -130,9 +161,8 @@ network probably still runs dnsmasq.
 
 - No dynamic pool for guests xdebbie did not create. They are ignored; use
   `xdctl net seen` to spot them.
-- No DNS. `dns` just names resolvers for the guests.
-- No floating gateway. With one L2 across boxes, VMs route via one box's
-  NAT; a leader-held gateway VIP is the natural follow-up.
+- No DNS of its own. `dns` names the bridge; queries there are forwarded to
+  `upstream_dns`. VM names are not registered anywhere.
 - No replication of the VM store between control planes. Every request
   already goes through the leader (docs/autodiscovery.md), so the
   leader's store is the truth; a new leader starts from its own copy.

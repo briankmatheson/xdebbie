@@ -34,7 +34,8 @@ fn format_age(created: DateTime<Utc>) -> String {
 #[command(version, about = "XDebbie CLI - Self-Forming Cloud Orchestration")]
 struct Cli {
     /// Any xdebbied in the cluster (comma-separated to try several). xdctl
-    /// asks it who the leader is and talks to the leader from then on.
+    /// asks it who the leader is and talks to the leader from then on —
+    /// except `mesh`, which is per-box state and talks to this box itself.
     #[arg(long, env = "XDEBBIE_URL", default_value = "https://127.0.0.1:7443")]
     url: String,
     #[arg(long, env = "XDEBBIE_TOKEN", hide_env_values = true)]
@@ -80,7 +81,8 @@ enum Cmd {
     /// API bearer token: status and rotation.
     #[command(subcommand)]
     Token(TokenCmd),
-    /// Geneve mesh between hypervisors.
+    /// Geneve mesh between hypervisors. Per-box state: these talk to the
+    /// box at --url, not the leader.
     #[command(subcommand)]
     Mesh(MeshCmd),
     /// Overlay addressing and the built-in DHCP responder.
@@ -89,6 +91,9 @@ enum Cmd {
     /// Standalone ABE volumes, hot-plugged into VMs as virtio disks.
     #[command(subcommand)]
     Volume(VolumeCmd),
+    /// Show xdctl client version and the daemon version on the local box and
+    /// the cluster leader (if different). Per-box state; never redirected.
+    Version,
     /// Generate shell completion script.
     Completion {
         /// Shell to generate completion for (bash, zsh, fish, elvish, powershell)
@@ -385,6 +390,17 @@ impl Api {
     /// too old to have that route is used as-is. An election in progress
     /// (daemon just started, or a failover) is waited out for a few seconds.
     fn find_leader(&mut self, seeds: &str) -> Result<LeaderStatus> {
+        self.find(seeds, true)
+    }
+
+    /// Stay on the first seed that answers: for per-box state (`/v1/mesh`)
+    /// the leader is the wrong box to talk to. No election is needed, so
+    /// none is waited for.
+    fn find_box(&mut self, seeds: &str) -> Result<LeaderStatus> {
+        self.find(seeds, false)
+    }
+
+    fn find(&mut self, seeds: &str, follow_leader: bool) -> Result<LeaderStatus> {
         let mut waited = 0;
         loop {
             let mut errs = vec![];
@@ -398,6 +414,9 @@ impl Api {
                     }
                     Ok((code, v)) if code.is_success() => {
                         let st: LeaderStatus = serde_json::from_value(v).context("parsing /v1/leader")?;
+                        if !follow_leader {
+                            return Ok(st);
+                        }
                         if let Some(l) = &st.leader {
                             self.url = l.api_url.clone();
                             return Ok(st);
@@ -417,7 +436,8 @@ impl Api {
                 }
             }
             if !retry {
-                bail!("no leader reachable:\n  {}", errs.join("\n  "));
+                let what = if follow_leader { "no leader reachable" } else { "no xdebbied reachable" };
+                bail!("{what}:\n  {}", errs.join("\n  "));
             }
             std::thread::sleep(std::time::Duration::from_secs(1));
         }
@@ -666,6 +686,75 @@ fn print_mesh(doc: &Value) {
     }
 }
 
+fn cmd_version(api: &mut Api, cli: &Cli) -> Result<()> {
+    let xdctl_ver = env!("CARGO_PKG_VERSION");
+
+    // Query the box at --url directly (no leader redirect).
+    let local_st = api.find_box(&cli.url).ok();
+    let local_ver: Option<Value> = local_st.as_ref().and_then(|_| api.call(Method::GET, "/version", None).ok());
+    let local_url = api.url.clone();
+
+    // If the local box is a follower, also query the leader directly.
+    let leader_ver: Option<(String, Value)> = local_st
+        .as_ref()
+        .filter(|st| !st.is_leader)
+        .and_then(|st| st.leader.as_ref())
+        .and_then(|leader| {
+            let la = Api {
+                c: api.c.clone(),
+                url: leader.api_url.clone(),
+                token: api.token.clone(),
+                last_ca_fingerprint: Default::default(),
+            };
+            la.call(Method::GET, "/version", None)
+                .ok()
+                .map(|v| (leader.api_url.clone(), v))
+        });
+
+    if cli.json {
+        let mut doc = serde_json::json!({ "xdctl": xdctl_ver });
+        if let Some(v) = local_ver {
+            doc["local"] = v;
+        }
+        if let Some((_, v)) = leader_ver {
+            doc["leader"] = v;
+        }
+        println!("{}", serde_json::to_string_pretty(&doc)?);
+        return Ok(());
+    }
+
+    println!("{:<10} {:<14} {:<20} {}", "component", "version", "hostname", "url");
+    println!("{:-<10} {:-<14} {:-<20} {:-<36}", "", "", "", "");
+    println!("{:<10} {:<14} {:<20}", "xdctl", xdctl_ver, "(client)");
+
+    match &local_ver {
+        Some(v) => println!(
+            "{:<10} {:<14} {:<20} {}",
+            "local",
+            v["version"].as_str().unwrap_or("?"),
+            v["hostname"].as_str().unwrap_or("?"),
+            local_url,
+        ),
+        None => println!("{:<10} unreachable ({})", "local", local_url),
+    }
+
+    match leader_ver {
+        Some((url, v)) => println!(
+            "{:<10} {:<14} {:<20} {}",
+            "leader",
+            v["version"].as_str().unwrap_or("?"),
+            v["hostname"].as_str().unwrap_or("?"),
+            url,
+        ),
+        None if local_st.as_ref().map(|s| s.is_leader).unwrap_or(false) => {
+            println!("{:<10} (same box)", "leader");
+        }
+        None => {}
+    }
+
+    Ok(())
+}
+
 fn main() -> Result<()> {
     // `xdctl ... | head` must not panic: let a closed pipe end the process quietly.
     #[cfg(unix)]
@@ -683,7 +772,13 @@ fn main() -> Result<()> {
         token: cli.token.clone(),
         last_ca_fingerprint: Default::default(),
     };
-    let asked = api.find_leader(&cli.url)?;
+    // `version` queries each box directly (never follows leader).
+    if matches!(cli.cmd, Cmd::Version) {
+        return cmd_version(&mut api, &cli);
+    }
+    // `/v1/mesh` is this box's own state; everything else is cluster state
+    // the leader owns.
+    let asked = if matches!(cli.cmd, Cmd::Mesh(_)) { api.find_box(&cli.url)? } else { api.find_leader(&cli.url)? };
     let out = |v: Value| -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&v)?);
         Ok(())
@@ -1175,6 +1270,7 @@ fn main() -> Result<()> {
                 None,
             )?)?,
         },
+        Cmd::Version => unreachable!("handled before contacting xdebbied"),
         Cmd::Completion { .. } => unreachable!("handled before contacting xdebbied"),
     }
     Ok(())

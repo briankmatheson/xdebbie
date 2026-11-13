@@ -101,9 +101,15 @@ pub struct NetworkConfig {
     pub pool_start: Option<Ipv4Addr>,
     #[serde(default)]
     pub pool_end: Option<Ipv4Addr>,
-    /// Never allocate these (other boxes' bridge addresses, appliances...).
+    /// Never allocate these (appliances pinned by hand...).
     #[serde(default)]
     pub reserved: Vec<Ipv4Addr>,
+    /// Where this box forwards its VMs' DNS: queries to the gateway on
+    /// port 53 are DNAT'd to the first of these (bootstrap/firewall.rs).
+    /// The first box takes its own resolvers; joiners copy the cluster's,
+    /// so every VM asks the same server.
+    #[serde(default)]
+    pub upstream_dns: Vec<Ipv4Addr>,
     /// Run the DHCP responder on `bridge`. Off = allocate only.
     #[serde(default = "d_true")]
     pub dhcp: bool,
@@ -256,6 +262,7 @@ mod tests {
             pool_start: None,
             pool_end: None,
             reserved: vec![],
+            upstream_dns: vec![],
             dhcp: true,
             bridge: None,
             lease_secs: DEFAULT_LEASE_SECS,

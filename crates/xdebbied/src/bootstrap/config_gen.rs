@@ -16,9 +16,16 @@ use super::libvirt_setup::{get_hostname, LibvirtResources};
 /// exactly the mistake we want operators to make on purpose, not by default.
 #[cfg(test)]
 pub fn generate_config(resources: &LibvirtResources, uri: &str, created_subnet: Option<&str>, box_id: u8, join: Option<&str>) -> String {
-    generate_config_for(resources, uri, created_subnet, box_id, join, super::DEFAULT_NETWORK_NAME, super::DEFAULT_POOL_NAME, None)
+    generate_config_for(resources, uri, created_subnet, box_id, join, super::DEFAULT_NETWORK_NAME, super::DEFAULT_POOL_NAME, None, &get_hostname(), &[])
 }
 
+/// `advertise_host`: what other boxes put in a URL to reach this one — the
+/// FQDN, or its announced address when the name does not resolve (see
+/// `bootstrap::reach_host`). The host's *name* stays the hostname.
+///
+/// `upstream_dns`: where this box's VMs' DNS goes (`[network] upstream_dns`),
+/// for a first box; a joiner takes the cluster's from `cluster_net`.
+///
 /// `network_name` / `pool_name`: what bootstrap ensured exists. Their
 /// bridge and name go into the config; the first discovered network is
 /// only a fallback (libvirt's `default`, often inactive, sorts first).
@@ -31,6 +38,8 @@ pub fn generate_config_for(
     network_name: &str,
     pool_name: &str,
     cluster_net: Option<&crate::dhcp::NetworkStatus>,
+    advertise_host: &str,
+    upstream_dns: &[Ipv4Addr],
 ) -> String {
     let hostname = get_hostname();
     let ca_url_line = match join {
@@ -39,7 +48,7 @@ pub fn generate_config_for(
     };
     // Bootstrap generates api-cert.pem/api-key.pem and enables TLS by default.
     // advertise_url uses https:// to match.
-    let advertise_url = format!("https://{}:7443", hostname);
+    let advertise_url = format!("https://{}:7443", advertise_host);
     let (net_prefix, net_cidr, net_note) = match created_subnet {
         Some(s) => ("", s.to_string(), "# Bootstrap created the libvirt network without a DHCP range; xdebbied\n# allocates each VM an address at creation and answers DHCP for it itself.".to_string()),
         None => (
@@ -68,19 +77,34 @@ pub fn generate_config_for(
 
     let network_section = match cluster_net {
         Some(n) => network_block(n, box_id, &network).0,
-        None => format!(
-            "{net_note}\n{p}[network]\n{p}cidr = \"{net_cidr}\"\n\
-             {p}# gateway = \"<first host of cidr>\"   # this bridge's address = default route\n\
-             {p}# dns = [\"<gateway>\"]\n\
-             {p}# pool_start = \"<cidr + 16>\"\n\
-             {p}# pool_end = \"<last host>\"\n\
-             {p}# reserved = []\n\
-             {p}# bridge = \"{network}\"              # default: mesh bridge, else first host's\n\
-             {p}# lease_secs = 86400\n\
-             {p}# domain = \"vm.example\"\n\
-             {p}# leader_only = false              # true once control planes share state",
-            p = net_prefix
-        ),
+        None => {
+            // Box `box_id`'s /24 of the overlay (addr.rs). On a subnet with
+            // no room for this box the lines are left commented, as
+            // placeholders (the daemon's defaults then apply).
+            let (gw, start, end, q) = match super::addr::box_block_str(&net_cidr, box_id) {
+                Ok(b) => (b.bridge.to_string(), b.pool_start.to_string(), b.pool_end.to_string(), net_prefix),
+                Err(_) => ("<this bridge's address>".into(), "<first VM address>".into(), "<last VM address>".into(), "# "),
+            };
+            let (upstream, up_note) = if upstream_dns.is_empty() {
+                ("[]".to_string(), "  # none found in resolv.conf: VMs get no DNS until set")
+            } else {
+                (format!("[{}]", upstream_dns.iter().map(|d| format!("\"{d}\"")).collect::<Vec<_>>().join(", ")), "")
+            };
+            format!(
+                "{net_note}\n{p}[network]\n{p}cidr = \"{net_cidr}\"\n\
+                 {q}gateway = \"{gw}\"             # this box's bridge: box {box_id} owns <cidr>.{box_id}.0/24\n\
+                 {q}dns = [\"{gw}\"]\n\
+                 {p}upstream_dns = {upstream}{up_note}   # VM DNS to the gateway is forwarded here\n\
+                 {q}pool_start = \"{start}\"\n\
+                 {q}pool_end = \"{end}\"\n\
+                 {q}reserved = []\n\
+                 {p}# bridge = \"{network}\"              # default: mesh bridge, else first host's\n\
+                 {p}# lease_secs = 86400\n\
+                 {p}# domain = \"vm.example\"\n\
+                 {p}# leader_only = false              # true once control planes share state",
+                p = net_prefix
+            )
+        }
     };
 
     format!(
@@ -121,8 +145,8 @@ seed_command = ["cloud-localds", "--network-config={{net}}", "--vendor-data={{ve
 # followers forward to it. No peers = this box leads.
 enable_discovery = true
 multicast_addr = "239.0.0.42:7442"
-# URL peers and xdctl use to reach this box. Auto-detected from hostname;
-# change to https:// and add tls_cert/tls_key above to enable TLS.
+# URL peers and xdctl use to reach this box. Auto-detected from the hostname,
+# or from this box's address when the hostname does not resolve.
 advertise_url = "{advertise_url}"
 # The box holding the cluster CA key (set by `bootstrap --join`). Enrolment
 # requests and `xdctl approve` that land here are forwarded to it. Leave
@@ -131,10 +155,10 @@ advertise_url = "{advertise_url}"
 
 # Overlay addressing + built-in DHCP (docs/network.md). The scheduler binds an
 # address to every VM at creation (`xdctl vm ls` shows it before first boot)
-# and the responder on the bridge answers only for those MACs. One subnet per
-# overlay: when boxes are meshed, give every box the same `cidr` and
-# `gateway`, disjoint `pool_start`/`pool_end`, and list the other boxes'
-# bridge addresses under `reserved`.
+# and the responder on the bridge answers only for those MACs. One /16 per
+# overlay, one /24 per box: every box shares `cidr`; box N's bridge is
+# <cidr>.N.1 and its VMs get <cidr>.N.2-254. Nothing overlaps, nothing to
+# reserve.
 {network_section}
 
 # Geneve overlay mesh (on by default; docs/mesh.md). One tunnel per peer is
@@ -170,7 +194,7 @@ keepalive = 25
 # pubkey = "<peer's public key from `xdctl mesh wg`>"
 # endpoint = "gram.example:51820"
 # # remote = "10.22.1.1"       # derived from box when WireGuard is managed
-# # probe = "10.23.1.1"        # defaults to 10.23.<box>.1 (derived) / remote (learn)
+# # probe = "10.23.1.1"        # defaults to 10.23.<box>.1 = that box's bridge (derived) / remote (learn)
 
 # Configured hosts
 [[hosts]]
@@ -400,28 +424,39 @@ pub fn carry_over_except(old: &str, generated: &str, fresh: &[&str]) -> Result<S
 }
 
 /// A `[network]` for box `box_id` on the overlay the cluster already runs:
-/// same `cidr`, `gateway`, `dns`, `domain`; this box's own pool slice; the
-/// cluster's reservations plus its gateway. Returns the block and any
-/// warnings (an overlapping pool on the other side is the operator's to
-/// narrow — two allocators on one range will collide).
+/// same `cidr`, `domain` and lease; this box's own /24 of it (`addr.rs`) —
+/// its bridge as gateway, its VM range as pool. DNS is the cluster's unless
+/// that was just the CA box's bridge, then it is this box's bridge too.
+/// Returns the block and any warnings: the cluster's pool overlapping this
+/// box's /24 means the other box was set up by hand on a different scheme
+/// and the operator has to narrow it, or two allocators will collide.
 pub fn network_block(n: &crate::dhcp::NetworkStatus, box_id: u8, bridge: &str) -> (String, Vec<String>) {
-    let (start, end) = pool_slice(&n.cidr, box_id);
     let mut warnings = vec![];
+    let block = match super::addr::box_block(&n.cidr, box_id) {
+        Ok(b) => b,
+        Err(e) => {
+            // No room for this box: emit something the daemon rejects loudly
+            // rather than a pool that collides with another box's.
+            warnings.push(format!("{e:#}; [network] left without a pool — fix cidr on every box"));
+            let first = n.cidr.first_host();
+            super::addr::BoxBlock { bridge: first, pool_start: first, pool_end: first }
+        }
+    };
+    let (gw, start, end) = (block.bridge, block.pool_start, block.pool_end);
     if u32::from(n.pool_start) <= u32::from(end) && u32::from(start) <= u32::from(n.pool_end) {
         warnings.push(format!(
-            "the cluster's pool {}-{} overlaps this box's slice {start}-{end}; narrow it on the box that serves it \
-             (e.g. pool_end = \"{}\") or the two allocators will hand out the same address",
+            "the cluster's pool {}-{} overlaps this box's /24 {start}-{end}; narrow it on the box that serves it \
+             (box 0 should use {}-{}) or the two allocators will hand out the same address",
             n.pool_start,
             n.pool_end,
-            Ipv4Addr::from(u32::from(start) - 1),
+            Ipv4Addr::from(u32::from(n.cidr.network) + 2),
+            Ipv4Addr::from(u32::from(n.cidr.network) + 254),
         ));
     }
-    let mut reserved: Vec<Ipv4Addr> = n.reserved.clone();
-    if !reserved.contains(&n.gateway) {
-        reserved.push(n.gateway);
-    }
-    let dns = n.dns.iter().map(|d| format!("\"{d}\"")).collect::<Vec<_>>().join(", ");
-    let reserved_s = reserved.iter().map(|d| format!("\"{d}\"")).collect::<Vec<_>>().join(", ");
+    let dns_list: Vec<Ipv4Addr> = if n.dns.is_empty() || n.dns == [n.gateway] { vec![gw] } else { n.dns.clone() };
+    let dns = dns_list.iter().map(|d| format!("\"{d}\"")).collect::<Vec<_>>().join(", ");
+    let upstream = n.upstream_dns.iter().map(|d| format!("\"{d}\"")).collect::<Vec<_>>().join(", ");
+    let reserved_s = n.reserved.iter().map(|d| format!("\"{d}\"")).collect::<Vec<_>>().join(", ");
     let domain = match &n.domain {
         Some(d) => format!("domain = {d:?}\n"),
         None => String::new(),
@@ -429,34 +464,22 @@ pub fn network_block(n: &crate::dhcp::NetworkStatus, box_id: u8, bridge: &str) -
     let warn_lines = warnings.iter().map(|w| format!("# WARNING: {w}\n")).collect::<String>();
     let block = format!(
         "# Copied from the cluster at join time (`xdebbied bootstrap --join`): same\n\
-         # overlay as every other box, this box's own slice of it to allocate from.\n\
+         # overlay as every other box; box {box_id} owns its /24 of it (bridge .1, VMs .2-.254).\n\
          {warn_lines}\
          [network]\n\
          cidr = \"{}\"\n\
-         gateway = \"{}\"\n\
+         gateway = \"{gw}\"\n\
          dns = [{dns}]\n\
+         upstream_dns = [{upstream}]\n\
          {domain}\
          pool_start = \"{start}\"\n\
          pool_end = \"{end}\"\n\
          reserved = [{reserved_s}]\n\
          bridge = \"{bridge}\"\n\
          lease_secs = {}",
-        n.cidr, n.gateway, n.lease_secs
+        n.cidr, n.lease_secs
     );
     (block, warnings)
-}
-
-/// Box `k`'s allocation slice: 256 addresses at `network + k*256` when the
-/// prefix leaves room for at least eight such slices, otherwise an eighth
-/// of the subnet. Clamped to the host range; box 0's slice starts past the
-/// first 16 addresses, which are for gateways and appliances.
-pub fn pool_slice(cidr: &crate::dhcp::model::Cidr, box_id: u8) -> (Ipv4Addr, Ipv4Addr) {
-    let size: u32 = if cidr.prefix <= 21 { 256 } else { (1u32 << (32 - cidr.prefix)) / 8 }.max(16);
-    let net = u32::from(cidr.network);
-    let slice = net + u32::from(box_id) * size;
-    let start = slice.max(net + 16);
-    let end = (slice + size - 1).min(u32::from(cidr.last_host()));
-    (Ipv4Addr::from(start), Ipv4Addr::from(end.max(start)))
 }
 
 /// Whether `content` defines table `name` (live, not commented out).
@@ -504,13 +527,29 @@ mod tests {
         let mut multi = resources.clone();
         multi.networks.insert(0, super::super::libvirt_setup::NetworkInfo { name: "default".into(), bridge: "virbr0".into() });
         multi.networks.push(super::super::libvirt_setup::NetworkInfo { name: "xdebbie".into(), bridge: "virbr-xdebbie".into() });
-        let named = generate_config_for(&multi, "qemu:///system", None, 1, None, "xdebbie", "nope", None);
+        let named = generate_config_for(&multi, "qemu:///system", None, 1, None, "xdebbie", "nope", None, "box.example", &[]);
         let parsed: crate::config::Config = toml::from_str(&named).unwrap();
         assert_eq!(parsed.mesh_config().to_spec().bridge(), "virbr-xdebbie", "{named}");
         assert!(named.contains("bridge = \"virbr-xdebbie\""), "{named}");
+        // the advertise host is what was passed in, the host's name is still the hostname
+        assert_eq!(parsed.advertise_url.as_deref(), Some("https://box.example:7443"), "{named}");
+        let by_addr = generate_config_for(&multi, "qemu:///system", Some("10.23.0.0/16"), 1, None, "xdebbie", "nope", None, "192.168.1.164", &["192.168.1.1".parse().unwrap()]);
+        let parsed: crate::config::Config = toml::from_str(&by_addr).unwrap();
+        assert_eq!(parsed.advertise_url.as_deref(), Some("https://192.168.1.164:7443"), "{by_addr}");
+        assert_eq!(parsed.hosts.first().map(|h| h.name.as_str()), Some(get_hostname().as_str()), "{by_addr}");
+        let net = parsed.network.as_ref().unwrap();
+        assert_eq!(net.upstream_dns.iter().map(|d| d.to_string()).collect::<Vec<_>>(), ["192.168.1.1"], "{by_addr}");
+        assert_eq!(net.gateway.map(|g| g.to_string()).as_deref(), Some("10.23.1.1"), "{by_addr}");
+        net.validate().unwrap();
 
-        let config = generate_config(&resources, "qemu:///system", Some("192.168.100.0/24"), 2, None);
-        assert!(config.contains("\n[network]\ncidr = \"192.168.100.0/24\""), "{config}");
+        let config = generate_config(&resources, "qemu:///system", Some("10.23.0.0/16"), 2, None);
+        assert!(config.contains("\n[network]\ncidr = \"10.23.0.0/16\""), "{config}");
+        assert!(config.contains("\ngateway = \"10.23.2.1\""), "{config}");
+        assert!(config.contains("\npool_start = \"10.23.2.2\"\npool_end = \"10.23.2.254\""), "{config}");
+        // no room on a /24 for box 2: block lines stay commented, file still parses
+        let narrow = generate_config(&resources, "qemu:///system", Some("192.168.100.0/24"), 2, None);
+        assert!(narrow.contains("\n# gateway = \"<this bridge's address>\""), "{narrow}");
+        let _: crate::config::Config = toml::from_str(&narrow).unwrap();
         let adopted = generate_config(&resources, "qemu:///system", None, 0, Some("https://ca:7443/"));
         assert!(adopted.contains("\n# [network]\n# cidr = "), "{adopted}");
         // both must parse as config
@@ -654,7 +693,7 @@ cpu_overcommit = 4.0
     fn cluster_net(cidr: &str, pool: (&str, &str)) -> crate::dhcp::NetworkStatus {
         let s = format!(
             r#"{{"cidr":"{cidr}","gateway":"10.23.0.1","dns":["10.23.0.1"],"pool_start":"{}","pool_end":"{}",
-                "reserved":["10.23.0.9"],"lease_secs":86400,"domain":"vm.example",
+                "reserved":["10.23.0.9"],"upstream_dns":["192.168.1.1"],"lease_secs":86400,"domain":"vm.example",
                 "dhcp":{{"enabled":true,"bridge":"virbr-xdebbie","bound":true,"active":true,"leader_only":false,
                 "counters":{{"offers":0,"acks":0,"naks":0,"ignored_unknown":0,"ignored_standby":0,"ignored_other":0,"parse_errors":0,"send_errors":0}},"seen":[]}}}}"#,
             pool.0, pool.1
@@ -663,51 +702,57 @@ cpu_overcommit = 4.0
     }
 
     #[test]
-    fn pool_slices_are_disjoint_per_box() {
-        let c: crate::dhcp::model::Cidr = "10.23.0.0/16".parse().unwrap();
-        assert_eq!(pool_slice(&c, 0), ("10.23.0.16".parse().unwrap(), "10.23.0.255".parse().unwrap()));
-        assert_eq!(pool_slice(&c, 1), ("10.23.1.0".parse().unwrap(), "10.23.1.255".parse().unwrap()));
-        assert_eq!(pool_slice(&c, 7), ("10.23.7.0".parse().unwrap(), "10.23.7.255".parse().unwrap()));
-        let small: crate::dhcp::model::Cidr = "192.168.100.0/24".parse().unwrap();
-        assert_eq!(pool_slice(&small, 0), ("192.168.100.16".parse().unwrap(), "192.168.100.31".parse().unwrap()));
-        assert_eq!(pool_slice(&small, 1), ("192.168.100.32".parse().unwrap(), "192.168.100.63".parse().unwrap()));
-        assert_eq!(pool_slice(&small, 7), ("192.168.100.224".parse().unwrap(), "192.168.100.254".parse().unwrap()));
-    }
-
-    #[test]
-    fn network_block_copies_overlay_and_takes_own_slice() {
-        let n = cluster_net("10.23.0.0/16", ("10.23.1.0", "10.23.1.255"));
+    fn network_block_copies_overlay_and_takes_own_slash_24() {
+        let n = cluster_net("10.23.0.0/16", ("10.23.0.2", "10.23.0.254"));
         let (block, warnings) = network_block(&n, 2, "virbr-xdebbie");
         assert!(warnings.is_empty(), "{warnings:?}");
         let t: toml::Value = toml::from_str(&block).unwrap();
         let net = &t["network"];
         assert_eq!(net["cidr"].as_str(), Some("10.23.0.0/16"));
-        assert_eq!(net["gateway"].as_str(), Some("10.23.0.1"));
-        assert_eq!(net["pool_start"].as_str(), Some("10.23.2.0"));
-        assert_eq!(net["pool_end"].as_str(), Some("10.23.2.255"));
+        // box 2's own bridge is its VMs' gateway and DNS (the cluster's DNS was just box 0's bridge)
+        assert_eq!(net["gateway"].as_str(), Some("10.23.2.1"));
+        assert_eq!(net["dns"].as_array().unwrap()[0].as_str(), Some("10.23.2.1"));
+        assert_eq!(net["pool_start"].as_str(), Some("10.23.2.2"));
+        assert_eq!(net["pool_end"].as_str(), Some("10.23.2.254"));
         assert_eq!(net["domain"].as_str(), Some("vm.example"));
+        // the cluster's reservations are kept as-is; nothing is added
         let reserved: Vec<&str> = net["reserved"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
-        assert_eq!(reserved, ["10.23.0.9", "10.23.0.1"]);
+        assert_eq!(reserved, ["10.23.0.9"]);
+        // the cluster's upstream resolver comes along: every box's VMs ask box 0's server
+        assert_eq!(net["upstream_dns"].as_array().unwrap()[0].as_str(), Some("192.168.1.1"));
         // and it is a valid [network] for the daemon
         let cfg: crate::config::Config = toml::from_str(&format!("state_file = \"/x\"\n{block}")).unwrap();
         cfg.network.unwrap().validate().unwrap();
+
+        // a real DNS server is kept
+        let mut named = cluster_net("10.23.0.0/16", ("10.23.0.2", "10.23.0.254"));
+        named.dns = vec!["10.23.0.53".parse().unwrap()];
+        let (block, _) = network_block(&named, 1, "br");
+        let t: toml::Value = toml::from_str(&block).unwrap();
+        assert_eq!(t["network"]["dns"].as_array().unwrap()[0].as_str(), Some("10.23.0.53"));
 
         // the first box still allocating from the whole range is flagged
         let wide = cluster_net("10.23.0.0/16", ("10.23.0.16", "10.23.255.254"));
         let (_, warnings) = network_block(&wide, 1, "br");
         assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("pool_end = \"10.23.0.255\""), "{}", warnings[0]);
+        assert!(warnings[0].contains("10.23.0.2-10.23.0.254"), "{}", warnings[0]);
+
+        // no room for this box on a narrow overlay
+        let small = cluster_net("192.168.100.0/24", ("192.168.100.2", "192.168.100.254"));
+        let (_, warnings) = network_block(&small, 1, "br");
+        assert!(warnings.iter().any(|w| w.contains("room for 1 box")), "{warnings:?}");
     }
 
     #[test]
     fn kept_config_gains_network_once() {
         let kept = "listen = \"0.0.0.0:7443\"\n\n# [network]\n# cidr = \"x\"\n\n[mesh]\nbox = 1\n";
         assert!(!has_table(kept, "network"));
-        let n = cluster_net("10.23.0.0/16", ("10.23.1.0", "10.23.1.255"));
+        let n = cluster_net("10.23.0.0/16", ("10.23.0.2", "10.23.0.254"));
         let out = append_table(kept, &network_block(&n, 1, "virbr-xdebbie").0);
         assert!(has_table(&out, "network"));
         let t: toml::Value = toml::from_str(&out).unwrap();
-        assert_eq!(t["network"]["pool_start"].as_str(), Some("10.23.1.0"));
+        assert_eq!(t["network"]["pool_start"].as_str(), Some("10.23.1.2"));
+        assert_eq!(t["network"]["gateway"].as_str(), Some("10.23.1.1"));
         assert_eq!(t["mesh"]["box"].as_integer(), Some(1));
     }
 
@@ -717,12 +762,14 @@ cpu_overcommit = 4.0
             networks: vec![super::super::libvirt_setup::NetworkInfo { name: "xdebbie".into(), bridge: "virbr-xdebbie".into() }],
             pools: vec![],
         };
-        let n = cluster_net("10.23.0.0/16", ("10.23.1.0", "10.23.1.255"));
-        let g = generate_config_for(&resources, "qemu:///system", None, 3, Some("https://ca:7443"), "xdebbie", "xdebbie", Some(&n));
+        let n = cluster_net("10.23.0.0/16", ("10.23.0.2", "10.23.0.254"));
+        let g = generate_config_for(&resources, "qemu:///system", None, 3, Some("https://ca:7443"), "xdebbie", "xdebbie", Some(&n), "box.example", &[]);
         let cfg: crate::config::Config = toml::from_str(&g).unwrap();
         let net = cfg.network.unwrap();
         assert_eq!(net.cidr.to_string(), "10.23.0.0/16");
-        assert_eq!(net.pool_start.map(|p| p.to_string()).as_deref(), Some("10.23.3.0"));
+        assert_eq!(net.pool_start.map(|p| p.to_string()).as_deref(), Some("10.23.3.2"));
+        assert_eq!(net.pool_end.map(|p| p.to_string()).as_deref(), Some("10.23.3.254"));
+        assert_eq!(net.gateway.map(|p| p.to_string()).as_deref(), Some("10.23.3.1"));
         assert!(!g.contains("# [network]"), "{g}");
     }
 }

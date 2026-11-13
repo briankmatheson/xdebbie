@@ -292,11 +292,16 @@ fn san_label(s: &SanType) -> String {
     }
 }
 
-/// SubjectAltName list for the server cert: short hostname, FQDN, and every
-/// global-scope IPv4 address currently assigned to this host — so the cert
-/// verifies whether xdctl is pointed at a name or an address.
+/// SubjectAltName list for the server cert: short hostname, FQDN, loopback
+/// (so `xdctl` with its default `https://127.0.0.1:7443` verifies on the
+/// box itself), and every global-scope IPv4 address currently assigned to
+/// this host — so the cert verifies whether xdctl is pointed at a name or
+/// an address.
 fn server_sans(hostname: &str) -> Vec<SanType> {
-    let mut sans: Vec<SanType> = vec![];
+    let mut sans: Vec<SanType> = vec![
+        SanType::IpAddress(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
+        SanType::IpAddress(std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)),
+    ];
     let mut push_dns = |name: &str| {
         if let Ok(n) = name.try_into() {
             let s = SanType::DnsName(n);
@@ -385,6 +390,16 @@ mod tests {
     fn parse(pem: &str) -> (Vec<u8>,) {
         let (_, p) = x509_parser::pem::parse_x509_pem(pem.as_bytes()).unwrap();
         (p.contents,)
+    }
+
+    #[test]
+    fn server_sans_include_loopback_and_names() {
+        let sans = server_sans("gram.example");
+        let has = |s: SanType| sans.contains(&s);
+        assert!(has(SanType::IpAddress("127.0.0.1".parse().unwrap())));
+        assert!(has(SanType::IpAddress("::1".parse().unwrap())));
+        assert!(has(SanType::DnsName("gram.example".try_into().unwrap())));
+        assert!(has(SanType::DnsName("gram".try_into().unwrap())));
     }
 
     #[test]

@@ -53,6 +53,11 @@ boxB$ xdctl mesh peer add 0 --pubkey <A's key> --endpoint boxA.example:51820
 boxA$ xdctl mesh peer add 1 --pubkey <B's key> --endpoint boxB.example:51820
 ```
 
+`xdctl mesh` talks to the box named in `--url`/`XDEBBIE_URL`, not the
+leader — the mesh is per-box state, so each command above must be run with
+the URL of the box whose peer list it edits (on that box, the sourced
+`/etc/xdebbie/xdebbie_env` already does this).
+
 Those `xdctl` calls go to the API over HTTPS. Every box's cert is signed
 by the one cluster CA, which the second box got when it was enrolled
 (`xdebbied bootstrap --join https://first:7443`, then `xdctl approve` —
@@ -170,12 +175,17 @@ ICMP (peer probes) work. The dev host should use `bridge = "virbr-int"` and
 ### Host firewall (ufw)
 
 `xdebbied bootstrap` (run by the unit's `ExecStartPre`) owns the host
-firewall through ufw: default deny inbound, and `ufw allow` rules tagged
-`xdebbie …` for ssh, the API and libvirt TLS from every local network,
-WireGuard from anywhere, Geneve on the underlay interface only, discovery
-multicast, and DHCP on the bridge. It also removes the `XDEBBIE-INPUT`
-iptables chain older versions installed. Services that run next to xdebbied
-(ABE, DNS, an apt proxy) add their own rules where they are set up.
+firewall through ufw: default deny inbound. The LAN interface accepts only
+ssh (anywhere), WireGuard (anywhere), and the API and discovery multicast
+(from local networks — so a box not yet meshed still finds the cluster).
+Everything else is accepted on the mesh's own interfaces only — libvirt
+TLS on the underlay and the bridge, Geneve on the underlay, DHCP on the
+bridge. Rules are tagged `xdebbie …`; tagged rules
+bootstrap no longer wants are deleted, so a box converges on re-run. It
+also removes the `XDEBBIE-INPUT` iptables chain older versions installed.
+Services that run next to xdebbied (ABE, DNS, an apt proxy) add their own
+rules where they are set up. VM egress (NAT, DNS forwarding) is in
+`docs/network.md`.
 
 The symptom of a missing Geneve/WireGuard rule is a WireGuard handshake that
 succeeds and `gnv-b<N>` tunnels whose TX counters climb while RX stays at 0
@@ -183,7 +193,7 @@ on the far side; `sudo ufw status` should show:
 
 ```
 51820/udp                  ALLOW IN    Anywhere        # xdebbie wireguard underlay
-6081/udp on wg-flock       ALLOW IN    Anywhere        # xdebbie geneve
+6081/udp on wg-flock       ALLOW IN    Anywhere        # xdebbie geneve on wg-flock
 ```
 
 The mesh's own `inet xdebbie_mesh` nft table stays: it drops Geneve arriving
@@ -203,10 +213,12 @@ Once two boxes are meshed their bridges are **one L2 segment**: every DHCP
 server on either bridge hears every VM's DISCOVER. Use xdebbie's own
 responder (`[network]`, see `docs/network.md`): it answers only for MACs in
 its own VM store, so boxes never contend, and it hands out the mesh MTU as
-DHCP option 26. Give each box's bridge a distinct address in the shared
-subnet (`10.23.0.1/16` on box 0, `10.23.0.2/16` on box 1, listed in each
-other's `reserved`) and disjoint pools. If a box still runs libvirt's
-dnsmasq range or `dhcpd` on the bridge, remove it before enrolling.
+DHCP option 26. Each box's bridge has its own /24 of the shared /16
+(`10.23.0.1/16` on box 0, `10.23.1.1/16` on box 1, …; VMs at `.N.2-254`),
+which is also where the derived probe (`10.23.<box>.1`) lands. Bootstrap
+sets this up; a bridge at some other address makes it warn with the
+`virsh net-edit` to run. If a box still runs libvirt's dnsmasq range or
+`dhcpd` on the bridge, remove it before enrolling.
 
 ## Mesh-only mode
 
