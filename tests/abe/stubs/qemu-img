@@ -1,6 +1,16 @@
 #!/bin/bash
-# Stub qemu-img for tests/abe/run.sh: record the call and "fill" the target.
+# Stub qemu-img for tests/abe/run.sh: `info` answers the virtual size
+# (file size, or $FAKE_IMAGE_BYTES) and is logged to qemu-img-info.log;
+# `convert` is logged to qemu-img.log and "fills" the target.
 WORK=@WORK@
+if [ "$1" = info ]; then
+  echo "$*" >> "$WORK/qemu-img-info.log"
+  src="${@: -1}"
+  [ -e "$src" ] || { echo "no file $src" >&2; exit 1; }
+  size=${FAKE_IMAGE_BYTES:-$(stat -c %s "$src")}
+  printf '{"virtual-size": %s, "filename": "%s", "format": "qcow2"}\n' "$size" "$src"
+  exit 0
+fi
 echo "$*" >> "$WORK/qemu-img.log"
 dst="${@: -1}"; src="${@: -2:1}"
 [ -e "$src" ] || { echo "no source $src" >&2; exit 1; }
