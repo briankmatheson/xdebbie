@@ -374,7 +374,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "capx"
-version = "0.14.2"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3690,7 +3690,7 @@ dependencies = [
 
 [[package]]
 name = "xdctl"
-version = "0.14.2"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3706,7 +3706,7 @@ dependencies = [
 
 [[package]]
 name = "xdebbie-core"
-version = "0.14.2"
+version = "0.15.0"
 dependencies = [
  "chrono",
  "serde",
@@ -3717,7 +3717,7 @@ dependencies = [
 
 [[package]]
 name = "xdebbied"
-version = "0.14.2"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "aws-lc-rs",

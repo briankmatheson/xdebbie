@@ -5,18 +5,7 @@ All notable changes to XDebbie will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.14.2] - 2026-11-12
-
-### Added
-- Discovery `ANNOUNCE` carries the sender's addresses (`addrs`). When a
-  peer's `api_url` hostname does not resolve locally, the daemon dials it by
-  the datagram's source address (or an announced one) instead; API
-  certificates already list every local address as a SAN. `xdctl leader`
-  shows the address form when this happens. The bootstrap discovery listen
-  does the same for the join URL it offers. Pre-0.14.2 daemons interoperate.
-- Discovery joins the multicast group on every interface with a global IPv4
-  address, not only the default route's. A box whose default route leaves by
-  a bridge or VPN no longer goes deaf to peers on the LAN.
+## [0.15.0] - unreleased
 
 ### Added
 - `bootstrap --join` copies the overlay `[network]` from the CA box
@@ -36,6 +25,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   assuming dnsmasq. It now reads the network XML: no `<dhcp>` range means
   the bridge is xdebbied's to serve and `[network]` is written live with the
   bridge's actual subnet.
+
+## [0.14.2] - 2026-11-12
+
+### Added
+- Discovery `ANNOUNCE` carries the sender's addresses (`addrs`). When a
+  peer's `api_url` hostname does not resolve locally, the daemon dials it by
+  the datagram's source address (or an announced one) instead; API
+  certificates already list every local address as a SAN. `xdctl leader`
+  shows the address form when this happens. The bootstrap discovery listen
+  does the same for the join URL it offers. Pre-0.14.2 daemons interoperate.
+- Discovery joins the multicast group on every interface with a global IPv4
+  address, not only the default route's. A box whose default route leaves by
+  a bridge or VPN no longer goes deaf to peers on the LAN.
 
 ### Changed
 - Election score gains a state term: 2000 for any VM in the box's store plus
