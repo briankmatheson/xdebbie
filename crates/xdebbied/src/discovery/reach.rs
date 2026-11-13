@@ -37,6 +37,18 @@ fn egress_addr(target: &str) -> Option<IpAddr> {
     usable(ip).then_some(ip)
 }
 
+/// Every IPv4 address a multicast group can be joined on: the global-scope
+/// ones. Order follows `ip addr`.
+pub fn local_v4_interfaces() -> Vec<std::net::Ipv4Addr> {
+    global_ipv4_addrs()
+        .into_iter()
+        .filter_map(|ip| match ip {
+            IpAddr::V4(v4) => Some(v4),
+            IpAddr::V6(_) => None,
+        })
+        .collect()
+}
+
 /// Every global-scope IPv4 address on the host, from `ip -4 -o addr`.
 fn global_ipv4_addrs() -> Vec<IpAddr> {
     let Ok(out) = std::process::Command::new("ip").args(["-4", "-o", "addr", "show", "scope", "global"]).output() else {

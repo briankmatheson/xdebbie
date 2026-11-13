@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   certificates already list every local address as a SAN. `xdctl leader`
   shows the address form when this happens. The bootstrap discovery listen
   does the same for the join URL it offers. Pre-0.14.2 daemons interoperate.
+- Discovery joins the multicast group on every interface with a global IPv4
+  address, not only the default route's. A box whose default route leaves by
+  a bridge or VPN no longer goes deaf to peers on the LAN.
 
 ## [0.14.1] - 2026-11-12
 

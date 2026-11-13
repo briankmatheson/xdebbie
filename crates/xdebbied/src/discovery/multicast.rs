@@ -33,11 +33,24 @@ impl MulticastSocket {
             UdpSocket::from(s)
         };
 
-        // Join multicast group
+        // Join the group on every interface that has an IPv4 address, not
+        // just the one the default route leaves by. A box with a WireGuard
+        // underlay, docker and libvirt bridges has several, and the one the
+        // peers are actually on is not always the default (an unspecified
+        // join picks exactly one). Sending still follows the routing table.
         if let IpAddr::V4(multicast_ip) = multicast_addr.ip() {
-            socket
-                .join_multicast_v4(&multicast_ip, &Ipv4Addr::UNSPECIFIED)
-                .context("Failed to join multicast group")?;
+            let mut joined = 0;
+            for ifa in super::reach::local_v4_interfaces() {
+                match socket.join_multicast_v4(&multicast_ip, &ifa) {
+                    Ok(()) => joined += 1,
+                    Err(e) => debug!(%ifa, error = %e, "multicast join skipped"),
+                }
+            }
+            if joined == 0 {
+                socket
+                    .join_multicast_v4(&multicast_ip, &Ipv4Addr::UNSPECIFIED)
+                    .context("Failed to join multicast group")?;
+            }
 
             // Set multicast TTL
             socket
