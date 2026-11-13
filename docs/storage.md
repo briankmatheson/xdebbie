@@ -10,7 +10,7 @@ A VM's disks live in one of two places, chosen per VM with `spec.storage`
 | `abe` | NVMe/TCP volume exported by the host's `abe` daemon, filled from the base image | NVMe/TCP volume, blank | **any host** that can reach the exporter |
 
 `local` is what xdebbie always did. `abe` is for the case where **every
-hypervisor runs an [ABE](https://github.com/brianmatheson/abe) exporter**:
+hypervisor runs an [ABE](https://github.com/briankmatheson/abe) exporter**:
 the VM's volumes are created on the ABE of the host it is scheduled on (so
 I/O stays local), but they are plain NVMe-oF subsystems, so another host can
 attach them later. That is the storage half of live migration without

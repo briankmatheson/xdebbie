@@ -318,7 +318,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **ABE-backed VM disks** (`spec.storage = abe`, `docs/storage.md`). Each
-  hypervisor runs an [ABE](https://github.com/brianmatheson/abe) NVMe/TCP
+  hypervisor runs an [ABE](https://github.com/briankmatheson/abe) NVMe/TCP
   exporter (`[[hosts]].abe = "http://…"`); a VM scheduled there gets its root
   (and optional data) volume from that ABE, attached on the host with
   `nvme connect … --ctrl-loss-tmo -1`, addressed by the stable

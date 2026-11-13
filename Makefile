@@ -31,12 +31,14 @@ release:
 
 test:
 	$(CARGO) test --workspace
+	tests/lint-links.sh
 
 fmt:
 	$(CARGO) fmt --all
 
 lint:
 	$(CARGO) fmt --all -- --check
+	tests/lint-links.sh
 	$(CARGO) clippy --workspace --all-targets -- -D warnings
 
 clippy: lint
