@@ -52,7 +52,7 @@ public ones.
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/v1/hosts` | List hosts, with discovered `capacity` and `lastSeen` |
+| GET | `/v1/hosts` | List hosts, with discovered `capacity`, `lastSeen` and, for hosts with an `abe`, the last `/utilization` reading as `abeCapacity` (`thin`, `bytes`, `usedBytes`, `freeBytes`, `provisionedBytes`, `dataPercent`, `metadataPercent`, `seen`) |
 | GET | `/v1/hosts/{name}` | |
 | PUT | `/v1/hosts/{name}` | Upsert. 201 created, 200 updated. Keeps runtime fields |
 | DELETE | `/v1/hosts/{name}` | 409 if VMs remain — drain first |
@@ -67,7 +67,9 @@ Host body:
 {"name": "srv1", "uri": "qemu+ssh://xdebbie@srv1/system", "failureDomain": "fd-1",
  "controlPlaneEligible": true, "labels": {"disk": "nvme"}, "storagePool": "default",
  "bridge": "br0", "cpuOvercommit": 4.0, "memOvercommit": 1.0,
- "reservedMemoryMib": 4096, "reservedCpus": 2}
+ "reservedMemoryMib": 4096, "reservedCpus": 2,
+ "abe": "http://10.22.1.1:80", "abeOvercommit": 1.0,
+ "abeMaxDataPercent": 85.0, "abeMaxMetadataPercent": 80.0}
 ```
 
 ## VMs
@@ -111,10 +113,10 @@ ABE. This is what the `abe-csi` driver uses from inside Kubernetes VMs.
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/v1/volumes` | |
-| POST | `/v1/volumes` | `{"name": "pvc-…", "bytes": N, "host": null}`. Synchronous: asks ABE and returns 201 with the id ABE assigned (200 if a volume with that name already exists, 409 if it is smaller than asked). 502 when ABE fails, 503 with no healthy ABE host |
+| POST | `/v1/volumes` | `{"name": "pvc-…", "bytes": N, "host": null}`. Synchronous: asks ABE (`?name=vol-<name>`, so a retry gets the same volume) and returns 201 with the id ABE assigned (200 if a volume with that name already exists, 409 if it is smaller than asked). Concurrent POSTs of one name are serialized: one ABE call, one 201, the rest 200. Without `host` the ABE with the most headroom is used. 502 when ABE fails, 503 with no healthy ABE host, **507** when no ABE host fits (`no ABE host fits <bytes> bytes: <host>: <reason>, …`; reasons are `abe capacity`, `abe pool full`, `abe capacity unknown`, `no abe`, `unhealthy`) |
 | GET | `/v1/volumes/{id}` | |
-| DELETE | `/v1/volumes/{id}` | 204; 409 while attached (detach first). Synchronous on ABE |
-| POST | `/v1/volumes/{id}/attach` | `{"vm": "<uuid>", "force": false}` → 202. The reconciler connects on the VM's host and hot-plugs; poll until `attached.vm` matches. 409 if a *running* VM still has it, unless `force` |
+| DELETE | `/v1/volumes/{id}` | 204; 409 while attached (detach first). Synchronous on ABE: the record is marked `deleting: true` first, then ABE is called. **502** if ABE fails; the record stays with `deleting: true` (the reconciler will not attach it) and a second DELETE retries |
+| POST | `/v1/volumes/{id}/attach` | `{"vm": "<uuid>", "force": false}` → 202. The reconciler connects on the VM's host and hot-plugs; poll until `attached.vm` matches. 409 if a *running* VM still has it, unless `force`; **409** `volume is being deleted` for a volume with `deleting: true` |
 | POST | `/v1/volumes/{id}/detach` | 202; poll until `attached` is absent |
 
 Volume:
@@ -124,7 +126,7 @@ Volume:
  "traddr": "10.22.0.1", "port": "44002", "bytes": 5368709120,
  "perf": {"bs": "4k", "iodepth": 1, "seconds": 5, "write_lat_us": 187.5, "write_iops": 5000.0, "write_mib_s": 19.5},
  "attachTo": "<vm uuid>", "attached": {"vm": "<vm uuid>", "host": "timesink", "target": "vdc"},
- "message": null}
+ "message": null, "deleting": false}
 ```
 
 `attachTo` is the wish, `attached` what the reconciler did. Inside the guest
