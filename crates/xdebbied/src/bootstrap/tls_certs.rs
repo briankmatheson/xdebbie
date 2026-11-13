@@ -1,332 +1,190 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Automatic TLS certificate generation for libvirt remote connections.
+//! libvirt TLS from the cluster CA.
 //!
-//! Generates and manages certificates in standard locations:
-//! - CA: /etc/pki/CA/{cacert.pem, private/cakey.pem}
-//! - Server: /etc/libvirt/pki/{servercert.pem, private/serverkey.pem}
-//! - Client: /etc/pki/libvirt/{clientcert.pem, private/clientkey.pem}
+//! The leader drives every other box's libvirt over `qemu+tls://`. libvirt
+//! wants a CA, a server cert and a client cert in fixed places; all three
+//! come from what this box already holds for the API: the cluster CA
+//! (`api-ca.pem`) and the certificate it was enrolled with (`api-cert.pem`,
+//! `api-key.pem` — CN = hostname, every local address as a SAN, EKU
+//! serverAuth + clientAuth). One CA for the cluster means every box's
+//! libvirtd trusts every other box's client cert with nothing copied
+//! around by hand.
 //!
-//! Also copies to /etc/libvirt/pki/ for compatibility.
+//! Installed to:
+//! - CA:     /etc/pki/CA/cacert.pem and /etc/libvirt/pki/cacert.pem
+//! - Server: /etc/libvirt/pki/servercert.pem, /etc/libvirt/pki/private/serverkey.pem
+//! - Client: /etc/pki/libvirt/clientcert.pem, /etc/pki/libvirt/private/clientkey.pem
+//!
+//! libvirtd listens on the overlay bridge address (`listen_addr`), so the
+//! leader reaches it across the Geneve mesh and VMs cannot without a
+//! cluster-issued client cert (`tls_no_verify_certificate = 0`).
 
 use anyhow::{Context, Result};
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 use tracing::{info, warn};
 
-const CA_DIR: &str = "/etc/pki/CA";
-const CA_PRIVATE_DIR: &str = "/etc/pki/CA/private";
-const CA_CERT: &str = "/etc/pki/CA/cacert.pem";
-const CA_KEY: &str = "/etc/pki/CA/private/cakey.pem";
+use super::api_tls::ApiTlsPaths;
 
-const SERVER_DIR: &str = "/etc/libvirt/pki";
-const SERVER_PRIVATE_DIR: &str = "/etc/libvirt/pki/private";
+const CA_CERT: &str = "/etc/pki/CA/cacert.pem";
+const SERVER_CA: &str = "/etc/libvirt/pki/cacert.pem";
 const SERVER_CERT: &str = "/etc/libvirt/pki/servercert.pem";
 const SERVER_KEY: &str = "/etc/libvirt/pki/private/serverkey.pem";
-
-const CLIENT_DIR: &str = "/etc/pki/libvirt";
-const CLIENT_PRIVATE_DIR: &str = "/etc/pki/libvirt/private";
 const CLIENT_CERT: &str = "/etc/pki/libvirt/clientcert.pem";
 const CLIENT_KEY: &str = "/etc/pki/libvirt/private/clientkey.pem";
+const LIBVIRTD_CONF: &str = "/etc/libvirt/libvirtd.conf";
 
-/// Check if a certificate file exists and is valid
-fn cert_is_valid(path: &str) -> bool {
-    if !Path::new(path).exists() {
-        return false;
-    }
-    
-    // Try to parse it with openssl
-    let output = Command::new("openssl")
-        .args(["x509", "-in", path, "-noout"])
-        .output();
-    
-    matches!(output, Ok(o) if o.status.success())
+/// What step 7 leaves behind, for the host registration that follows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LibvirtTls {
+    /// Address libvirtd listens on for TLS (`listen_addr`), None = all.
+    pub listen_addr: Option<String>,
+    /// Whether the server cert has a SAN for `listen_addr`; without one the
+    /// leader's libvirt client rejects the connection.
+    pub san_covers_listen: bool,
 }
 
-/// Generate CA certificate and private key
-fn generate_ca() -> Result<()> {
-    info!("Generating CA certificate...");
-    
-    // Create directories
-    fs::create_dir_all(CA_DIR).context("creating CA directory")?;
-    fs::create_dir_all(CA_PRIVATE_DIR).context("creating CA private directory")?;
-    
-    // Generate CA private key (4096-bit RSA, 10-year validity)
-    let output = Command::new("openssl")
-        .args(["genrsa", "-out", CA_KEY, "4096"])
-        .output()
-        .context("generating CA private key")?;
-    
-    if !output.status.success() {
-        anyhow::bail!("Failed to generate CA key: {}", String::from_utf8_lossy(&output.stderr));
+impl LibvirtTls {
+    /// The URI other boxes use to reach this libvirt.
+    pub fn uri(&self, hostname: &str) -> String {
+        format!("qemu+tls://{}/system", self.listen_addr.as_deref().unwrap_or(hostname))
     }
-    
-    // Generate self-signed CA certificate
-    let output = Command::new("openssl")
-        .args([
-            "req", "-new", "-x509",
-            "-days", "3650",
-            "-key", CA_KEY,
-            "-out", CA_CERT,
-            "-subj", "/CN=XDebbie CA/O=XDebbie/OU=Certificate Authority",
-        ])
-        .output()
-        .context("generating CA certificate")?;
-    
-    if !output.status.success() {
-        anyhow::bail!("Failed to generate CA cert: {}", String::from_utf8_lossy(&output.stderr));
-    }
-    
-    // Set permissions
-    fs::set_permissions(CA_KEY, fs::Permissions::from_mode(0o600))
-        .context("setting CA key permissions")?;
-    fs::set_permissions(CA_CERT, fs::Permissions::from_mode(0o644))
-        .context("setting CA cert permissions")?;
-    
-    info!("  ✓ CA certificate generated");
-    Ok(())
 }
 
-/// Every global-scope IPv4 address on this host (LAN, WireGuard underlay,
-/// mesh bridge, ...). Used for the server cert's SubjectAltName.
-fn local_ipv4_addrs() -> Vec<String> {
-    let out = Command::new("ip")
-        .args(["-4", "-o", "addr", "show", "scope", "global"])
-        .output();
-    let Ok(out) = out else { return vec![] };
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        // "2: eth0    inet 192.168.1.156/24 brd ... scope global eth0"
-        .filter_map(|l| {
-            let mut f = l.split_whitespace();
-            f.position(|w| w == "inet")?;
-            f.next()?.split('/').next().map(str::to_string)
-        })
-        .collect()
-}
-
-/// Build the subjectAltName list for the server cert: short name, FQDN and
-/// every local IPv4 address. libvirt clients verify the server cert against
-/// whatever host appears in the URI (`qemu+tls://192.168.1.156/system`), so a
-/// cert with only CN=<name> is rejected with "Certificate owner does not
-/// match the hostname".
-fn server_san(hostname: &str) -> String {
-    let mut san = vec![format!("DNS:{}", hostname)];
-    if let Ok(fqdn) = Command::new("hostname").arg("-f").output() {
-        let fqdn = String::from_utf8_lossy(&fqdn.stdout).trim().to_string();
-        if !fqdn.is_empty() && fqdn != hostname {
-            san.push(format!("DNS:{}", fqdn));
+/// Write `content` to `path` (mode `mode`, parents created) unless it is
+/// already there byte for byte. Returns whether anything changed.
+fn put(path: &str, content: &str, mode: u32) -> Result<bool> {
+    if fs::read_to_string(path).map(|c| c == content).unwrap_or(false) {
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).ok();
+        return Ok(false);
+    }
+    if let Some(dir) = Path::new(path).parent() {
+        fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        if dir.ends_with("private") {
+            fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).ok();
         }
     }
-    for ip in local_ipv4_addrs() {
-        san.push(format!("IP:{}", ip));
-    }
-    san.join(",")
+    fs::write(path, content).with_context(|| format!("writing {path}"))?;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode)).with_context(|| format!("chmod {path}"))?;
+    Ok(true)
 }
 
-/// Does the server cert carry a SubjectAltName that covers `hostname` and the
-/// host's current IPs? Certs issued before SANs were added (or after an IP
-/// change) must be reissued or every qemu+tls connection fails.
-fn server_cert_san_ok(hostname: &str) -> bool {
-    let out = Command::new("openssl")
-        .args(["x509", "-in", SERVER_CERT, "-noout", "-ext", "subjectAltName"])
-        .output();
-    let Ok(out) = out else { return false };
+/// Install the cluster CA and this box's certificate for libvirt, point
+/// libvirtd at them, and (re)start its TLS listener when anything moved.
+pub fn ensure_tls_certificates(api: &ApiTlsPaths) -> Result<LibvirtTls> {
+    let ca = fs::read_to_string(&api.ca_cert).with_context(|| format!("reading {} (API TLS not set up?)", api.ca_cert.display()))?;
+    let cert = fs::read_to_string(&api.server_cert).with_context(|| format!("reading {}", api.server_cert.display()))?;
+    let key = fs::read_to_string(&api.server_key).with_context(|| format!("reading {}", api.server_key.display()))?;
+
+    let mut changed = false;
+    changed |= put(CA_CERT, &ca, 0o644)?;
+    changed |= put(SERVER_CA, &ca, 0o644)?;
+    changed |= put(SERVER_CERT, &cert, 0o644)?;
+    changed |= put(SERVER_KEY, &key, 0o600)?;
+    changed |= put(CLIENT_CERT, &cert, 0o644)?;
+    changed |= put(CLIENT_KEY, &key, 0o600)?;
+    if changed {
+        info!("  Installed the cluster CA and this box's certificate for libvirt (server + client)");
+    } else {
+        info!("  ✓ libvirt uses the cluster CA and this box's certificate");
+    }
+
+    let conf_changed = configure_libvirtd_tls()?;
+    let listen_addr = libvirtd_listen_addr();
+    let san_covers_listen = match &listen_addr {
+        Some(ip) => cert_has_ip_san(&cert, ip),
+        None => true,
+    };
+    if let (Some(ip), false) = (&listen_addr, san_covers_listen) {
+        warn!(
+            "  This box's certificate has no SAN for {ip}, where libvirtd listens; other boxes' libvirt clients \
+             will refuse it. The address changed since enrolment: re-enrol with `xdebbied bootstrap --join <ca_url> --force` \
+             (then `xdctl approve` on the CA box)"
+        );
+    }
+
+    if changed || conf_changed || !tls_socket_active() {
+        restart_libvirtd_tls()?;
+    }
+    Ok(LibvirtTls { listen_addr, san_covers_listen })
+}
+
+/// Address libvirtd listens on for TLS, per `listen_addr` in libvirtd.conf.
+pub fn libvirtd_listen_addr() -> Option<String> {
+    let conf = fs::read_to_string(LIBVIRTD_CONF).ok()?;
+    conf.lines()
+        .filter_map(|l| l.trim().strip_prefix("listen_addr"))
+        .filter_map(|rest| rest.trim().strip_prefix('='))
+        .filter_map(|v| v.trim().strip_prefix('"').and_then(|v| v.strip_suffix('"')).map(str::to_string))
+        .next_back()
+}
+
+/// Whether `cert_pem` carries `ip` as an IP SAN. Uses openssl's text dump
+/// when available; without openssl assume yes rather than nag.
+fn cert_has_ip_san(cert_pem: &str, ip: &str) -> bool {
+    use std::io::Write;
+    let Ok(mut child) = Command::new("openssl")
+        .args(["x509", "-noout", "-ext", "subjectAltName"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    else {
+        return true;
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(cert_pem.as_bytes());
+    }
+    let Ok(out) = child.wait_with_output() else { return true };
     if !out.status.success() {
-        return false;
+        return true;
     }
     let text = String::from_utf8_lossy(&out.stdout);
-    if !text.contains(&format!("DNS:{}", hostname)) {
-        return false;
-    }
-    local_ipv4_addrs()
-        .iter()
-        .all(|ip| text.contains(&format!("IP Address:{}", ip)))
+    text.split(',').any(|s| s.trim() == format!("IP Address:{ip}"))
 }
 
-/// Generate server certificate for libvirtd
-fn generate_server_cert(hostname: &str) -> Result<()> {
-    info!("Generating server certificate for {}...", hostname);
-    
-    // Create directories
-    fs::create_dir_all(SERVER_DIR).context("creating server cert directory")?;
-    fs::create_dir_all(SERVER_PRIVATE_DIR).context("creating server private directory")?;
-    
-    // Generate server private key
-    let output = Command::new("openssl")
-        .args(["genrsa", "-out", SERVER_KEY, "2048"])
-        .output()
-        .context("generating server private key")?;
-    
-    if !output.status.success() {
-        anyhow::bail!("Failed to generate server key: {}", String::from_utf8_lossy(&output.stderr));
-    }
-    
-    // Generate CSR
-    let csr_path = "/tmp/server.csr";
-    let subject = format!("/CN={}/O=libvirt/OU=server", hostname);
-    let output = Command::new("openssl")
-        .args([
-            "req", "-new",
-            "-key", SERVER_KEY,
-            "-out", csr_path,
-            "-subj", &subject,
-        ])
-        .output()
-        .context("generating server CSR")?;
-    
-    if !output.status.success() {
-        anyhow::bail!("Failed to generate server CSR: {}", String::from_utf8_lossy(&output.stderr));
-    }
-    
-    // x509 extensions: SAN + server usage. `openssl x509 -req` drops CSR
-    // extensions unless given an -extfile, so write one explicitly.
-    let san = server_san(hostname);
-    info!("  SAN: {}", san);
-    let ext_path = "/tmp/server.ext";
-    fs::write(
-        ext_path,
-        format!(
-            "subjectAltName={}\nextendedKeyUsage=serverAuth\nkeyUsage=digitalSignature,keyEncipherment\n",
-            san
-        ),
-    )
-    .context("writing server cert extensions")?;
+fn tls_socket_active() -> bool {
+    Command::new("systemctl")
+        .args(["is-active", "--quiet", "libvirtd-tls.socket"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
 
-    // Sign with CA
-    let output = Command::new("openssl")
-        .args([
-            "x509", "-req",
-            "-in", csr_path,
-            "-CA", CA_CERT,
-            "-CAkey", CA_KEY,
-            "-CAcreateserial",
-            "-extfile", ext_path,
-            "-out", SERVER_CERT,
-            "-days", "365",
-            "-sha256",
-        ])
-        .output()
-        .context("signing server certificate")?;
-    
-    let _ = fs::remove_file(csr_path);
-    let _ = fs::remove_file(ext_path);
-
-    if !output.status.success() {
-        anyhow::bail!("Failed to sign server cert: {}", String::from_utf8_lossy(&output.stderr));
+/// Socket activation: the socket must be up before the service starts, so
+/// enable+start it, then restart the service to pick it up. Running VMs
+/// are separate processes and are not affected.
+fn restart_libvirtd_tls() -> Result<()> {
+    let _ = Command::new("systemctl").args(["reset-failed", "libvirtd-tls.socket"]).status();
+    let sock = Command::new("systemctl").args(["enable", "--now", "libvirtd-tls.socket"]).output().context("systemctl")?;
+    if !sock.status.success() {
+        warn!("  Could not enable libvirtd-tls.socket: {}", String::from_utf8_lossy(&sock.stderr).trim());
+        return Ok(());
     }
-    
-    // Set permissions
-    fs::set_permissions(SERVER_KEY, fs::Permissions::from_mode(0o600))
-        .context("setting server key permissions")?;
-    fs::set_permissions(SERVER_CERT, fs::Permissions::from_mode(0o644))
-        .context("setting server cert permissions")?;
-    
-    // Copy CA cert to server location for libvirtd
-    fs::copy(CA_CERT, format!("{}/cacert.pem", SERVER_DIR))
-        .context("copying CA cert to server directory")?;
-    
-    info!("  ✓ Server certificate generated");
+    let svc = Command::new("systemctl").args(["restart", "libvirtd.service"]).output().context("systemctl")?;
+    if svc.status.success() {
+        info!("  ✓ libvirtd restarted with TLS on {}", libvirtd_listen_addr().unwrap_or_else(|| "all addresses".into()));
+    } else {
+        warn!("  libvirtd restart failed: {}", String::from_utf8_lossy(&svc.stderr).trim());
+    }
     Ok(())
 }
 
-/// Generate client certificate for connecting to remote libvirt
-fn generate_client_cert(hostname: &str) -> Result<()> {
-    info!("Generating client certificate for {}...", hostname);
-    
-    // Create directories
-    fs::create_dir_all(CLIENT_DIR).context("creating client cert directory")?;
-    fs::create_dir_all(CLIENT_PRIVATE_DIR).context("creating client private directory")?;
-    
-    // Generate client private key
-    let output = Command::new("openssl")
-        .args(["genrsa", "-out", CLIENT_KEY, "2048"])
-        .output()
-        .context("generating client private key")?;
-    
-    if !output.status.success() {
-        anyhow::bail!("Failed to generate client key: {}", String::from_utf8_lossy(&output.stderr));
-    }
-    
-    // Generate CSR
-    let csr_path = "/tmp/client.csr";
-    let subject = format!("/CN={}/O=libvirt/OU=client", hostname);
-    let output = Command::new("openssl")
-        .args([
-            "req", "-new",
-            "-key", CLIENT_KEY,
-            "-out", csr_path,
-            "-subj", &subject,
-        ])
-        .output()
-        .context("generating client CSR")?;
-    
-    if !output.status.success() {
-        anyhow::bail!("Failed to generate client CSR: {}", String::from_utf8_lossy(&output.stderr));
-    }
-    
-    // Sign with CA
-    let output = Command::new("openssl")
-        .args([
-            "x509", "-req",
-            "-in", csr_path,
-            "-CA", CA_CERT,
-            "-CAkey", CA_KEY,
-            "-CAcreateserial",
-            "-out", CLIENT_CERT,
-            "-days", "365",
-            "-sha256",
-        ])
-        .output()
-        .context("signing client certificate")?;
-    
-    if !output.status.success() {
-        anyhow::bail!("Failed to sign client cert: {}", String::from_utf8_lossy(&output.stderr));
-    }
-    
-    // Clean up CSR
-    let _ = fs::remove_file(csr_path);
-    
-    // Set permissions
-    fs::set_permissions(CLIENT_KEY, fs::Permissions::from_mode(0o600))
-        .context("setting client key permissions")?;
-    fs::set_permissions(CLIENT_CERT, fs::Permissions::from_mode(0o644))
-        .context("setting client cert permissions")?;
-    
-    // Also copy to /etc/libvirt/pki/ for compatibility
-    let libvirt_client_dir = "/etc/libvirt/pki";
-    let libvirt_client_private = "/etc/libvirt/pki/private";
-    fs::create_dir_all(libvirt_client_dir).ok();
-    fs::create_dir_all(libvirt_client_private).ok();
-    
-    fs::copy(CLIENT_CERT, format!("{}/clientcert.pem", libvirt_client_dir))
-        .context("copying client cert to /etc/libvirt/pki")?;
-    fs::copy(CLIENT_KEY, format!("{}/clientkey.pem", libvirt_client_private))
-        .context("copying client key to /etc/libvirt/pki")?;
-    
-    info!("  ✓ Client certificate generated");
-    Ok(())
-}
-
-/// Get mesh interface IP address
 fn get_mesh_ip() -> Option<String> {
-    // Try common mesh interface names
     for iface in &["virbr-xdebbie", "virbr-int", "br-int"] {
-        let output = Command::new("ip")
-            .args(["addr", "show", iface])
-            .output();
-        
+        let output = Command::new("ip").args(["-4", "-o", "addr", "show", iface]).output();
         if let Ok(output) = output
             && output.status.success()
         {
             let stdout = String::from_utf8_lossy(&output.stdout);
-            // Parse "inet 10.23.0.1/16" line
             for line in stdout.lines() {
-                if (line.contains("inet 10.23") || line.contains("inet 192.168"))
-                    && let Some(ip) = line.split_whitespace().nth(1)
-                    && let Some(ip_only) = ip.split('/').next()
+                let mut f = line.split_whitespace();
+                if f.any(|w| w == "inet")
+                    && let Some(addr) = f.next().and_then(|s| s.split('/').next())
                 {
-                    return Some(ip_only.to_string());
+                    return Some(addr.to_string());
                 }
             }
         }
@@ -334,133 +192,71 @@ fn get_mesh_ip() -> Option<String> {
     None
 }
 
-/// Configure libvirtd to listen on TLS (mesh network only)
-pub fn configure_libvirtd_tls() -> Result<()> {
-    let config_path = "/etc/libvirt/libvirtd.conf";
-    
-    // Check if already configured
-    if Path::new(config_path).exists() {
-        let content = fs::read_to_string(config_path)?;
+/// Make libvirtd listen on TLS, on the overlay bridge address. Returns
+/// whether libvirtd.conf was written.
+pub fn configure_libvirtd_tls() -> Result<bool> {
+    if Path::new(LIBVIRTD_CONF).exists() {
+        let content = fs::read_to_string(LIBVIRTD_CONF)?;
         if content.contains("listen_tls = 1") {
-            info!("  libvirtd already configured for TLS");
-            return Ok(());
+            info!("  ✓ libvirtd already configured for TLS");
+            return Ok(false);
         }
     }
-    
-    info!("Configuring libvirtd for TLS (mesh network only)...");
-    
-    // Get mesh IP for listen_addr
-    let mesh_ip = get_mesh_ip();
-    let listen_line = if let Some(ip) = mesh_ip {
-        info!("  Binding to mesh IP: {}", ip);
-        format!("listen_addr = \"{}\"", ip)
-    } else {
-        warn!("  Could not detect mesh IP, binding to all interfaces");
-        "# listen_addr not set - will bind to all interfaces".to_string()
+
+    info!("  Configuring libvirtd for TLS (overlay only)...");
+    let listen_line = match get_mesh_ip() {
+        Some(ip) => {
+            info!("  Binding to overlay address: {ip}");
+            format!("listen_addr = \"{ip}\"")
+        }
+        None => {
+            warn!("  Could not detect the overlay bridge address; binding to all interfaces");
+            "# listen_addr not set - will bind to all interfaces".to_string()
+        }
     };
-    
-    // Append TLS configuration
-    let tls_config = format!(r#"
-# Added by xdebbied for multi-host support - MESH NETWORK ONLY
+    let tls_config = format!(
+        r#"
+# Added by xdebbied: libvirt over TLS with the cluster CA, overlay only
 listen_tls = 1
 listen_tcp = 0
 tls_port = "16514"
-{}
-ca_file = "/etc/libvirt/pki/cacert.pem"
-cert_file = "/etc/libvirt/pki/servercert.pem"
-key_file = "/etc/libvirt/pki/private/serverkey.pem"
+{listen_line}
+ca_file = "{SERVER_CA}"
+cert_file = "{SERVER_CERT}"
+key_file = "{SERVER_KEY}"
 tls_no_verify_certificate = 0
 auth_tls = "none"
-"#, listen_line);
-    
-    let mut content = String::new();
-    if Path::new(config_path).exists() {
-        content = fs::read_to_string(config_path)?;
-    }
-    
+"#
+    );
+    let mut content = fs::read_to_string(LIBVIRTD_CONF).unwrap_or_default();
     content.push_str(&tls_config);
-    fs::write(config_path, content)
-        .context("writing libvirtd.conf")?;
-    
-    // Modern libvirtd uses socket activation, not --listen
-    // Enable libvirtd-tls.socket for TLS listening
-    let socket_enable = Command::new("systemctl")
-        .args(["enable", "libvirtd-tls.socket"])
-        .output();
-    
-    if let Ok(output) = socket_enable {
-        if output.status.success() {
-            info!("  ✓ libvirtd-tls.socket enabled");
-        } else {
-            warn!("  Could not enable libvirtd-tls.socket (may not exist on older systems)");
+    fs::write(LIBVIRTD_CONF, content).context("writing libvirtd.conf")?;
+    // libvirtd uses socket activation; make sure no stale --listen remains.
+    let _ = fs::write("/etc/default/libvirtd", "# libvirtd uses systemd socket activation\n");
+    Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uri_prefers_listen_addr() {
+        let t = LibvirtTls { listen_addr: Some("10.23.0.2".into()), san_covers_listen: true };
+        assert_eq!(t.uri("gram.example"), "qemu+tls://10.23.0.2/system");
+        let t = LibvirtTls { listen_addr: None, san_covers_listen: true };
+        assert_eq!(t.uri("gram.example"), "qemu+tls://gram.example/system");
+    }
+
+    #[test]
+    fn san_check_reads_openssl_output() {
+        if Command::new("openssl").arg("version").output().is_err() {
+            return;
         }
+        let dir = tempfile::tempdir().unwrap();
+        let paths = super::super::api_tls::generate_localhost(dir.path());
+        let cert = fs::read_to_string(&paths.server_cert).unwrap();
+        assert!(cert_has_ip_san(&cert, "127.0.0.1"));
+        assert!(!cert_has_ip_san(&cert, "10.9.9.9"));
     }
-    
-    // Remove deprecated --listen flag if present
-    let default_path = "/etc/default/libvirtd";
-    let default_content = "# libvirtd uses systemd socket activation\n";
-    let _ = fs::write(default_path, default_content); // Don't fail if this doesn't work
-    
-    info!("  ✓ libvirtd configured for TLS (using socket activation)");
-    info!("  Note: Enable TLS socket: sudo systemctl enable --now libvirtd-tls.socket");
-    
-    Ok(())
 }
-
-/// Ensure all TLS certificates exist and are valid
-pub fn ensure_tls_certificates(force: bool) -> Result<()> {
-    info!("Step 7/8: Ensuring TLS certificates for libvirt");
-    
-    // Get hostname
-    let hostname = hostname::get()
-        .context("getting hostname")?
-        .into_string()
-        .map_err(|_| anyhow::anyhow!("invalid hostname"))?;
-    let hostname = hostname.split('.').next().unwrap_or(&hostname);
-    
-    // Check/generate CA
-    if !cert_is_valid(CA_CERT) || force {
-        generate_ca()?;
-    } else {
-        info!("  ✓ CA certificate exists and is valid");
-    }
-    
-    // Check/generate server certificate. A parseable cert is not enough: it
-    // must also carry a SAN matching this host's name and addresses.
-    if !cert_is_valid(SERVER_CERT) || force {
-        generate_server_cert(hostname)?;
-    } else if !server_cert_san_ok(hostname) {
-        warn!("  Server certificate lacks a SAN for this host's name/IPs; reissuing");
-        generate_server_cert(hostname)?;
-    } else {
-        info!("  ✓ Server certificate exists and is valid");
-    }
-    
-    // Check/generate client certificate
-    if !cert_is_valid(CLIENT_CERT) || force {
-        generate_client_cert(hostname)?;
-    } else {
-        info!("  ✓ Client certificate exists and is valid");
-    }
-    
-    // Configure libvirtd
-    configure_libvirtd_tls()?;
-    
-    info!("");
-    info!("TLS certificates ready:");
-    info!("  CA:     {}", CA_CERT);
-    info!("  Server: {}", SERVER_CERT);
-    info!("  Client: {}", CLIENT_CERT);
-    info!("");
-    info!("For multi-host setup:");
-    info!("  1. Copy {} from THIS host to /etc/pki/CA/cacert.pem on OTHER hosts", CA_CERT);
-    info!("  2. Or serve it: cd /etc/pki/CA && python3 -m http.server 7080");
-    info!("  3. Then fetch: curl http://<this-host>:7080/cacert.pem | sudo tee /etc/pki/CA/cacert.pem");
-    info!("  4. Restart libvirtd on ALL hosts: sudo systemctl restart libvirtd");
-    
-    Ok(())
-}
-
-// Use std::os::unix::fs::PermissionsExt for from_mode
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;

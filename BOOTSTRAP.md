@@ -325,36 +325,55 @@ sudo apt-get install -y libvirt-daemon-system libvirt-clients qemu-kvm qemu-util
 
 ```
 1. Check Dependencies
-   ├─ Check for virsh, qemu-system-x86_64, qemu-img, cloud-localds
-   ├─ If missing and root → apt-get install
-   └─ If missing and not root → error with package list
+   ├─ virsh, qemu-system-x86_64, qemu-img, cloud-localds
+   └─ Missing and root → apt-get install; not root → error with package list
 
 2. Ensure libvirtd Running
-   ├─ systemctl is-active libvirtd
-   ├─ If not active and root → systemctl start libvirtd
-   └─ systemctl enable libvirtd
+   └─ systemctl is-active / start / enable libvirtd
 
 3. Discover Resources
-   ├─ virsh net-list → existing networks
-   ├─ virsh pool-list → existing storage pools
-   └─ Parse network bridges and pool paths
+   └─ virsh net-list, pool-list → bridges and pool paths
 
-4. Create Resources (if needed)
-   ├─ If no xdebbie network → virsh net-define + net-start + net-autostart
-   └─ If no xdebbie pool → mkdir + virsh pool-define + pool-start + pool-autostart
+4. Identity
+   ├─ --join: discovery listen (20 s) unless --join/--standalone given;
+   │   pin the cluster CA, POST /v1/enroll, wait for `xdctl approve`,
+   │   install api-cert.pem + api-ca.pem, fetch the cluster token;
+   │   the CA assigns the box id; then GET /v1/network to copy the overlay
+   └─ first box: generate token, cluster CA and this box's cert; box 0
 
-5. Generate Configuration
-   ├─ If config exists and not --force → skip (warn if it does not parse)
-   ├─ If config exists and --force → back up, regenerate, carry operator settings over
-   ├─ Generate TOML from template with discovered resources
-   └─ Write to /etc/xdebbie/xdebbied.toml
+5. Create Resources (if needed)
+   ├─ No xdebbie network → net-define (no DHCP range, MAC from box id)
+   ├─ Existing one: warn if its MAC is not the box's; read its XML — no
+   │   <dhcp> means [network] is written live with its subnet
+   └─ No xdebbie pool → mkdir + pool-define + pool-start + pool-autostart
 
-6. Generate Token
-   ├─ If token exists and not --force → reuse (--force: back up, regenerate, warn)
-   ├─ Generate 32 random bytes → hex encode
-   ├─ Write to /etc/xdebbie/token (root:root 0400, atomic rename)
-   └─ Write /etc/xdebbie/xdebbie_env with URL and token (same)
+6. Generate Configuration
+   ├─ Exists and not --force → keep; set [mesh] box, ca_url, and add a
+   │   [network] copied from the cluster if there is none
+   ├─ Exists and --force → back up, regenerate, carry operator settings over
+   └─ Network and pool chosen by the names ensured in step 5
+
+7. libvirt TLS (cluster CA)
+   ├─ /etc/pki/CA/cacert.pem, /etc/libvirt/pki/{cacert,servercert}.pem,
+   │   /etc/pki/libvirt/clientcert.pem ← api-ca.pem / api-cert.pem (+ keys)
+   ├─ libvirtd.conf: listen_tls on the overlay bridge address, client
+   │   certs verified against the cluster CA
+   ├─ libvirtd-tls.socket enabled; libvirtd restarted when anything moved
+   └─ Warn if the cert has no SAN for the listen address (re-enrol --force)
+
+8. Firewall (ufw) from the config
+
+9. Register with the cluster (--join only)
+   └─ PUT /v1/hosts/<fqdn> at the CA box (forwarded to the leader):
+       the local [[hosts]] entry with uri = qemu+tls://<listen address>/system
 ```
+
+Every box's libvirt trusts every other box's client certificate because
+they are all issued by the one cluster CA; nothing is copied by hand. The
+leader reaches a box's libvirtd on its overlay bridge address, i.e. across
+the Geneve mesh, so a freshly joined box shows in `xdctl host ls` at once
+but turns `Ready` once `xdctl mesh peer add` has been done both ways
+(docs/mesh.md).
 
 ## Resource Discovery
 

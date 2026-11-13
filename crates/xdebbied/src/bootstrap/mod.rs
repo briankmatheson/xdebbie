@@ -215,7 +215,7 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     let opts = &opts;
 
     // Step 1: Check dependencies
-    info!("Step 1/8: Checking dependencies");
+    info!("Step 1/9: Checking dependencies");
     let missing = deps::check_dependencies()?;
     if !missing.is_empty() {
         warn!("Missing dependencies: {}", missing.join(", "));
@@ -225,7 +225,7 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     }
 
     // Step 2: Check libvirtd (optional - socket activation may be used)
-    info!("Step 2/8: Checking libvirtd availability");
+    info!("Step 2/9: Checking libvirtd availability");
     if let Err(e) = deps::ensure_libvirtd_running() {
         warn!("libvirtd service not available (this is OK if using socket activation): {}", e);
         // Socket activation is fine, but if nothing answers on the URI there is
@@ -243,7 +243,7 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     }
 
     // Step 3: Discover existing resources
-    info!("Step 3/8: Discovering libvirt resources");
+    info!("Step 3/9: Discovering libvirt resources");
     let resources = libvirt_setup::discover_libvirt(&opts.libvirt_uri)?;
     info!(
         "Found {} networks and {} storage pools",
@@ -266,7 +266,7 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     let existing_box: Option<u8> =
         crate::config::Config::load(&opts.config_path).ok().and_then(|c| c.mesh.as_ref().map(|m| m.box_id));
     let (token, box_id) = if let Some(ca_url) = &opts.join {
-        info!("Step 4/8: Enrolling with the cluster CA at {ca_url}");
+        info!("Step 4/9: Enrolling with the cluster CA at {ca_url}");
         if api_tls_paths.all_exist() && token::token_exists(&opts.token_path) && !opts.force {
             info!("Already enrolled (certificate and token present); reusing. Use --force to re-enrol");
             let b = existing_box.or(opts.box_id).unwrap_or(0);
@@ -309,7 +309,7 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
             (set.current, joined.box_id)
         }
     } else {
-        info!("Step 4/8: Generating API token");
+        info!("Step 4/9: Generating API token");
         let token = if token::token_exists(&opts.token_path) && !opts.force {
             info!("Token already exists at {}, reusing", opts.token_path.display());
             token::read_token(&opts.token_path)?
@@ -361,7 +361,7 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     };
 
     // Step 4: Create resources if needed
-    info!("Step 5/8: Ensuring required resources exist");
+    info!("Step 5/9: Ensuring required resources exist");
     
     // Check if we need to create default network
     let network_exists = resources
@@ -423,7 +423,7 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     let resources = libvirt_setup::discover_libvirt(&opts.libvirt_uri)?;
 
     // Step 5: Generate configuration
-    info!("Step 6/8: Generating configuration");
+    info!("Step 6/9: Generating configuration");
     
     let exists = opts.config_path.exists();
     if let Some(n) = &cluster_net {
@@ -505,15 +505,19 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
         config_gen::write_config(&opts.config_path, &content)?;
     }
 
-    // Step 7: Generate libvirt TLS certificates for multi-host connections.
-    info!("Step 7/8: Generating libvirt TLS certificates");
-    if let Err(e) = tls_certs::ensure_tls_certificates(opts.force) {
-        warn!("Failed to generate libvirt TLS certificates: {}", e);
-        warn!("Multi-host libvirt connections may not work until certificates are set up manually");
-    }
+    // Step 7: libvirt TLS from the cluster CA and this box's certificate.
+    info!("Step 7/9: libvirt TLS (cluster CA)");
+    let libvirt_tls = match tls_certs::ensure_tls_certificates(&api_tls_paths) {
+        Ok(t) => Some(t),
+        Err(e) => {
+            warn!("libvirt TLS not set up: {e:#}");
+            warn!("The leader cannot drive this box's VMs until it is; re-run bootstrap once the API certificate exists");
+            None
+        }
+    };
 
     // Step 8: Firewall (ufw) from the config written/kept above.
-    info!("Step 8/8: Configuring firewall");
+    info!("Step 8/9: Configuring firewall");
     let spec = match crate::config::Config::load(&opts.config_path) {
         Ok(cfg) => firewall::FirewallSpec::from_config(&cfg),
         Err(e) => {
@@ -551,6 +555,52 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     // root:root 0400 on token, root:xdebbie 0750 on the directory.
     // Done last so every file exists before we walk the directory.
     chown_config_dir(cfg_dir);
+
+    // Step 9: a joiner registers its libvirt with the cluster. The first
+    // box's [[hosts]] seeds its own store; a joiner's seeds a store nobody
+    // reads, so tell the leader — via the CA box — with the remote URI.
+    if let Some(ca_url) = &opts.join {
+        info!("Step 9/9: Registering this box with the cluster");
+        let registered = match (crate::config::Config::load(&opts.config_path), &libvirt_tls) {
+            (Ok(cfg), Some(tls)) => match cfg.hosts.first() {
+                Some(local) => {
+                    let mut host = local.clone();
+                    host.name = hostname.clone();
+                    host.uri = tls.uri(&hostname);
+                    match join::register_host(ca_url, &api_tls_paths, &host) {
+                        Ok(()) => {
+                            info!("  ✓ Registered {} as {} (pool {}, bridge {})", host.name, host.uri, host.storage_pool, host.bridge);
+                            if !tls.san_covers_listen {
+                                warn!("  The leader will not be able to connect until this box is re-enrolled (see step 7)");
+                            } else {
+                                info!("  The leader reaches it over the overlay; `xdctl host ls` shows Ready once the mesh is peered");
+                            }
+                            true
+                        }
+                        Err(e) => {
+                            warn!("  Could not register with the cluster: {e:#}");
+                            false
+                        }
+                    }
+                }
+                None => {
+                    warn!("  No [[hosts]] entry in {}; nothing to register", opts.config_path.display());
+                    false
+                }
+            },
+            (Err(e), _) => {
+                warn!("  Could not load {}: {e:#}", opts.config_path.display());
+                false
+            }
+            (_, None) => {
+                warn!("  libvirt TLS is not set up (step 7); not registering a host the leader could not reach");
+                false
+            }
+        };
+        if !registered {
+            info!("  Register by hand once fixed: xdctl host add {hostname} --uri qemu+tls://<overlay address>/system --pool <pool> --bridge <bridge>");
+        }
+    }
 
     info!("=== Bootstrap Complete ===");
     info!("Configuration: {}", opts.config_path.display());

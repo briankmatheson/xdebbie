@@ -85,8 +85,8 @@ EOF
         echo "  xdctl host ls"
         echo ""
         echo "The API serves HTTPS with a cert from /etc/xdebbie/api-ca.pem."
-        echo "Before meshing, copy each box's api-ca.pem into /etc/xdebbie/peers/"
-        echo "on the other (see /usr/share/doc/xdebbie/BOOTSTRAP.md)."
+        echo "To add another box: on it, run 'sudo xdebbied bootstrap --join https://$(hostname -f):7443'"
+        echo "then approve it here with 'xdctl approve <its hostname>' (see BOOTSTRAP.md)."
         echo ""
         ;;
         

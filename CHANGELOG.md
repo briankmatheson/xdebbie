@@ -15,6 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   place of the template in a regenerated one. Warns if the CA box's pool
   overlaps the slice.
 
+- libvirt TLS comes from the cluster CA. Step 7 installs `api-ca.pem` as
+  libvirt's CA and this box's enrolled certificate as both server and
+  client cert, so every box's libvirtd accepts every other box's client
+  with nothing copied by hand. The per-box RSA "XDebbie CA" and its
+  `openssl` dependency are gone. libvirtd listens on the overlay bridge
+  address; bootstrap warns when the certificate lacks a SAN for it.
+- `bootstrap --join` registers the box with the cluster (step 9):
+  `PUT /v1/hosts/<fqdn>` at the CA box with the local `[[hosts]]` entry and
+  `uri = qemu+tls://<overlay address>/system`. No more `xdctl host add`
+  for a joined box.
+
 ### Fixed
 - Bootstrap wrote the bridge of whichever libvirt network sorted first
   (`default`/`virbr0`, usually inactive) into `[mesh]` and `[[hosts]]`

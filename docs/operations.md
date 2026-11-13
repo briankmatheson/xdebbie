@@ -23,7 +23,7 @@ first connection (`sudo -u xdebbie ssh xdebbie@srv2 true`).
 |---|---|
 | Take a host out for maintenance | `xdctl host drain srv2` → wait for `vm ls` to show no VMs on it |
 | Bring it back | `xdctl host uncordon srv2` |
-| Add a host | prep it, then `xdctl host add srv5 --uri qemu+ssh://xdebbie@srv5/system --failure-domain fd-5` |
+| Add a host | on it: `sudo xdebbied bootstrap --join https://<ca box>:7443`; here: `xdctl approve <host>`; it registers itself (BOOTSTRAP.md). By hand: `xdctl host add srv5 --uri qemu+tls://<its overlay address>/system` |
 | Remove a host | drain, then `xdctl host rm srv5` |
 | Move one VM | `xdctl vm migrate demo-md-0-abcde --to srv3` |
 | Ship a new base image | `build-image.sh v1.37 && push-image.sh … srv1 srv2 srv3 srv4`, then point the machine templates at it |

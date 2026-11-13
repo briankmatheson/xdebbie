@@ -283,3 +283,31 @@ pub fn fetch_network(ca_url: &str, paths: &ApiTlsPaths) -> Result<Option<crate::
         s => bail!("{ca_url}/v1/network: {s}: {}", r.text().unwrap_or_default()),
     }
 }
+
+/// Register this box's libvirt with the cluster: `PUT /v1/hosts/<name>` at
+/// the CA box, which forwards to the leader if that is someone else. The
+/// leader's store is the only one that matters (docs/autodiscovery.md), so
+/// the `[[hosts]]` entry in a joiner's own config is not enough.
+pub fn register_host(ca_url: &str, paths: &ApiTlsPaths, host: &xdebbie_core::Host) -> Result<()> {
+    let ca_url = ca_url.trim_end_matches('/');
+    let ca_pem = std::fs::read_to_string(&paths.ca_cert)?;
+    let cert = std::fs::read_to_string(&paths.server_cert)?;
+    let key = std::fs::read_to_string(&paths.server_key)?;
+    let identity = reqwest::Identity::from_pem(format!("{cert}\n{key}").as_bytes()).context("client identity")?;
+    let c = trusted_client(&ca_pem, Some(identity))?;
+    let url = format!("{ca_url}/v1/hosts/{}", host.name);
+    // A follower answers 503 while an election settles; give it a moment.
+    let mut last = None;
+    for _ in 0..5 {
+        let r = c.put(&url).json(host).send().context("registering host")?;
+        match r.status() {
+            s if s.is_success() => return Ok(()),
+            reqwest::StatusCode::SERVICE_UNAVAILABLE => {
+                last = Some(format!("{}: {}", r.status(), r.text().unwrap_or_default()));
+                std::thread::sleep(Duration::from_secs(3));
+            }
+            s => bail!("{url}: {s}: {}", r.text().unwrap_or_default()),
+        }
+    }
+    bail!("{url}: {}", last.unwrap_or_default())
+}
