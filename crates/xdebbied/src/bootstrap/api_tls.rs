@@ -314,6 +314,53 @@ pub fn cert_fingerprint(pem: &str) -> Result<String> {
     ))
 }
 
+/// One certificate of a chain as `GET /v1/cert` reports it.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CertInfo {
+    pub subject: String,
+    pub issuer: String,
+    pub serial: String,
+    pub not_before: String,
+    pub not_after: String,
+    /// `sha256:<hex>` of the DER.
+    pub fingerprint: String,
+    /// `true` when the certificate signed itself (a root).
+    pub self_signed: bool,
+    pub pem: String,
+}
+
+/// Describe every certificate in a PEM bundle, in file order.
+pub fn describe_chain(pem: &str) -> Result<Vec<CertInfo>> {
+    use sha2::Digest;
+    const BEGIN: &str = "-----BEGIN CERTIFICATE-----";
+    const END: &str = "-----END CERTIFICATE-----";
+    let mut out = vec![];
+    let mut rest = pem;
+    while let Some(b) = rest.find(BEGIN) {
+        let Some(e) = rest[b..].find(END) else {
+            anyhow::bail!("certificate PEM without an END line");
+        };
+        let block = &rest[b..b + e + END.len()];
+        rest = &rest[b + e + END.len()..];
+        let (_, p) = x509_parser::pem::parse_x509_pem(block.as_bytes())
+            .context("parsing certificate PEM")?;
+        let (_, x) =
+            x509_parser::parse_x509_certificate(&p.contents).context("parsing certificate DER")?;
+        let v = x.validity();
+        out.push(CertInfo {
+            subject: x.subject().to_string(),
+            issuer: x.issuer().to_string(),
+            serial: x.raw_serial_as_string(),
+            not_before: v.not_before.to_rfc2822().unwrap_or_default(),
+            not_after: v.not_after.to_rfc2822().unwrap_or_default(),
+            fingerprint: format!("sha256:{}", hex::encode(sha2::Sha256::digest(&p.contents))),
+            self_signed: x.subject() == x.issuer(),
+            pem: format!("{block}\n"),
+        });
+    }
+    Ok(out)
+}
+
 /// Install a certificate issued by the cluster CA (and the CA itself) on a
 /// joined box. The key was written by the caller when the CSR was made.
 pub fn install_issued(paths: &ApiTlsPaths, cert_pem: &str, ca_pem: &str) -> Result<()> {
@@ -555,5 +602,15 @@ mod tests {
         let san = x.subject_alternative_name().unwrap().unwrap();
         assert_eq!(san.value.general_names.len(), 2);
         assert!(x.validity().is_valid());
+
+        // What `xdctl ca --chain` shows: the box's cert, then the CA that
+        // signed it; only the CA is self-signed.
+        let chain = describe_chain(&format!("{cert}{ca}")).unwrap();
+        assert_eq!(chain.len(), 2);
+        assert!(!chain[0].self_signed);
+        assert!(chain[1].self_signed);
+        assert_eq!(chain[0].issuer, chain[1].subject);
+        assert_eq!(chain[1].fingerprint, cert_fingerprint(&ca).unwrap());
+        assert!(chain[0].pem.starts_with("-----BEGIN CERTIFICATE-----"));
     }
 }

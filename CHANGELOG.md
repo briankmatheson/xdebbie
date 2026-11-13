@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.16.6] - 2026-11-13
 
+### Added
+- `xdctl ca --chain` prints the signing chain the box at `--url` serves,
+  leaf first: its API certificate, then the cluster CA, each PEM preceded
+  by `#` lines with subject, issuer, validity and fingerprint (plain PEM
+  for `openssl`/bundles; `--json` for the fields). Backed by the new public
+  `GET /v1/cert`, which is box-local like `/v1/version` since the leaf is
+  per box.
+
 ### Fixed
 - Issued API certificates carry an Authority Key Identifier. OpenSSL 3 in
   strict mode (Python 3.13's default) refused the chain without it:

@@ -81,7 +81,14 @@ enum Cmd {
     },
     /// The cluster CA certificate and its fingerprint (what
     /// `bootstrap --join --ca-fingerprint` expects).
-    Ca,
+    Ca {
+        /// The whole signing chain the box at --url serves, leaf first:
+        /// its own certificate, then the CA that signed it. Each PEM is
+        /// preceded by a `#` line with subject, issuer, expiry and
+        /// fingerprint; pipe it into a file for a bundle.
+        #[arg(long)]
+        chain: bool,
+    },
     /// API bearer token: status and rotation.
     #[command(subcommand)]
     Token(TokenCmd),
@@ -104,6 +111,18 @@ enum Cmd {
         #[arg(value_enum)]
         shell: Shell,
     },
+}
+
+/// One link of the chain `GET /v1/cert` returns (xdebbied api_tls::CertInfo).
+#[derive(serde::Deserialize)]
+struct CertInfo {
+    subject: String,
+    issuer: String,
+    not_before: String,
+    not_after: String,
+    fingerprint: String,
+    self_signed: bool,
+    pem: String,
 }
 
 #[derive(Subcommand)]
@@ -874,9 +893,9 @@ fn main() -> Result<()> {
     if matches!(cli.cmd, Cmd::Version) {
         return cmd_version(&mut api, &cli);
     }
-    // `/v1/mesh` is this box's own state; everything else is cluster state
-    // the leader owns.
-    let asked = if matches!(cli.cmd, Cmd::Mesh(_)) {
+    // `/v1/mesh` and the box's own certificate chain are per-box state;
+    // everything else is cluster state the leader owns.
+    let asked = if matches!(cli.cmd, Cmd::Mesh(_) | Cmd::Ca { chain: true }) {
         api.find_box(&cli.url)?
     } else {
         api.find_leader(&cli.url)?
@@ -1104,7 +1123,32 @@ fn main() -> Result<()> {
             let e: Enrollment = serde_json::from_value(v)?;
             println!("denied {} ({})", e.hostname, e.fingerprint);
         }
-        Cmd::Ca => {
+        Cmd::Ca { chain: true } => {
+            let (code, v) = api.call_raw(Method::GET, "/cert", None, None)?;
+            if !code.is_success() {
+                bail!("{code}: {}", api_error_text(&v));
+            }
+            if cli.json {
+                return out(v);
+            }
+            let chain: Vec<CertInfo> = serde_json::from_value(v)?;
+            println!("# certificate chain served by {}", api.url);
+            for (i, c) in chain.iter().enumerate() {
+                let role = if c.self_signed {
+                    "root CA"
+                } else if i == 0 {
+                    "server"
+                } else {
+                    "intermediate"
+                };
+                println!("# {i}: {role}: {}", c.subject);
+                println!("#    issuer {}", c.issuer);
+                println!("#    valid {} to {}", c.not_before, c.not_after);
+                println!("#    fingerprint {}", c.fingerprint);
+                print!("{}", c.pem);
+            }
+        }
+        Cmd::Ca { chain: false } => {
             let (code, v) = api.call_raw(Method::GET, "/ca", None, None)?;
             if !code.is_success() {
                 bail!("{code}: {}", api_error_text(&v));

@@ -33,6 +33,7 @@ use xdebbie_core::*;
 
 use crate::{
     abe,
+    bootstrap::api_tls::CertInfo,
     config::Config,
     enroll::{Decision, Enrollments},
     keyed_lock::KeyedLock,
@@ -184,6 +185,7 @@ pub fn router(app: App) -> Router {
         .route("/token", get(token_status).put(put_token))
         .route("/enroll/token", get(enroll_token))
         .route("/ca", get(ca_cert))
+        .route("/cert", get(cert_chain))
         .route("/network", get(network))
         .route("/version", get(version_info))
         .with_state(app.clone())
@@ -221,6 +223,7 @@ fn is_public(method: &axum::http::Method, path: &str) -> bool {
     match (method, path) {
         (&axum::http::Method::POST, "/enroll") => true,
         (&axum::http::Method::GET, "/ca") => true,
+        (&axum::http::Method::GET, "/cert") => true,
         (&axum::http::Method::GET, p) => p
             .strip_prefix("/enroll/")
             .is_some_and(|id| !id.is_empty() && id != "token" && !id.contains('/')),
@@ -531,6 +534,40 @@ async fn ca_cert(State(a): State<App>) -> R<([(HeaderName, String); 2], String)>
         ],
         pem,
     ))
+}
+
+/// `GET /v1/cert`: the chain this box serves on its API port, leaf first —
+/// its own certificate (`tls_cert`, which may already carry
+/// intermediates) followed by the cluster CA that signed it. Box-local,
+/// never forwarded: the leaf is per box. Public like `/ca`; it is what
+/// any TLS client gets to see anyway. `xdctl ca --chain`.
+async fn cert_chain(State(a): State<App>) -> R<Json<Vec<CertInfo>>> {
+    let bad = |what: &str, e: std::io::Error| {
+        ApiErr(StatusCode::NOT_FOUND, format!("no {what} certificate: {e}"))
+    };
+    let mut bundle = match &a.cfg.tls_cert {
+        Some(p) => std::fs::read_to_string(p).map_err(|e| bad("server", e))?,
+        None => {
+            return Err(ApiErr(
+                StatusCode::NOT_FOUND,
+                "this xdebbied serves plain HTTP (no tls_cert configured)".into(),
+            ));
+        }
+    };
+    bundle.push('\n');
+    match a.enroll.ca_pem() {
+        Some(p) => bundle.push_str(p),
+        None => {
+            bundle.push_str(&std::fs::read_to_string(&a.cfg.ca_file).map_err(|e| bad("CA", e))?)
+        }
+    }
+    let mut chain: Vec<CertInfo> = vec![];
+    for c in crate::bootstrap::api_tls::describe_chain(&bundle)? {
+        if !chain.iter().any(|k| k.fingerprint == c.fingerprint) {
+            chain.push(c);
+        }
+    }
+    Ok(Json(chain))
 }
 
 // ---------- hosts ----------
