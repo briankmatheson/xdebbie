@@ -30,6 +30,13 @@ impl MulticastSocket {
             s.set_reuse_address(true).context("SO_REUSEADDR")?;
             s.set_reuse_port(true).context("SO_REUSEPORT")?;
             s.bind(&bind_addr.into()).context("Failed to bind UDP socket")?;
+            // Bound to 0.0.0.0, Linux would also hand us every other group
+            // any socket on this box joins on the same port (IP_MULTICAST_ALL).
+            // Only our own group: a test or another tool on a private group
+            // must not be heard as peers.
+            if let Err(e) = s.set_multicast_all_v4(false) {
+                debug!(error = %e, "IP_MULTICAST_ALL off not supported");
+            }
             UdpSocket::from(s)
         };
 

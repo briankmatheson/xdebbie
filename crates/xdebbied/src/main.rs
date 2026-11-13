@@ -9,6 +9,7 @@ mod dhcp;
 mod discovery;
 mod election;
 mod enroll;
+mod keyed_lock;
 mod leader;
 mod libvirt;
 mod lvm;
@@ -141,7 +142,9 @@ fn main() -> anyhow::Result<()> {
             bootstrap::bootstrap(&opts)?;
             return Ok(());
         }
-        Some(Cmd::Serve { bootstrap: true, .. }) => {
+        Some(Cmd::Serve {
+            bootstrap: true, ..
+        }) => {
             // Run bootstrap first
             let opts = bootstrap::BootstrapOptions {
                 config_path: cli.config.clone(),
@@ -178,12 +181,19 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
     .context("mesh configuration")
     .unwrap_or_else(|e| fatal_config(e));
 
-    if matches!(cli.cmd, Some(Cmd::Serve { mesh_only: true, .. })) {
+    if matches!(
+        cli.cmd,
+        Some(Cmd::Serve {
+            mesh_only: true,
+            ..
+        })
+    ) {
         let token = load_token(&cfg)?;
         let listen = cfg.effective_listen();
         tokio::spawn(mesh.clone().run());
-        let v1 = api::mesh::router(api::mesh::MeshApi { mesh })
-            .layer(axum::middleware::from_fn_with_state(token, api::authenticate));
+        let v1 = api::mesh::router(api::mesh::MeshApi { mesh }).layer(
+            axum::middleware::from_fn_with_state(token, api::authenticate),
+        );
         let app = axum::Router::new()
             .route("/healthz", axum::routing::get(|| async { "ok" }))
             .nest("/v1", v1);
@@ -199,7 +209,8 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 "Volume group '{}' not found. Create it with:\n  \
                  sudo pvcreate /dev/sdX\n  \
                  sudo vgcreate {} /dev/sdX",
-                vg_name, vg_name
+                vg_name,
+                vg_name
             );
         }
         // Self-heal after a host reboot: make sure the thin pool and VM
@@ -225,6 +236,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             qemu_img_bin: cfg.qemu_img.clone(),
             sys_class: cfg.nvme_sys.clone(),
         },
+        base_locks: Arc::default(),
     });
 
     if let Some(Cmd::Check) = cli.cmd {
@@ -263,6 +275,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             for mut h in seeds {
                 if let Some(old) = s.hosts.get(&h.name) {
                     h.capacity = old.capacity;
+                    h.abe_capacity = old.abe_capacity.clone();
                     h.last_seen = old.last_seen;
                     h.cordoned |= old.cordoned;
                 }
@@ -301,13 +314,18 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
     let api_url = cfg.advertise_url(listen);
     // The election prefers the box whose store holds the VMs; keep that
     // number current (the leader's store moves while it leads).
-    let vm_count = Arc::new(std::sync::atomic::AtomicUsize::new(store.read().await.vms.len()));
+    let vm_count = Arc::new(std::sync::atomic::AtomicUsize::new(
+        store.read().await.vms.len(),
+    ));
     {
         let (store, vm_count) = (store.clone(), vm_count.clone());
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-                vm_count.store(store.read().await.vms.len(), std::sync::atomic::Ordering::Relaxed);
+                vm_count.store(
+                    store.read().await.vms.len(),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
             }
         });
     }
@@ -342,12 +360,16 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         }
     };
 
+    // Bytes promised to standalone-volume creates still in flight; the API
+    // reserves, the scheduler counts them.
+    let abe_ledger: reconcile::AbeLedger = Arc::default();
     let rec = reconcile::Reconciler {
         store: store.clone(),
         hv,
         cfg: cfg.clone(),
         mesh: Some(mesh.clone()),
         leadership: leadership.clone(),
+        abe_ledger: abe_ledger.clone(),
     };
     tokio::spawn(rec.run());
     tokio::spawn(mesh.clone().run());
@@ -357,7 +379,12 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
     let http = cfg.http_client(std::time::Duration::from_secs(300));
     if let Some(t) = &token {
         tokio::spawn(
-            token::Distributor { tokens: t.clone(), leadership: leadership.clone(), http: http.clone() }.run(),
+            token::Distributor {
+                tokens: t.clone(),
+                leadership: leadership.clone(),
+                http: http.clone(),
+            }
+            .run(),
         );
     }
 
@@ -369,7 +396,10 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 bridge,
                 store.clone(),
                 Arc::new(move |b: &str| overlay.mtu_for(b)),
-                dhcp::Gate { leader: leadership.flag(), leader_only: net.leader_only },
+                dhcp::Gate {
+                    leader: leadership.flag(),
+                    leader_only: net.leader_only,
+                },
             ));
             if net.dhcp {
                 tokio::spawn(srv.clone().run());
@@ -379,7 +409,9 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             Some(srv)
         }
         (Some(_), None) => {
-            tracing::warn!("[network] set but no bridge known (set network.bridge); allocating addresses only");
+            tracing::warn!(
+                "[network] set but no bridge known (set network.bridge); allocating addresses only"
+            );
             None
         }
         _ => None,
@@ -390,14 +422,19 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         .context("loading cluster CA")
         .unwrap_or_else(|e| fatal_config(e));
     match (&signer, &cfg.ca_url) {
-        (Some(_), _) => info!(ca_key = %cfg.ca_key.display(), "this box holds the cluster CA: `xdctl approve` is decided here"),
+        (Some(_), _) => {
+            info!(ca_key = %cfg.ca_key.display(), "this box holds the cluster CA: `xdctl approve` is decided here")
+        }
         (None, Some(u)) => info!(ca_url = %u, "enrolment requests are forwarded to the CA box"),
         (None, None) => info!("no cluster CA key and no ca_url: enrolment unavailable on this box"),
     }
     let mesh_cfg = cfg.mesh_config();
-    let reserved: Vec<u8> = std::iter::once(mesh_cfg.box_id).chain(mesh_cfg.peers.iter().map(|p| p.box_id)).collect();
+    let reserved: Vec<u8> = std::iter::once(mesh_cfg.box_id)
+        .chain(mesh_cfg.peers.iter().map(|p| p.box_id))
+        .collect();
     let enroll = Arc::new(
-        enroll::Enrollments::load(cfg.state_dir().join("enroll.json"), signer, reserved).unwrap_or_else(|e| fatal_config(e)),
+        enroll::Enrollments::load(cfg.state_dir().join("enroll.json"), signer, reserved)
+            .unwrap_or_else(|e| fatal_config(e)),
     );
 
     let app = api::router(api::App {
@@ -410,6 +447,8 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         leadership,
         http,
         enroll,
+        volume_names: Arc::default(),
+        abe_ledger,
     });
     serve(&cfg, listen, app).await
 }
@@ -419,7 +458,10 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
 /// `RestartPreventExitStatus`. The failure then sits in `systemctl status`
 /// instead of cycling through bootstrap every few seconds.
 fn fatal_config(e: anyhow::Error) -> ! {
-    tracing::error!(error = format!("{e:#}"), "cannot start; fix the file and `systemctl restart xdebbied` (not retrying)");
+    tracing::error!(
+        error = format!("{e:#}"),
+        "cannot start; fix the file and `systemctl restart xdebbied` (not retrying)"
+    );
     std::process::exit(78)
 }
 
@@ -435,7 +477,11 @@ fn load_token(cfg: &config::Config) -> anyhow::Result<Option<Arc<token::Tokens>>
 
 /// Serve `app` on `listen`, HTTPS if a cert/key pair is configured. Over
 /// HTTPS, client certificates signed by the cluster CA are recognised.
-async fn serve(cfg: &config::Config, listen: std::net::SocketAddr, app: axum::Router) -> anyhow::Result<()> {
+async fn serve(
+    cfg: &config::Config,
+    listen: std::net::SocketAddr,
+    app: axum::Router,
+) -> anyhow::Result<()> {
     match (&cfg.tls_cert, &cfg.tls_key) {
         (Some(c), Some(k)) => {
             let roots = tls::client_roots(&cfg.ca_file, &cfg.peer_ca_dir);

@@ -159,10 +159,12 @@ mod tests {
 
     #[test]
     fn hears_announces_and_marks_the_leader() {
-        // The real discovery port: a host firewall that lets xdebbied talk
-        // lets this through too (an odd port would be dropped). A daemon
-        // running on the test box is simply heard as one more node.
-        let addr = crate::discovery::multicast::DEFAULT_MULTICAST_ADDR;
+        // The real discovery port, so a host firewall that lets xdebbied talk
+        // lets this through too (an odd port would be dropped), but a private
+        // group: a daemon on this box or the LAN only receives the group it
+        // joined (IP_MULTICAST_ALL is off), so "alpha", "beta" and "me" never
+        // show up as peers of a real cluster.
+        let addr = "239.0.0.43:7442";
         let tx = MulticastSocket::new(addr, "0.0.0.0:7442").unwrap();
         let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
         let cap = NodeCapacity { total_cpus: 1, total_memory_mib: 1, available_cpus: 1.0, available_memory_mib: 1, vm_count: 0, control_plane_eligible: false };

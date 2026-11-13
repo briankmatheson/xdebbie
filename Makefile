@@ -4,19 +4,22 @@
 #   make test            cargo test --workspace
 #   make lint            fmt --check + clippy
 #   make release         optimised xdebbied + xdctl
-#   make deb             target/debian/xdebbied_<ver>-1_<arch>.deb (needs cargo-deb)
+#   make deb             target/debian/xdebbied_<ver>-<rev>_<arch>.deb (needs cargo-deb)
 #   make install         install that .deb on this box
 #   make deploy HOSTS="timesink gram"   scp + install the .deb on remote boxes
 #   make tag             git tag v<ver> from Cargo.toml (annotated)
 #   make push            git push --follow-tags
 #
-# Version comes from the workspace Cargo.toml. Bump it there first.
+# Version comes from the workspace Cargo.toml; the Debian revision from
+# crates/xdebbied/Cargo.toml [package.metadata.deb]. Bump one of them first.
 
 SHELL    := /bin/bash
 CARGO    ?= cargo
 VERSION  := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+REVISION := $(shell sed -n 's/^revision = "\(.*\)"/\1/p' crates/xdebbied/Cargo.toml | head -1)
+REVISION := $(if $(REVISION),$(REVISION),1)
 ARCH     := $(shell dpkg --print-architecture 2>/dev/null || echo amd64)
-DEB      := target/debian/xdebbied_$(VERSION)-1_$(ARCH).deb
+DEB      := target/debian/xdebbied_$(VERSION)-$(REVISION)_$(ARCH).deb
 HOSTS    ?=
 SSH_USER ?= $(USER)
 
@@ -31,12 +34,14 @@ release:
 
 test:
 	$(CARGO) test --workspace
+	tests/lint-links.sh
 
 fmt:
 	$(CARGO) fmt --all
 
 lint:
 	$(CARGO) fmt --all -- --check
+	tests/lint-links.sh
 	$(CARGO) clippy --workspace --all-targets -- -D warnings
 
 clippy: lint
