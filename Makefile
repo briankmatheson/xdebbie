@@ -57,7 +57,7 @@ deb:
 $(DEB): deb
 
 install: $(DEB)
-	sudo apt install -y ./$(DEB)
+	sudo apt install -y --reinstall -o Dpkg::Options::=--force-confold ./$(DEB)
 
 # make deploy HOSTS="timesink gram"  (ssh as $(SSH_USER); sudo must work there)
 deploy: $(DEB)
@@ -65,7 +65,7 @@ deploy: $(DEB)
 	@for h in $(HOSTS); do \
 	  echo "== $$h"; \
 	  scp $(DEB) $(SSH_USER)@$$h:/tmp/ && \
-	  ssh -t $(SSH_USER)@$$h "sudo apt install -y /tmp/$(notdir $(DEB)) && systemctl is-active xdebbied; xdebbied --version" || exit 1; \
+	  ssh -t $(SSH_USER)@$$h "sudo apt install -y --reinstall -o Dpkg::Options::=--force-confold /tmp/$(notdir $(DEB)) && systemctl is-active xdebbied; xdebbied --version" || exit 1; \
 	done
 
 tag:
