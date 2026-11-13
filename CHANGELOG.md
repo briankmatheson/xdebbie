@@ -5,6 +5,17 @@ All notable changes to XDebbie will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.2] - 2026-11-13
+
+### Added
+- capx: `XDEBBIE_CA` (`--xdebbie-ca`) — the CA that signs xdebbied's API
+  certificate, as a PEM file path or the PEM text itself (a Secret key).
+  Needed since xdebbied's API went https: a capx still pointed at
+  `http://…:7443` fails every call, and VMs of a deleted cluster are
+  never torn down (their `XDebbie8sMachine`s sit on the finalizer with
+  `error sending request for url (http://…)`). Without it an `https://`
+  URL warns that only the system roots are trusted.
+
 ## [0.16.1] - 2026-11-13
 
 ### Changed

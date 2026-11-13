@@ -31,6 +31,11 @@ enum Cmd {
         xdebbie_url: String,
         #[arg(long, env = "XDEBBIE_TOKEN", hide_env_values = true)]
         xdebbie_token: Option<String>,
+        /// CA that signs xdebbied's API certificate (an https:// XDEBBIE_URL
+        /// with the cluster CA): a PEM file path, or the PEM text itself as
+        /// it comes out of a Secret key.
+        #[arg(long, env = "XDEBBIE_CA", hide_env_values = true)]
+        xdebbie_ca: Option<String>,
         /// Served version of the CAPI core API to read Cluster / Machine from.
         #[arg(long, env = "CAPI_VERSION", default_value = "v1beta2")]
         capi_version: String,
@@ -58,13 +63,18 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Run {
             xdebbie_url,
             xdebbie_token,
+            xdebbie_ca,
             capi_version,
             namespace,
         } => {
             let client = Client::try_default().await?;
             let ctx = Arc::new(controller::Ctx {
                 client: client.clone(),
-                xdebbie: xdebbie::XDebbie8s::new(xdebbie_url, xdebbie_token),
+                xdebbie: xdebbie::XDebbie8s::new(
+                    xdebbie_url,
+                    xdebbie_token,
+                    xdebbie_ca.as_deref(),
+                )?,
                 capi_version,
             });
             let (fc, fm): (Api<crd::XDebbie8sCluster>, Api<crd::XDebbie8sMachine>) =

@@ -57,6 +57,11 @@ No configuration, no coordination service, no shared storage. Just `dpkg -i` and
 | `xdctl` | `xdctl` | CLI for hosts, VMs, failure domains, drain, migrate |
 | `capx` | `capx` | Cluster API infrastructure provider (contract **v1beta2**) |
 
+`capx run` reads `XDEBBIE_URL`, `XDEBBIE_TOKEN` and `XDEBBIE_CA` (the
+cluster CA that signs the API certificate — a PEM path or the PEM text,
+e.g. a Secret key); the same three variables `/etc/xdebbie/xdebbie_env`
+exports for `xdctl`.
+
 ## How It Works
 
 ### Discovery & Election
