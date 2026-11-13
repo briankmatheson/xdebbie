@@ -219,12 +219,14 @@ pub fn vm_disk_abe_name(vm: uuid::Uuid, role: DiskRole) -> String {
     format!("vm-{vm}-{r}")
 }
 
+/// `/version` per ABE url, with when it was asked. `None`: a pre-0.4.0
+/// ABE (404).
+type FeatureCache = HashMap<String, (Instant, Option<AbeFeatures>)>;
+
 #[derive(Clone)]
 pub struct Client {
     http: reqwest::Client,
-    /// `/version` per ABE url, with when it was asked. `None`: a pre-0.4.0
-    /// ABE (404).
-    features: Arc<Mutex<HashMap<String, (Instant, Option<AbeFeatures>)>>>,
+    features: Arc<Mutex<FeatureCache>>,
     /// ABEs we already warned about being old, so the log says it once.
     legacy_logged: Arc<Mutex<HashSet<String>>>,
 }

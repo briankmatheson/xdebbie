@@ -11,4 +11,4 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
       - name: CRDs are up to date
-        run: cargo run -q -p capq -- crds | diff - deploy/crds.yaml
+        run: cargo run -q -p capx -- crds | diff - deploy/crds.yaml

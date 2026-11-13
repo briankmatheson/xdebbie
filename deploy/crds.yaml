@@ -3,18 +3,18 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   labels:
-    cluster.x-k8s.io/provider: infrastructure-qfodufk8s
+    cluster.x-k8s.io/provider: infrastructure-xdebbie
     cluster.x-k8s.io/v1beta2: v1alpha1
     clusterctl.cluster.x-k8s.io: ''
-  name: qfodufk8sclusters.infrastructure.cluster.x-k8s.io
+  name: xdebbie8sclusters.infrastructure.cluster.x-k8s.io
 spec:
   group: infrastructure.cluster.x-k8s.io
   names:
-    kind: Qfodufk8sCluster
-    plural: qfodufk8sclusters
+    kind: XDebbie8sCluster
+    plural: xdebbie8sclusters
     shortNames:
     - fc
-    singular: qfodufk8scluster
+    singular: xdebbie8scluster
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
@@ -30,7 +30,7 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Auto-generated derived type for Qfodufk8sClusterSpec via `CustomResource`
+        description: Auto-generated derived type for XDebbie8sClusterSpec via `CustomResource`
         properties:
           spec:
             properties:
@@ -39,7 +39,7 @@ spec:
                   host: ''
                   port: 0
                 description: |-
-                  The API server endpoint. Qfodufk8s does not run load balancers; point this
+                  The API server endpoint. XDebbie8s does not run load balancers; point this
                   at a VIP managed by kube-vip (static pod on control-plane VMs) or an
                   external LB. Required by the CAPI contract.
                 properties:
@@ -112,7 +112,7 @@ spec:
             type: object
         required:
         - spec
-        title: Qfodufk8sCluster
+        title: XDebbie8sCluster
         type: object
     served: true
     storage: true
@@ -123,22 +123,22 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   labels:
-    cluster.x-k8s.io/provider: infrastructure-qfodufk8s
+    cluster.x-k8s.io/provider: infrastructure-xdebbie
     cluster.x-k8s.io/v1beta2: v1alpha1
     clusterctl.cluster.x-k8s.io: ''
-  name: qfodufk8sclustertemplates.infrastructure.cluster.x-k8s.io
+  name: xdebbie8sclustertemplates.infrastructure.cluster.x-k8s.io
 spec:
   group: infrastructure.cluster.x-k8s.io
   names:
-    kind: Qfodufk8sClusterTemplate
-    plural: qfodufk8sclustertemplates
-    singular: qfodufk8sclustertemplate
+    kind: XDebbie8sClusterTemplate
+    plural: xdebbie8sclustertemplates
+    singular: xdebbie8sclustertemplate
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Auto-generated derived type for Qfodufk8sClusterTemplateSpec via `CustomResource`
+        description: Auto-generated derived type for XDebbie8sClusterTemplateSpec via `CustomResource`
         properties:
           spec:
             properties:
@@ -151,7 +151,7 @@ spec:
                           host: ''
                           port: 0
                         description: |-
-                          The API server endpoint. Qfodufk8s does not run load balancers; point this
+                          The API server endpoint. XDebbie8s does not run load balancers; point this
                           at a VIP managed by kube-vip (static pod on control-plane VMs) or an
                           external LB. Required by the CAPI contract.
                         properties:
@@ -177,7 +177,7 @@ spec:
             type: object
         required:
         - spec
-        title: Qfodufk8sClusterTemplate
+        title: XDebbie8sClusterTemplate
         type: object
     served: true
     storage: true
@@ -186,18 +186,18 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   labels:
-    cluster.x-k8s.io/provider: infrastructure-qfodufk8s
+    cluster.x-k8s.io/provider: infrastructure-xdebbie
     cluster.x-k8s.io/v1beta2: v1alpha1
     clusterctl.cluster.x-k8s.io: ''
-  name: qfodufk8smachines.infrastructure.cluster.x-k8s.io
+  name: xdebbie8smachines.infrastructure.cluster.x-k8s.io
 spec:
   group: infrastructure.cluster.x-k8s.io
   names:
-    kind: Qfodufk8sMachine
-    plural: qfodufk8smachines
+    kind: XDebbie8sMachine
+    plural: xdebbie8smachines
     shortNames:
     - fm
-    singular: qfodufk8smachine
+    singular: xdebbie8smachine
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
@@ -219,10 +219,16 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Auto-generated derived type for Qfodufk8sMachineSpec via `CustomResource`
+        description: Auto-generated derived type for XDebbie8sMachineSpec via `CustomResource`
         properties:
           spec:
             properties:
+              dataDiskGib:
+                description: Optional extra raw disk attached as /dev/vdb.
+                format: uint64
+                minimum: 0.0
+                nullable: true
+                type: integer
               diskGib:
                 format: uint64
                 minimum: 0.0
@@ -240,7 +246,13 @@ spec:
                 minimum: 0.0
                 type: integer
               providerID:
-                description: Set by capq to `qfodufk8s://<vm-uuid>`. Never set this yourself.
+                description: Set by capx to `xdebbie://<vm-uuid>`. Never set this yourself.
+                nullable: true
+                type: string
+              storage:
+                description: |-
+                  `local` (default): disks in the host's pool/LVM. `abe`: NVMe/TCP
+                  volumes from the host's ABE exporter, attachable from any host.
                 nullable: true
                 type: string
               strictAntiAffinity:
@@ -319,7 +331,7 @@ spec:
             type: object
         required:
         - spec
-        title: Qfodufk8sMachine
+        title: XDebbie8sMachine
         type: object
     served: true
     storage: true
@@ -330,24 +342,24 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   labels:
-    cluster.x-k8s.io/provider: infrastructure-qfodufk8s
+    cluster.x-k8s.io/provider: infrastructure-xdebbie
     cluster.x-k8s.io/v1beta2: v1alpha1
     clusterctl.cluster.x-k8s.io: ''
-  name: qfodufk8smachinetemplates.infrastructure.cluster.x-k8s.io
+  name: xdebbie8smachinetemplates.infrastructure.cluster.x-k8s.io
 spec:
   group: infrastructure.cluster.x-k8s.io
   names:
-    kind: Qfodufk8sMachineTemplate
-    plural: qfodufk8smachinetemplates
+    kind: XDebbie8sMachineTemplate
+    plural: xdebbie8smachinetemplates
     shortNames:
     - fmt
-    singular: qfodufk8smachinetemplate
+    singular: xdebbie8smachinetemplate
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Auto-generated derived type for Qfodufk8sMachineTemplateSpec via `CustomResource`
+        description: Auto-generated derived type for XDebbie8sMachineTemplateSpec via `CustomResource`
         properties:
           spec:
             properties:
@@ -355,6 +367,12 @@ spec:
                 properties:
                   spec:
                     properties:
+                      dataDiskGib:
+                        description: Optional extra raw disk attached as /dev/vdb.
+                        format: uint64
+                        minimum: 0.0
+                        nullable: true
+                        type: integer
                       diskGib:
                         format: uint64
                         minimum: 0.0
@@ -372,7 +390,13 @@ spec:
                         minimum: 0.0
                         type: integer
                       providerID:
-                        description: Set by capq to `qfodufk8s://<vm-uuid>`. Never set this yourself.
+                        description: Set by capx to `xdebbie://<vm-uuid>`. Never set this yourself.
+                        nullable: true
+                        type: string
+                      storage:
+                        description: |-
+                          `local` (default): disks in the host's pool/LVM. `abe`: NVMe/TCP
+                          volumes from the host's ABE exporter, attachable from any host.
                         nullable: true
                         type: string
                       strictAntiAffinity:
@@ -399,7 +423,7 @@ spec:
             type: object
         required:
         - spec
-        title: Qfodufk8sMachineTemplate
+        title: XDebbie8sMachineTemplate
         type: object
     served: true
     storage: true

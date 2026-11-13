@@ -805,7 +805,7 @@ fn cmd_version(api: &mut Api, cli: &Cli) -> Result<()> {
     }
 
     let host = |v: &serde_json::Value| v["hostname"].as_str().unwrap_or("?").to_string();
-    let local_host = local_ver.as_ref().map(&host);
+    let local_host = local_ver.as_ref().map(host);
     let leader_host = leader_ver.as_ref().map(|(_, v)| host(v));
     let w = [
         Some("hostname".to_string()),
@@ -819,8 +819,8 @@ fn cmd_version(api: &mut Api, cli: &Cli) -> Result<()> {
     .unwrap_or(8);
 
     println!(
-        "{:<10} {:<14} {:<w$} {}",
-        "component", "version", "hostname", "url"
+        "{:<10} {:<14} {:<w$} url",
+        "component", "version", "hostname"
     );
     println!("{:-<10} {:-<14} {:-<w$} {:-<36}", "", "", "", "");
     println!("{:<10} {:<14} {:<w$}", "xdctl", xdctl_ver, "(client)");

@@ -274,7 +274,7 @@ pub fn join(o: &JoinOptions<'_>) -> Result<Joined> {
                 ),
                 Err(err) => warn!("{err:#}; retrying"),
             }
-            if n % REMIND_EVERY == 0 {
+            if n.is_multiple_of(REMIND_EVERY) {
                 info!(
                     "still waiting for `xdctl approve {}` ({}s)",
                     o.hostname,

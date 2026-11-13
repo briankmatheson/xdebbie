@@ -97,10 +97,10 @@ impl FirewallSpec {
         if let Some(m) = &mesh {
             mesh_ifs.push(m.underlay.clone());
         }
-        if let Some(b) = cfg.dhcp_bridge().or_else(|| Some(bridge.clone())) {
-            if !mesh_ifs.contains(&b) {
-                mesh_ifs.push(b);
-            }
+        if let Some(b) = cfg.dhcp_bridge().or_else(|| Some(bridge.clone()))
+            && !mesh_ifs.contains(&b)
+        {
+            mesh_ifs.push(b);
         }
         let egress = cfg.network.as_ref().and_then(|n| {
             let bridge = cfg.dhcp_bridge().unwrap_or_else(|| bridge.clone());

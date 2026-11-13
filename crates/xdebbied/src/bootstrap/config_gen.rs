@@ -46,6 +46,7 @@ pub fn generate_config(
 /// `network_name` / `pool_name`: what bootstrap ensured exists. Their
 /// bridge and name go into the config; the first discovered network is
 /// only a fallback (libvirt's `default`, often inactive, sorts first).
+#[allow(clippy::too_many_arguments)]
 pub fn generate_config_for(
     resources: &LibvirtResources,
     uri: &str,
