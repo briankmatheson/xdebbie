@@ -253,7 +253,7 @@ enum HostCmd {
         no_control_plane: bool,
         #[arg(long, default_value_t = 4.0)]
         cpu_overcommit: f64,
-        /// ABE API on this host (e.g. http://10.22.0.1:80) for `--storage abe` VMs.
+        /// ABE API on this host (e.g. https://10.22.0.1:443) for `--storage abe` VMs.
         #[arg(long)]
         abe: Option<String>,
         #[arg(long, default_value_t = 4096)]
@@ -1173,8 +1173,8 @@ fn main() -> Result<()> {
                 let hs: Vec<Host> = serde_json::from_value(v)?;
                 let vms: Vec<Vm> = serde_json::from_value(api.call(Method::GET, "/vms", None)?)?;
                 println!(
-                    "{:<12} {:<10} {:<9} {:>11} {:>15} {:>9} {:>13}  STATUS",
-                    "NAME", "FD", "CP", "VCPU", "MEM GiB", "DISK GiB", "ABE GiB"
+                    "{:<12} {:<10} {:<9} {:>11} {:>15} {:>9} {:>13} {:<3}  STATUS",
+                    "NAME", "FD", "CP", "VCPU", "MEM GiB", "DISK GiB", "ABE GiB", "TLS"
                 );
                 for h in hs {
                     let mine: Vec<_> = vms
@@ -1203,8 +1203,14 @@ fn main() -> Result<()> {
                         }
                         None => "-".into(),
                     };
+                    // whether that ABE's API is behind mutual TLS (abe >= 0.5.0)
+                    let tls = match &h.abe_capacity {
+                        Some(c) if c.tls => "yes",
+                        Some(_) => "no",
+                        None => "-",
+                    };
                     println!(
-                        "{:<12} {:<10} {:<9} {:>5}/{:<5} {:>7}/{:<7} {:>9} {:>13}  {status}",
+                        "{:<12} {:<10} {:<9} {:>5}/{:<5} {:>7}/{:<7} {:>9} {:>13} {:<3}  {status}",
                         h.name,
                         h.failure_domain,
                         h.control_plane_eligible,
@@ -1213,7 +1219,8 @@ fn main() -> Result<()> {
                         m / 1024,
                         a.memory_mib / 1024,
                         a.disk_free_gib,
-                        abe_col
+                        abe_col,
+                        tls
                     );
                 }
             }

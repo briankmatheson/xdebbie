@@ -138,6 +138,11 @@ pub struct AbeCapacity {
     pub data_percent: f64,
     #[serde(default)]
     pub metadata_percent: Option<f64>,
+    /// The ABE's API is behind mutual TLS (`/version` says `"tls": true`,
+    /// abe >= 0.5.0). `false` for older ABEs and until `/version` has
+    /// been asked.
+    #[serde(default)]
+    pub tls: bool,
     pub seen: DateTime<Utc>,
 }
 
@@ -886,6 +891,8 @@ mod abe_capacity_tests {
             provisioned_bytes: 60 << 30,
             data_percent: 10.0,
             metadata_percent: Some(5.0),
+            tls: false,
+
             seen: Utc::now(),
         }
     }
@@ -1059,10 +1066,8 @@ mod compat_tests {
                 .get("origin")
                 .is_none()
         );
-        assert!(
-            again["volumes"]["00a108b720bd4d3ab4113ebbfeee1f64"]
-                .get("deleting")
-                .is_none()
-        );
+        assert!(again["volumes"]["00a108b720bd4d3ab4113ebbfeee1f64"]
+            .get("deleting")
+            .is_none());
     }
 }

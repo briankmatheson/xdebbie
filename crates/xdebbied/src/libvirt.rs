@@ -907,7 +907,10 @@ impl Hypervisor for Virsh {
             .utilization(server)
             .await
             .with_context(|| format!("abe utilization on {}", host.name))?;
-        Ok(Some(u.capacity(chrono::Utc::now())))
+        let mut c = u.capacity(chrono::Utc::now());
+        // cached 60 s in the client; a pre-0.4 ABE answers None
+        c.tls = self.abe.features(server).await?.is_some_and(|f| f.tls);
+        Ok(Some(c))
     }
 
     async fn refresh_endpoints(&self, host: &Host, disks: &mut Vec<Disk>) -> Result<bool> {

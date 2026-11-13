@@ -535,6 +535,8 @@ mod tests {
             provisioned_bytes: provisioned_gib << 30,
             data_percent: 10.0,
             metadata_percent: Some(5.0),
+            tls: false,
+
             seen: Utc::now(),
         }
     }
