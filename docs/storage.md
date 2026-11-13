@@ -30,7 +30,7 @@ version yet.
    ```json
    "disks": [
      {"role": "root", "server": "https://10.22.0.1:443", "traddr": "10.22.0.1",
-      "port": "44001", "id": "3f2c…", "bytes": 10737418240, "populated": true,
+      "port": "23000", "id": "3f2c…", "bytes": 10737418240, "populated": true,
       "origin": "b7e1…"},
      {"role": "data", "server": "https://10.22.0.1:443", "traddr": "10.22.0.1",
       "port": "44002", "id": "9a01…", "bytes": 107374182400, "populated": true}
@@ -268,8 +268,9 @@ underlay address: the API admits only cluster certificates and the nvmet
 ports are fenced to their caller, but neither should be reachable from the
 LAN or from guests on the bridge in the first place. The cost is that abe then depends
 on `wg-flock` existing, hence the `After=xdebbied.service` drop-in above.
-ABE opens one TCP port per volume (`44001`, `44002`, …) in the 44000-44999
-range.
+ABE opens one TCP port per volume (`23000`, `23001`, …) in the 23000-23999
+range (abe 0.5.0; earlier versions used 44001-44999, and a volume recorded on
+an old port is moved into the range at abe's next re-export).
 
 ### Firewall
 
@@ -277,7 +278,7 @@ xdebbied's bootstrap sets ufw to default-deny; the ABE ports must be opened
 on the underlay only, which `simple/bin/setup_abe_host.py` does:
 
 ```sh
-sudo ufw allow in on wg-flock proto tcp from 10.22.0.0/16 to any port 44000:44999 comment 'abe nvme/tcp'
+sudo ufw allow in on wg-flock proto tcp from 10.22.0.0/16 to any port 23000:23999 comment 'abe nvme/tcp'
 sudo ufw allow in on wg-flock proto tcp from 10.22.0.0/16 to any port 443 comment 'abe api'
 ```
 
