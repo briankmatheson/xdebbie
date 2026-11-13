@@ -86,6 +86,13 @@ enum Cmd {
         /// bootstrap on the CA box). Without it you are asked to confirm.
         #[arg(long, value_name = "FP", requires = "join")]
         ca_fingerprint: Option<String>,
+        /// Start a new cluster here without listening for an existing one.
+        #[arg(long, conflicts_with = "join")]
+        standalone: bool,
+        /// Without --join/--standalone: seconds to listen for a running
+        /// cluster's announcements before deciding (0 = don't listen).
+        #[arg(long, default_value_t = bootstrap::discover::DEFAULT_LISTEN_SECS, value_name = "SECS")]
+        discover_secs: u64,
     },
 }
 
@@ -110,6 +117,8 @@ fn main() -> anyhow::Result<()> {
             r#box,
             join,
             ca_fingerprint,
+            standalone,
+            discover_secs,
         }) => {
             let opts = bootstrap::BootstrapOptions {
                 config_path: cli.config.clone(),
@@ -122,6 +131,8 @@ fn main() -> anyhow::Result<()> {
                 box_id: *r#box,
                 join: join.clone(),
                 ca_fingerprint: ca_fingerprint.clone(),
+                standalone: *standalone,
+                discover_secs: *discover_secs,
                 ..Default::default()
             };
             bootstrap::bootstrap(&opts)?;

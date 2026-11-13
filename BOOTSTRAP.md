@@ -192,9 +192,20 @@ token. That is how a new box gets the token in the first place.
 
 ### Joining a cluster: enrolment and approval
 
-Nothing to copy by hand. On the box bootstrapped first (the CA box),
-bootstrap prints the CA fingerprint and the exact command to run
-elsewhere. On the new box:
+Nothing to copy by hand. A plain `sudo xdebbied bootstrap --box 1` on a
+new box first **listens 20 s on the discovery group** (239.0.0.42:7442)
+for a running cluster. If it hears one it shows what it found (leader
+first) and asks `Join it via https://gram…:7443? [Y/n/other URL]`; if it
+hears nothing it asks for a URL, and Enter means "this is the first box"
+(a new cluster; this box keeps the CA key). Without a terminal — the
+package's first-install bootstrap — a found cluster is an error telling
+you to re-run with `--join`, never a silent second cluster; silence means
+first box. Skip the listening with `--join <url>` or `--standalone`
+(`--discover-secs N` tunes it, 0 disables). A box that already holds the
+CA key, or has `ca_url` in its config, never asks.
+
+Explicitly, with the CA fingerprint that bootstrap printed on the CA box
+(or `xdctl ca`):
 
 ```bash
 sudo xdebbied bootstrap --box 1 --join https://gram.example.net:7443 \

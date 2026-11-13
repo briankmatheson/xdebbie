@@ -8,6 +8,7 @@
 pub mod api_tls;
 pub mod config_gen;
 pub mod deps;
+pub mod discover;
 pub mod firewall;
 pub mod join;
 pub mod libvirt_setup;
@@ -51,6 +52,13 @@ pub struct BootstrapOptions {
     pub join: Option<String>,
     /// Pinned `sha256:` fingerprint of that cluster CA.
     pub ca_fingerprint: Option<String>,
+    /// Do not look for a running cluster: this box starts one.
+    pub standalone: bool,
+    /// How long to listen for a running cluster when neither `join` nor
+    /// `standalone` is given.
+    pub discover_secs: u64,
+    /// Multicast group to listen on.
+    pub multicast_addr: String,
 }
 
 impl Default for BootstrapOptions {
@@ -69,6 +77,9 @@ impl Default for BootstrapOptions {
             box_id: 0,
             join: None,
             ca_fingerprint: None,
+            standalone: false,
+            discover_secs: discover::DEFAULT_LISTEN_SECS,
+            multicast_addr: crate::discovery::multicast::DEFAULT_MULTICAST_ADDR.to_string(),
         }
     }
 }
@@ -173,6 +184,31 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     if let Err(e) = ensure_xdebbie_group() {
         warn!("Could not create xdebbie group: {e:#}; config files will be root:root 0400");
     }
+
+    // Step 0b: Which cluster? Explicit --join / --standalone win. A box that
+    // already has an identity (CA key here, or ca_url in its config) keeps
+    // it. Otherwise listen for a running cluster and ask.
+    let mut opts = opts.clone();
+    if opts.join.is_none() && !opts.standalone {
+        let tls = api_tls::ApiTlsPaths::default();
+        let known_ca_url = crate::config::Config::load(&opts.config_path).ok().and_then(|c| c.ca_url);
+        if tls.is_ca() {
+            info!("This box holds the cluster CA; not looking for another cluster");
+        } else if let Some(u) = known_ca_url {
+            info!("Config says ca_url = {u}; re-joining that cluster");
+            opts.join = Some(u);
+        } else {
+            let hostname = libvirt_setup::get_hostname();
+            match discover::choose(&opts.multicast_addr, std::time::Duration::from_secs(opts.discover_secs), &hostname)? {
+                discover::Choice::Join(url) => {
+                    info!("Joining the cluster at {url}");
+                    opts.join = Some(url);
+                }
+                discover::Choice::First => info!("Starting a new cluster: this box will hold the CA"),
+            }
+        }
+    }
+    let opts = &opts;
 
     // Step 1: Check dependencies
     info!("Step 1/8: Checking dependencies");

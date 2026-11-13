@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `POST /v1/enroll/{id}/{approve,deny}` (forwarded to the CA box via the
   new `ca_url` config key), `GET /v1/enroll/token` (client cert only),
   `GET /v1/ca` (public; `X-Xdebbie-CA-Fingerprint` header).
+- `xdebbied bootstrap` with no `--join` listens 20 s for a running
+  cluster's discovery announcements and offers to join it (leader first);
+  hearing nothing, it asks for a URL, Enter = first box. Non-interactive
+  (package install): a found cluster is an error pointing at `--join`.
+  `--standalone` and `--discover-secs N` (0 = off) skip the wait.
 - xdctl: `enroll ls [--all]`, `enroll approve|deny`, `approve <host>`, `ca`.
 - Config: `ca_key` (default `/etc/xdebbie/api-ca-key.pem`), `ca_url`
   (set by `--join`, kept across `--force`; a new `--join` replaces it).
