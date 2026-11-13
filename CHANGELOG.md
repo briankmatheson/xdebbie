@@ -8,6 +8,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.15.0] - unreleased
 
 ### Added
+- ABE 0.4.0 client. `GET /version` is probed once a minute per server;
+  a 404 means a pre-0.4 ABE and the daemon logs `abe at <url> predates
+  0.4.0: no thin root clones, no name idempotency` once and keeps the 0.14
+  behaviour. Every create carries `?name=` (`vol-<name>` for standalone
+  volumes, `vm-<uuid>-root`/`-data` for VM disks), so a retry after a crash
+  gets the same volume back instead of a second one.
+- Thin root clones. With `base` and `clone` features the root disk of a
+  `storage = abe` VM is a thin clone of a per-image base volume
+  (`?base=<image>`, filled once with `qemu-img convert`, flushed and
+  `/seal`ed under a per-(server, image) lock). `Vm.disks[].origin` records
+  the base. Provisioning takes seconds instead of a full image copy;
+  `disk_gib` smaller than the image's virtual size is refused.
+- ABE capacity accounting. The inventory polls `GET /utilization` into
+  `Host.abeCapacity` (kept on error, treated as unknown when older than
+  `host_stale_secs`). ABE VMs are placed by `abe_fit`: `no abe`, `abe
+  capacity unknown`, `abe pool full` (`abe_max_data_percent` /
+  `abe_max_metadata_percent`, defaults 85/80) or `abe capacity`
+  (`provisioned + pending + request > bytes × abe_overcommit`, default 1.0)
+  keep the VM `Pending` with the reasons in `message`; the libvirt pool is
+  no longer consulted for them. Pending disks and in-flight `POST
+  /v1/volumes` count. `xdctl host ls` shows an `ABE GiB` column.
+- Endpoint refresh. Before a cold start, before provisioning a VM whose
+  disks exist and before attaching a standalone volume, the daemon asks
+  `GET /id/<id>` where each unconnected disk is exported now; if ABE moved
+  it (restart, lowest-free port) the stale controller is dropped, the
+  record updated and `abe moved <id> from <old> to <new>; record updated`
+  logged.
+- `POST /v1/volumes` picks the ABE host with the most headroom (ties by
+  name) and answers **507** when none fits; creates are serialized per
+  name, so five concurrent POSTs of one name make one ABE call (one 201,
+  four 200). `Volume.deleting`: DELETE marks the record first, answers
+  **502** if ABE fails and leaves the flag (attach → 409 `volume is being
+  deleted`, the reconciler never attaches it); a second DELETE retries.
+- `tests/abe/run.sh` runs five phases against a fake ABE 0.4.0 (thin,
+  legacy, crash after `/seal`, capacity, no ABE host); `tests/lint-links.sh`
+  fails on the k-less spelling of the GitHub account in repo links.
 - `bootstrap --join` copies the overlay `[network]` from the CA box
   (`GET /v1/network` over mTLS): same `cidr`/`gateway`/`dns`/`domain`, its
   reservations plus its gateway, and this box's own pool slice
@@ -27,6 +63,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for a joined box.
 
 ### Fixed
+- `docs/storage.md` and this changelog linked ABE at a misspelt GitHub
+  account (the k was missing); fixed and guarded by `tests/lint-links.sh`.
 - Bootstrap wrote the bridge of whichever libvirt network sorted first
   (`default`/`virbr0`, usually inactive) into `[mesh]` and `[[hosts]]`
   instead of the `xdebbie` network it had just ensured. The mesh then sat on
