@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   address, not only the default route's. A box whose default route leaves by
   a bridge or VPN no longer goes deaf to peers on the LAN.
 
+### Added
+- `bootstrap --join` copies the overlay `[network]` from the CA box
+  (`GET /v1/network` over mTLS): same `cidr`/`gateway`/`dns`/`domain`, its
+  reservations plus its gateway, and this box's own pool slice
+  (`cidr + box·256`). Added to a kept config that lacks `[network]`, in
+  place of the template in a regenerated one. Warns if the CA box's pool
+  overlaps the slice.
+
 ### Fixed
 - Bootstrap wrote the bridge of whichever libvirt network sorted first
   (`default`/`virbr0`, usually inactive) into `[mesh]` and `[[hosts]]`

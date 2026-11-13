@@ -339,6 +339,26 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     };
     info!("Mesh box id: {box_id}");
 
+    // A joiner copies the overlay the cluster already runs ([network] on
+    // the CA box) so every box agrees on cidr/gateway and this one gets its
+    // own slice to allocate from.
+    let cluster_net = match &opts.join {
+        Some(ca_url) => match join::fetch_network(ca_url, &api_tls_paths) {
+            Ok(Some(n)) => {
+                info!("Cluster overlay: {} gateway {} (from {ca_url})", n.cidr, n.gateway);
+                Some(n)
+            }
+            Ok(None) => {
+                info!("The CA box has no [network]; this box's [network] is generated locally");
+                None
+            }
+            Err(e) => {
+                warn!("Could not read the cluster's network from {ca_url}: {e:#}; [network] is generated locally");
+                None
+            }
+        },
+        None => None,
+    };
 
     // Step 4: Create resources if needed
     info!("Step 5/8: Ensuring required resources exist");
@@ -406,9 +426,23 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     info!("Step 6/8: Generating configuration");
     
     let exists = opts.config_path.exists();
+    if let Some(n) = &cluster_net {
+        let bridge = resources.networks.iter().find(|x| x.name == opts.network_name).map(|x| x.bridge.as_str()).unwrap_or("virbr-xdebbie");
+        for w in config_gen::network_block(n, box_id, bridge).1 {
+            warn!("{w}");
+        }
+    }
     if exists && !opts.force {
-        // A kept config still learns what the cluster decided: the box id
-        // and, for a joiner, which box holds the CA. Nothing else is touched.
+        // A kept config still learns what the cluster decided: the box id,
+        // for a joiner which box holds the CA, and a [network] if it has
+        // none yet. Nothing else is touched.
+        let net_block: Option<String> = match (&cluster_net, config_gen::config_parses(&opts.config_path)) {
+            (Some(n), Ok(())) if !config_gen::has_table(&std::fs::read_to_string(&opts.config_path)?, "network") => {
+                let bridge = resources.networks.iter().find(|x| x.name == opts.network_name).map(|x| x.bridge.as_str()).unwrap_or("virbr-xdebbie");
+                Some(config_gen::network_block(n, box_id, bridge).0)
+            }
+            _ => None,
+        };
         let existing_ca_url = crate::config::Config::load(&opts.config_path).ok().and_then(|c| c.ca_url);
         let want_ca_url = opts.join.as_deref().map(|u| u.trim_end_matches('/').to_string());
         let box_moves = existing_box.is_some_and(|b| b != box_id);
@@ -425,8 +459,17 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
                     c = config_gen::set_top_level(&c, "ca_url", &format!("{u:?}"));
                     what.push(format!("ca_url = {u:?}"));
                 }
+                if let Some(block) = &net_block {
+                    c = config_gen::append_table(&c, block);
+                    what.push("[network] (copied from the cluster)".to_string());
+                }
                 config_gen::write_config(&opts.config_path, &c)?;
                 info!("Configuration kept at {}; set {}", opts.config_path.display(), what.join(", "));
+            }
+            Ok(()) if net_block.is_some() => {
+                let c = config_gen::append_table(&std::fs::read_to_string(&opts.config_path)?, net_block.as_deref().unwrap());
+                config_gen::write_config(&opts.config_path, &c)?;
+                info!("Configuration kept at {}; added [network] copied from the cluster", opts.config_path.display());
             }
             Ok(()) => info!(
                 "Configuration already exists at {}, skipping (use --force to regenerate)",
@@ -438,7 +481,7 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
         }
     } else {
         let generated =
-            config_gen::generate_config_for(&resources, &opts.libvirt_uri, created_subnet.as_deref(), box_id, opts.join.as_deref(), &opts.network_name, &opts.pool_name);
+            config_gen::generate_config_for(&resources, &opts.libvirt_uri, created_subnet.as_deref(), box_id, opts.join.as_deref(), &opts.network_name, &opts.pool_name, cluster_net.as_ref());
         let content = if exists {
             let bak = config_gen::back_up(&opts.config_path)?;
             info!("Previous configuration saved as {}", bak.display());

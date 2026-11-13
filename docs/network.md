@@ -75,7 +75,10 @@ same on every meshed box. `pool_start`/`pool_end` are per box: with
 independent control planes on one overlay, give each box a disjoint slice
 (`10.23.1.0–10.23.1.255` on box 1, `10.23.2.0–…` on box 2, …) so two
 allocators never pick the same address. `reserved` is where the other
-boxes' bridge addresses go.
+boxes' bridge addresses go. `xdebbied bootstrap --join` writes exactly this
+for a joiner, copied from the CA box's `/v1/network` (BOOTSTRAP.md,
+"Joining a cluster"); the first box should set `pool_end` to the end of its
+own slice (`10.23.0.255`) rather than allocate from the whole subnet.
 
 `spec.ip` may be any free host address in `cidr`, inside the pool or not —
 pinning infrastructure addresses outside the pool is the intended use.

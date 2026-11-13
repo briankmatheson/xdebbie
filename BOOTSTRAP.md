@@ -236,6 +236,17 @@ only) and writes `/etc/xdebbie/token` and `xdebbie_env`. Bootstrap then
 finishes as usual. The joiner's config gets `ca_url = "https://gram…"`
 so later `xdctl approve` calls made against it are forwarded.
 
+The joiner also copies the **overlay network** from the CA box
+(`GET /v1/network` over mTLS): same `cidr`, `gateway`, `dns` and `domain`,
+the CA box's `reserved` plus its gateway, and this box's own allocation
+slice — 256 addresses at `cidr + box·256` (an eighth of the subnet when the
+prefix is longer than /21), so pools are disjoint by construction
+(docs/network.md). A kept config gains the block only if it has no live
+`[network]`; a regenerated one gets it in place of the template. If the CA
+box still allocates from the whole subnet, bootstrap warns with the
+`pool_end` to set there. No `[network]` on the CA box means the joiner's is
+generated locally, as for a first box.
+
 Re-running `bootstrap --join` resumes a pending enrolment (state in
 `/var/lib/xdebbie/join.json`); `--force` starts over with a new key.
 Pending requests live in `/var/lib/xdebbie/enroll.json` on the CA box

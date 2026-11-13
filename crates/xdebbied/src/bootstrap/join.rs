@@ -265,3 +265,21 @@ pub fn join(o: &JoinOptions<'_>) -> Result<Joined> {
     info!("Received the cluster token ({})", crate::token::fingerprint(&set.current));
     Ok(Joined { tokens: set, box_id: e.box_id })
 }
+
+/// The CA box's `[network]` as it serves it (`GET /v1/network`), for a
+/// joiner to copy the overlay from. `None` when that box has no `[network]`.
+/// Uses the certificate installed by [`join`]; call after it.
+pub fn fetch_network(ca_url: &str, paths: &ApiTlsPaths) -> Result<Option<crate::dhcp::NetworkStatus>> {
+    let ca_url = ca_url.trim_end_matches('/');
+    let ca_pem = std::fs::read_to_string(&paths.ca_cert)?;
+    let cert = std::fs::read_to_string(&paths.server_cert)?;
+    let key = std::fs::read_to_string(&paths.server_key)?;
+    let identity = reqwest::Identity::from_pem(format!("{cert}\n{key}").as_bytes()).context("client identity")?;
+    let c = trusted_client(&ca_pem, Some(identity))?;
+    let r = c.get(format!("{ca_url}/v1/network")).send().context("fetching the cluster network")?;
+    match r.status() {
+        s if s.is_success() => Ok(Some(r.json().context("parsing /v1/network")?)),
+        reqwest::StatusCode::NOT_FOUND => Ok(None),
+        s => bail!("{ca_url}/v1/network: {s}: {}", r.text().unwrap_or_default()),
+    }
+}
