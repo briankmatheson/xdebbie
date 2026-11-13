@@ -1255,6 +1255,7 @@ fn main() -> Result<()> {
             } => {
                 let h = Host {
                     abe,
+                    agent: None,
                     name: name.clone(),
                     uri,
                     failure_domain,

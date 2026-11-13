@@ -3,7 +3,11 @@
 ## Design goals
 
 1. **Nothing on the hosts but libvirt.** No agent to upgrade, no daemon to
-   secure. A host is a URI.
+   secure. A host is a URI. (In a cluster, each box's own xdebbied is the
+   leader's hands on that box: thin-pool disks and NVMe connects are
+   host-local, so the leader asks the daemon there — `/v1/agent/*`,
+   docs/autodiscovery.md — rather than libvirt over TLS. There is still
+   nothing to install beyond xdebbied itself.)
 2. **One source of truth.** xdebbied owns desired state; libvirt reports
    actual state; the reconciler closes the gap.
 3. **Idempotent everything.** Every API write can be retried; every

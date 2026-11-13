@@ -42,6 +42,13 @@ pub struct Host {
     /// are scheduled on; any host can attach them later.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub abe: Option<String>,
+    /// API URL of the xdebbied running on this host (`https://box:7443`),
+    /// set by that daemon when it registers the host with the leader. The
+    /// leader hands host-local work (thin-pool disks, NVMe connects, the
+    /// seed image, libvirt) to it instead of reaching over `uri`. Absent
+    /// for a host added by hand: then `uri` is all there is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
     /// What this host's ABE reported last (`GET /utilization`); filled by
     /// the inventory loop, never set from config.
     #[serde(

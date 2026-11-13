@@ -121,11 +121,31 @@ keeps its job unless clearly beaten.
 - `7443/tcp` reachable between boxes and from clients at the advertised
   URL.
 
-## Known gap: the store is per box
+## The store is per box; followers keep up
 
 Each box keeps its own `state.json`. Everything goes through the leader, so
-the leader's store is the truth and the followers' copies stop moving while
-they follow. On failover the new leader starts from its own, older store.
-Replicating the leader's state to followers is the next step; until then
-treat a leader change as a reason to re-check `xdctl host ls` and
-`xdctl vm ls`.
+the leader's store is the truth. Two tasks on every follower keep a leader
+change from handing the cluster to a box that knows nothing about it:
+
+- **Registrar** (`registrar.rs`). A `[[hosts]]` entry seeds only the store
+  of the daemon that read it, and nobody reads a follower's store. Every
+  5 s a follower `PUT`s its entries to the leader as other boxes must see
+  them: `uri = qemu+tls://<libvirtd listen address>/system` and
+  `agent = <this box's API URL>`; it repeats a minute later in case the
+  leader's store went backwards. (`bootstrap --join` does the same once,
+  with the CA box; the registrar covers the CA box itself and every later
+  leader.) A VM pinned to a host the leader has not heard of waits in
+  `Pending: pinned elsewhere` until this lands.
+- **Mirror** (`mirror.rs`). Every 5 s a follower pulls `/v1/hosts`,
+  `/v1/vms` and `/v1/volumes` from the leader into its own store (its own
+  `[[hosts]]` entries stay as configured locally). A new leader starts
+  from a copy that is seconds old, and every box holds the VM records its
+  DHCP responder answers from (`[network] leader_only = false`).
+
+The leader drives a host whose `agent` is another box through that box's
+daemon (`POST /v1/agent/<op>`, `agent.rs`): thin-pool disks, NVMe
+connects, the seed image and the base image all live where the VM runs,
+and `qemu+tls://` reaches none of them. Hosts added by hand (no `agent`)
+are driven over their `uri` as before. Live migration between boxes still
+makes the destination's disks from the source box, so LVM-backed VMs do
+not migrate across boxes.

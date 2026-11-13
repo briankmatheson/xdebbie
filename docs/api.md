@@ -54,7 +54,7 @@ public ones.
 |---|---|---|
 | GET | `/v1/hosts` | List hosts, with discovered `capacity`, `lastSeen` and, for hosts with an `abe`, the last `/utilization` reading as `abeCapacity` (`thin`, `bytes`, `usedBytes`, `freeBytes`, `provisionedBytes`, `dataPercent`, `metadataPercent`, `tls` — the ABE's API is behind mutual TLS, abe ≥ 0.5.0 — `seen`) |
 | GET | `/v1/hosts/{name}` | |
-| PUT | `/v1/hosts/{name}` | Upsert. 201 created, 200 updated. Keeps runtime fields |
+| PUT | `/v1/hosts/{name}` | Upsert. 201 created, 200 updated. Keeps runtime fields. `agent` (optional): API URL of the xdebbied on that host; the leader sends host-local work there (set by that daemon's registrar, docs/autodiscovery.md) |
 | DELETE | `/v1/hosts/{name}` | 409 if VMs remain — drain first |
 | POST | `/v1/hosts/{name}/cordon` | No new placements |
 | POST | `/v1/hosts/{name}/uncordon` | |
@@ -85,6 +85,7 @@ Host body:
 | POST | `/v1/vms/{uuid}/reboot` | Running VMs only |
 | POST | `/v1/vms/{uuid}/migrate` | `{"host": "srv2"}` or `{}` for scheduler's choice |
 | POST | `/v1/schedule` | Dry run. Body is a VmSpec; returns ranked hosts or 422 with reasons |
+| POST | `/v1/agent/{op}` | This box, never forwarded: the leader's hypervisor calls for hosts this daemon owns (`inventory`, `state`, `prepare-disks`, `provision`, `start`, `shutdown`, `reboot`, `destroy`, `addresses`, `tap-owners`, `migrate`, `attach-volume`, `detach-volume`). Body `{host, vm, ...}`, reply the call's result; cluster token or peer certificate |
 
 VmSpec:
 

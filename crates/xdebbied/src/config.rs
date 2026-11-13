@@ -290,7 +290,10 @@ impl Config {
     /// `peer_ca_dir`, so self-signed bootstrap certs verify.
     pub fn http_client(&self, timeout: std::time::Duration) -> reqwest::Client {
         use crate::bootstrap::api_tls::{load_ca_cert, load_ca_dir};
-        let mut b = reqwest::Client::builder().use_rustls_tls().timeout(timeout);
+        let mut b = reqwest::Client::builder()
+            .use_rustls_tls()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(timeout);
         let mut n = 0;
         if let Some(c) = load_ca_cert(&self.ca_file) {
             b = b.add_root_certificate(c);

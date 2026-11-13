@@ -301,6 +301,7 @@ mod tests {
             bridge: "br0".into(),
             cpu_overcommit: 1.0,
             abe: None,
+            agent: None,
             abe_capacity: None,
             abe_remote: false,
             abe_overcommit: 1.0,

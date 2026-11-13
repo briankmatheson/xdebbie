@@ -18,7 +18,7 @@ use xdebbie_core::{
 
 use crate::{abe, keyed_lock::KeyedLock, lvm::LvmManager};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DomState {
     Running,
     Off,

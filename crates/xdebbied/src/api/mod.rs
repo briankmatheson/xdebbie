@@ -76,6 +76,8 @@ pub struct App {
     /// Bytes promised to creates in flight, per host; the scheduler counts
     /// them (shared with the reconciler).
     pub abe_ledger: AbeLedger,
+    /// Serves `/v1/agent/*` for the leader; `None` in tests.
+    pub agent: Option<crate::agent::AgentApi>,
 }
 
 /// A ledger entry that is taken back when dropped, however the create
@@ -117,6 +119,11 @@ pub struct ApiErr(StatusCode, String);
 impl IntoResponse for ApiErr {
     fn into_response(self) -> Response {
         (self.0, Json(ApiError { error: self.1 })).into_response()
+    }
+}
+impl ApiErr {
+    pub fn internal(msg: impl Into<String>) -> Self {
+        ApiErr(StatusCode::INTERNAL_SERVER_ERROR, msg.into())
     }
 }
 impl From<anyhow::Error> for ApiErr {
@@ -183,6 +190,11 @@ pub fn router(app: App) -> Router {
         .merge(mesh::router(mesh::MeshApi {
             mesh: app.mesh.clone(),
         }))
+        // Host-local work for the leader (agent.rs): this box, never forwarded.
+        .merge(match &app.agent {
+            Some(a) => crate::agent::router(a.clone()),
+            None => Router::new(),
+        })
         .layer(middleware::from_fn_with_state(
             app.token.clone(),
             authenticate,
@@ -1319,6 +1331,7 @@ mod tests {
             ),
             volume_names: Arc::default(),
             abe_ledger: Arc::default(),
+            agent: None,
         };
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", l.local_addr().unwrap());
@@ -1361,6 +1374,7 @@ mod tests {
             ),
             volume_names: Arc::default(),
             abe_ledger: Arc::default(),
+            agent: None,
         };
         let roots = crate::tls::client_roots(&paths.ca_cert, &dir.path().join("nonexistent"));
         let sc = crate::tls::server_config(&paths.server_cert, &paths.server_key, roots).unwrap();

@@ -2,6 +2,7 @@
 //! xdebbied — a small VM scheduler and lifecycle manager for libvirt hosts.
 
 mod abe;
+mod agent;
 mod api;
 mod bootstrap;
 mod config;
@@ -14,7 +15,9 @@ mod leader;
 mod libvirt;
 mod lvm;
 mod mesh;
+mod mirror;
 mod reconcile;
+mod registrar;
 mod store;
 mod tls;
 mod token;
@@ -362,10 +365,23 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
 
     // Bytes promised to standalone-volume creates still in flight; the API
     // reserves, the scheduler counts them.
+    // Trusts this box's CA and every peer CA in `peer_ca_dir`, so forwarding
+    // to the leader over its self-signed bootstrap cert verifies.
+    let http = cfg.http_client(std::time::Duration::from_secs(300));
+
+    // The leader drives hosts owned by other boxes through their daemons
+    // (agent.rs); an ABE root fill or a migration can take a while.
+    let dispatch = Arc::new(agent::Dispatch {
+        local: hv.clone(),
+        cfg: cfg.clone(),
+        http: cfg.http_client(std::time::Duration::from_secs(1800)),
+        tokens: token.clone(),
+        me: api_url.clone(),
+    });
     let abe_ledger: reconcile::AbeLedger = Arc::default();
     let rec = reconcile::Reconciler {
         store: store.clone(),
-        hv,
+        hv: dispatch,
         cfg: cfg.clone(),
         mesh: Some(mesh.clone()),
         leadership: leadership.clone(),
@@ -374,9 +390,28 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
     tokio::spawn(rec.run());
     tokio::spawn(mesh.clone().run());
 
-    // Trusts this box's CA and every peer CA in `peer_ca_dir`, so forwarding
-    // to the leader over its self-signed bootstrap cert verifies.
-    let http = cfg.http_client(std::time::Duration::from_secs(300));
+    // Followers: tell the leader about this box's hypervisor and shadow
+    // its store (registrar.rs, mirror.rs).
+    tokio::spawn(
+        registrar::Registrar {
+            cfg: cfg.clone(),
+            leadership: leadership.clone(),
+            http: http.clone(),
+            tokens: token.clone(),
+            api_url: api_url.clone(),
+        }
+        .run(),
+    );
+    tokio::spawn(
+        mirror::Mirror {
+            cfg: cfg.clone(),
+            store: store.clone(),
+            leadership: leadership.clone(),
+            http: http.clone(),
+            tokens: token.clone(),
+        }
+        .run(),
+    );
     if let Some(t) = &token {
         tokio::spawn(
             token::Distributor {
@@ -449,6 +484,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         enroll,
         volume_names: Arc::default(),
         abe_ledger,
+        agent: Some(agent::AgentApi { hv, cfg: cfg.clone() }),
     });
     serve(&cfg, listen, app).await
 }
