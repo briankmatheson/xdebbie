@@ -228,6 +228,10 @@ impl CaSigner {
         let mut p = CertificateParams::default();
         p.subject_alt_names = sans.to_vec();
         p.is_ca = IsCa::NoCa;
+        // RFC 5280 wants an Authority Key Identifier on issued certs;
+        // OpenSSL 3 in strict mode (Python >= 3.13's default verify flags)
+        // rejects a chain without one: "Missing Authority Key Identifier".
+        p.use_authority_key_identifier_extension = true;
         p.key_usages = vec![
             KeyUsagePurpose::DigitalSignature,
             KeyUsagePurpose::KeyEncipherment,

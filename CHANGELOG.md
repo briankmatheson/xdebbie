@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.16.6] - 2026-11-13
 
 ### Fixed
+- Issued API certificates carry an Authority Key Identifier. OpenSSL 3 in
+  strict mode (Python 3.13's default) refused the chain without it:
+  "Missing Authority Key Identifier". Existing certs are not reissued;
+  remove `api-cert.pem` and re-run `xdebbied bootstrap` to get a new one.
 - `virsh start` on a domain that is already running is a no-op instead of
   an error. A VM whose domain briefly looked missing (e.g. across a daemon
   upgrade) was pushed back to `Provisioning` and then stuck there forever on
