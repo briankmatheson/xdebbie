@@ -54,7 +54,10 @@ pub fn hosts_for_placement(
             {
                 h.abe_capacity = None;
             }
-            h.abe_remote = !crate::libvirt::uri_is_local(&h.uri);
+            // A host with an `agent` is driven through its own daemon, which
+            // runs `nvme connect` on its own box; only agentless remote hosts
+            // are out of reach.
+            h.abe_remote = h.agent.is_none() && !crate::libvirt::uri_is_local(&h.uri);
             h
         })
         .collect()

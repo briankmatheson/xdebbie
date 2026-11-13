@@ -219,7 +219,7 @@ pub fn place(
             // Only the seed ISO lands in the libvirt pool; the disks come
             // from the host's ABE, which has its own accounting.
             if h.abe_remote {
-                reject("abe on a remote host (nvme connect runs on the leader)");
+                reject("abe on a remote host without an agent (nvme connect runs on the leader)");
                 continue;
             }
             let pend = pending.get(h.name.as_str()).copied().unwrap_or(0);
@@ -614,7 +614,7 @@ mod tests {
         assert_eq!(
             r,
             Err(PlacementError::NoFit(
-                "1×abe on a remote host (nvme connect runs on the leader)".into()
+                "1×abe on a remote host without an agent (nvme connect runs on the leader)".into()
             ))
         );
     }

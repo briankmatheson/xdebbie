@@ -58,10 +58,10 @@ pub struct Host {
     )]
     pub abe_capacity: Option<AbeCapacity>,
     /// Set by the leader for placement only (never stored or served): this
-    /// host's libvirt URI is remote from the leader, so the leader cannot run
-    /// `nvme connect` there. `storage = abe` VMs are not placed on it until
-    /// the follower daemon does the attach (docs/storage.md, "What is not
-    /// done").
+    /// host's libvirt URI is remote from the leader and it has no `agent`,
+    /// so nobody can run `nvme connect` there. `storage = abe` VMs are not
+    /// placed on it. Hosts registered by a follower daemon carry an `agent`
+    /// and are driven through it (docs/autodiscovery.md).
     #[serde(skip)]
     pub abe_remote: bool,
     /// Thin pools: the sum of volume sizes may reach `bytes × overcommit`.

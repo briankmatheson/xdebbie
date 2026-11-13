@@ -484,7 +484,10 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         enroll,
         volume_names: Arc::default(),
         abe_ledger,
-        agent: Some(agent::AgentApi { hv, cfg: cfg.clone() }),
+        agent: Some(agent::AgentApi {
+            hv,
+            cfg: cfg.clone(),
+        }),
     });
     serve(&cfg, listen, app).await
 }

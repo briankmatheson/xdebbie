@@ -5,6 +5,42 @@ All notable changes to XDebbie will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.5] - 2026-11-13
+
+### Added
+- Followers register their hypervisor with whoever leads
+  (`registrar.rs`): every 5 s each `[[hosts]]` entry is `PUT` to the
+  leader with `uri = qemu+tls://<libvirtd listen address>/system` and the
+  new `Host.agent` (this daemon's API URL), again a minute later in case
+  the leader's store went backwards. Until now only `bootstrap --join`
+  registered, once, with the CA box — so after a restart handed leadership
+  to the joiner, the CA box's own host was unknown to the leader and a VM
+  pinned there sat in `Pending: no host satisfies the request: 1×pinned
+  elsewhere`.
+- Followers mirror the leader's store (`mirror.rs`): `/v1/hosts`,
+  `/v1/vms` and `/v1/volumes` every 5 s into the local `state.json` (own
+  `[[hosts]]` entries kept as configured). A new leader starts from a copy
+  seconds old instead of whatever its store held when it last led, and
+  every box holds the VM records its DHCP responder answers from.
+- The leader drives a host whose `agent` is another box through that
+  box's daemon (`agent.rs`, `POST /v1/agent/<op>`, served by every box
+  for itself, cluster token or peer certificate): the thin pool a root
+  disk is carved from, the NVMe connects, the seed image and the base
+  image live where the VM runs, which `qemu+tls://` from the leader
+  cannot reach. `attach_volume`/`detach_volume` on a remote host, which
+  bailed with "not supported yet", now work through the agent. Hosts
+  without an `agent` (added by hand) are driven over `uri` as before.
+  Closes the "known gap: the store is per box" in docs/autodiscovery.md.
+
+### Changed
+- The scheduler's 0.16.3 rule (no `storage = abe` VM on a host remote
+  from the leader) now applies only to hosts without an `agent`. A host
+  registered by its own daemon makes the ABE call and runs
+  `nvme connect` on its own box, so the port fence follows.
+- `Config::http_client` sets a 10 s connect timeout, so a peer that
+  down costs the reconciler, the registrar, the mirror or an agent call
+  seconds, not the kernel's SYN retry budget.
+
 ## [0.16.4] - 2026-11-13
 
 ### Fixed
@@ -56,31 +92,6 @@ TLS and whose nvmet ports are fenced to the box that asked for them. Spec:
 `specs/abe-tls.md`; milestone log: `milestones/2026-11-13-abe-tls.md`.
 
 ### Added
-- Followers register their hypervisor with whoever leads
-  (`registrar.rs`): every 5 s each `[[hosts]]` entry is `PUT` to the
-  leader with `uri = qemu+tls://<libvirtd listen address>/system` and the
-  new `Host.agent` (this daemon's API URL), again a minute later in case
-  the leader's store went backwards. Until now only `bootstrap --join`
-  registered, once, with the CA box — so after a restart handed leadership
-  to the joiner, the CA box's own host was unknown to the leader and a VM
-  pinned there sat in `Pending: no host satisfies the request: 1×pinned
-  elsewhere`.
-- Followers mirror the leader's store (`mirror.rs`): `/v1/hosts`,
-  `/v1/vms` and `/v1/volumes` every 5 s into the local `state.json` (own
-  `[[hosts]]` entries kept as configured). A new leader starts from a copy
-  seconds old instead of whatever its store held when it last led, and
-  every box holds the VM records its DHCP responder answers from.
-- The leader drives a host whose `agent` is another box through that
-  box's daemon (`agent.rs`, `POST /v1/agent/<op>`, served by every box
-  for itself, cluster token or peer certificate): the thin pool a root
-  disk is carved from, the NVMe connects, the seed image and the base
-  image live where the VM runs, which `qemu+tls://` from the leader
-  cannot reach. `attach_volume`/`detach_volume` on a remote host, which
-  bailed with "not supported yet", now work through the agent. Hosts
-  without an `agent` (added by hand) are driven over `uri` as before.
-  Closes the "known gap: the store is per box" in docs/autodiscovery.md.
-- `Config::http_client` sets a 10 s connect timeout, so a box that is
-  down costs the reconciler seconds, not the kernel's SYN retry budget.
 - `[[hosts]].abe` takes `https://10.22.<box>.1:443`. The ABE client is
   built from `Config::http_client` (`abe::Client::with_http`): the cluster
   CA (`ca_file` plus `peer_ca_dir`) as roots and this box's

@@ -14,8 +14,11 @@ hypervisor runs an [ABE](https://github.com/briankmatheson/abe) exporter**:
 the VM's volumes are created on the ABE of the host it is scheduled on (so
 I/O stays local), but they are plain NVMe-oF subsystems, so another host can
 attach them later. That is the storage half of live migration without
-copying disks; the compute half (attaching on a remote host) is not in this
-version yet.
+copying disks. Attaching on a host other than the leader goes through that
+host's daemon (`Host.agent`, [autodiscovery](autodiscovery.md)), which
+makes the ABE call and the `nvme connect` from the same box, so the
+[port fence](#port-fence) follows. Live migration of an abe-backed VM
+between boxes is still not done.
 
 ## How it works
 
