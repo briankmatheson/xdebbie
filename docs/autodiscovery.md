@@ -99,9 +99,14 @@ better proposal. A leader that hears a heartbeat from a higher-scored
 leader steps down; a follower that hears a lower-scored leader starts an
 election. A lone box therefore leads about 15 s after start.
 
-Score = uptime (0–1000) + capacity (0–1000) + free resources (0–1000) +
-incumbent bonus (500) + UUID tiebreak (0–1). Longer-running, larger, less
-loaded boxes win; the incumbent keeps its job unless clearly beaten.
+Score = state (0 or 2000–4000) + uptime (0–1000) + capacity (0–1000) +
+free resources (0–1000) + incumbent bonus (500) + UUID tiebreak (0–1).
+State is 2000 for any VM in the box's own store plus 200 per VM up to ten;
+it outweighs everything else combined, so while stores are per box (below)
+the box that holds the cluster's VMs leads, even straight after a restart,
+and an empty box only ever leads an empty cluster. Among boxes with state,
+or without, longer-running, larger, less loaded ones win and the incumbent
+keeps its job unless clearly beaten.
 
 ## Network requirements
 

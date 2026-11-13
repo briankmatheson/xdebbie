@@ -31,6 +31,9 @@ pub struct DiscoveryConfig {
     /// Addresses announced alongside `api_url`; filled by
     /// [`reach::local_addrs`] when left empty.
     pub addrs: Vec<std::net::IpAddr>,
+    /// VMs in this box's store, kept current by the caller. Feeds the
+    /// election score so the box holding the state leads.
+    pub vm_count: Arc<std::sync::atomic::AtomicUsize>,
     pub enable_discovery: bool,
 }
 
@@ -45,6 +48,7 @@ impl Default for DiscoveryConfig {
                 .unwrap_or_else(|| "unknown".to_string()),
             api_url: "http://127.0.0.1:7443".to_string(),
             addrs: vec![],
+            vm_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             enable_discovery: true,
         }
     }
@@ -116,7 +120,7 @@ impl DiscoveryEngine {
             total_memory_mib: 65536, // Placeholder
             available_cpus: num_cpus::get() as f32,
             available_memory_mib: 32768, // Placeholder
-            vm_count: 0,
+            vm_count: self.config.vm_count.load(std::sync::atomic::Ordering::Relaxed),
             control_plane_eligible: true,
         }
     }

@@ -13,7 +13,11 @@ use crate::discovery::messages::NodeCapacity;
 /// 2. Capacity (0-1000): Total compute resources available
 /// 3. Load (0-1000): Inverse of current utilization (less loaded = higher score)
 /// 4. Was leader bonus (+500): Current leader gets preference to avoid churn
-/// 5. UUID tiebreaker: Deterministic ordering when scores are equal
+/// 5. State (0-4000): VMs in this box's store. Stores are per box
+///    (docs/autodiscovery.md, "Known gap"), so the one holding the cluster's
+///    VMs must outrank an empty one whatever its uptime — otherwise a leader
+///    restart hands the cluster to a box that knows nothing about it.
+/// 6. UUID tiebreaker: Deterministic ordering when scores are equal
 pub fn calculate_score(
     capacity: &NodeCapacity,
     uptime: Duration,
@@ -24,13 +28,14 @@ pub fn calculate_score(
     let capacity_score = capacity_component(capacity);
     let load_score = load_component(capacity);
     let leader_bonus = if was_leader { 500.0 } else { 0.0 };
+    let state_score = state_component(capacity.vm_count);
     let uuid_tiebreaker = uuid_component(node_id);
 
-    let score = uptime_score + capacity_score + load_score + leader_bonus + uuid_tiebreaker;
+    let score = uptime_score + capacity_score + load_score + leader_bonus + state_score + uuid_tiebreaker;
 
     tracing::debug!(
-        "Score calculation: uptime={:.1} capacity={:.1} load={:.1} leader_bonus={:.1} uuid={:.6} total={:.1}",
-        uptime_score, capacity_score, load_score, leader_bonus, uuid_tiebreaker, score
+        "Score calculation: uptime={:.1} capacity={:.1} load={:.1} leader_bonus={:.1} state={:.1} uuid={:.6} total={:.1}",
+        uptime_score, capacity_score, load_score, leader_bonus, state_score, uuid_tiebreaker, score
     );
 
     score
@@ -98,6 +103,15 @@ fn load_component(capacity: &NodeCapacity) -> f64 {
     (1.0 - avg_util) * 1000.0
 }
 
+/// State component: 2000 for holding any VM at all, then 200 per VM up to
+/// ten. The flat part outweighs the leader bonus (500) plus the whole
+/// uptime range (1000), so a box that just restarted with the cluster's
+/// VMs in its store still beats an empty incumbent that has been up for
+/// days. The graded part orders two non-empty stores.
+fn state_component(vm_count: usize) -> f64 {
+    if vm_count == 0 { 0.0 } else { 2000.0 + vm_count.min(10) as f64 * 200.0 }
+}
+
 /// UUID component: 0-1 tiebreaker for deterministic ordering
 ///
 /// Uses the first 8 bytes of the UUID as a fraction
@@ -137,6 +151,27 @@ mod tests {
         assert!((uptime_component(Duration::from_secs(3600)) - 250.0).abs() < 1.0); // 1 hour
         assert!((uptime_component(Duration::from_secs(3600 * 12)) - 500.0).abs() < 50.0); // 12 hours
         assert!(uptime_component(Duration::from_secs(3600 * 24)) >= 750.0); // 24 hours
+    }
+
+    /// A freshly restarted box with the cluster's VMs in its store outranks
+    /// an empty one that has been up for a day and holds the leader bonus.
+    #[test]
+    fn store_with_vms_beats_empty_incumbent() {
+        let cap = |vm_count| NodeCapacity {
+            total_cpus: 28,
+            total_memory_mib: 65536,
+            available_cpus: 28.0,
+            available_memory_mib: 32768,
+            vm_count,
+            control_plane_eligible: true,
+        };
+        let id = Uuid::nil();
+        let empty_incumbent = calculate_score(&cap(0), Duration::from_secs(3600 * 24), true, id);
+        let holder_just_restarted = calculate_score(&cap(1), Duration::from_secs(0), false, id);
+        assert!(holder_just_restarted > empty_incumbent, "{holder_just_restarted} <= {empty_incumbent}");
+        // and a bigger store beats a smaller one, capped so it stays bounded
+        assert!(calculate_score(&cap(5), Duration::ZERO, false, id) > calculate_score(&cap(1), Duration::ZERO, false, id));
+        assert_eq!(state_component(10), state_component(50));
     }
 
     #[test]

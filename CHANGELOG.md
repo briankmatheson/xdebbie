@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   address, not only the default route's. A box whose default route leaves by
   a bridge or VPN no longer goes deaf to peers on the LAN.
 
+### Changed
+- Election score gains a state term: 2000 for any VM in the box's store plus
+  200 per VM (capped at ten), outweighing uptime, capacity and the incumbent
+  bonus together. Restarting the leader no longer hands the cluster to a
+  peer with an empty store; it takes leadership back within seconds.
+
 ## [0.14.1] - 2026-11-12
 
 ### Added

@@ -298,11 +298,24 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
     // No discovery (disabled, or no multicast) means this box decides.
     let hostname = leader::local_hostname();
     let api_url = cfg.advertise_url(listen);
+    // The election prefers the box whose store holds the VMs; keep that
+    // number current (the leader's store moves while it leads).
+    let vm_count = Arc::new(std::sync::atomic::AtomicUsize::new(store.read().await.vms.len()));
+    {
+        let (store, vm_count) = (store.clone(), vm_count.clone());
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                vm_count.store(store.read().await.vms.len(), std::sync::atomic::Ordering::Relaxed);
+            }
+        });
+    }
     let discovery_cfg = discovery::DiscoveryConfig {
         enable_discovery: cfg.enable_discovery,
         multicast_addr: cfg.multicast_addr.clone(),
         api_url: api_url.clone(),
         hostname: hostname.clone(),
+        vm_count,
         ..Default::default()
     };
     let leadership = if !cfg.enable_discovery {
