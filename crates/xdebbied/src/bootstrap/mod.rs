@@ -353,6 +353,9 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
     // (`[network]` in the generated config). Two DHCP servers on one bridge
     // — worse, on one meshed L2 — is the thing we are avoiding.
     let want_mac = crate::mesh::bridge_mac(box_id);
+    // `created_subnet` is Some when xdebbied may run DHCP on the bridge:
+    // the network is ours (just created) or an adopted one without a
+    // <dhcp> range — typically ours from an earlier bootstrap.
     let created_subnet = if !network_exists {
         libvirt_setup::ensure_network(&opts.libvirt_uri, &opts.network_name, &opts.network_subnet, "", "", &want_mac)?;
         Some(opts.network_subnet.clone())
@@ -368,7 +371,18 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
             ),
             _ => {}
         }
-        None
+        match libvirt_setup::network_shape(&opts.libvirt_uri, &opts.network_name) {
+            Some(shape) if !shape.has_dhcp => {
+                let subnet = shape.subnet.unwrap_or_else(|| opts.network_subnet.clone());
+                info!("Adopted network '{}' has no DHCP range; xdebbied serves {subnet} on its bridge", opts.network_name);
+                Some(subnet)
+            }
+            Some(_) => {
+                info!("Adopted network '{}' runs its own DHCP; [network] left commented out", opts.network_name);
+                None
+            }
+            None => None,
+        }
     };
 
     // Check if we need to create default pool
@@ -424,7 +438,7 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
         }
     } else {
         let generated =
-            config_gen::generate_config(&resources, &opts.libvirt_uri, created_subnet.as_deref(), box_id, opts.join.as_deref());
+            config_gen::generate_config_for(&resources, &opts.libvirt_uri, created_subnet.as_deref(), box_id, opts.join.as_deref(), &opts.network_name, &opts.pool_name);
         let content = if exists {
             let bak = config_gen::back_up(&opts.config_path)?;
             info!("Previous configuration saved as {}", bak.display());

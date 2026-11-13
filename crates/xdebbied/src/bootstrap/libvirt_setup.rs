@@ -261,6 +261,48 @@ pub fn network_mac(uri: &str, name: &str) -> Option<String> {
     Some(rest[..rest.find('\'')?].to_ascii_lowercase())
 }
 
+/// What an existing libvirt network looks like, for deciding whether
+/// xdebbied may run DHCP on its bridge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetworkShape {
+    /// `<dhcp>` present: dnsmasq answers on this bridge already.
+    pub has_dhcp: bool,
+    /// The `<ip address= netmask=>` as a CIDR network, e.g. `10.23.0.0/16`.
+    pub subnet: Option<String>,
+}
+
+pub fn network_shape(uri: &str, name: &str) -> Option<NetworkShape> {
+    let out = Command::new("virsh").args(["-q", "-c", uri, "net-dumpxml", name]).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(parse_network_shape(&String::from_utf8_lossy(&out.stdout)))
+}
+
+pub fn parse_network_shape(xml: &str) -> NetworkShape {
+    let attr = |tag: &str, key: &str| -> Option<String> {
+        let i = xml.find(&format!("<{tag} "))?;
+        let elem = &xml[i..i + xml[i..].find('>')?];
+        let pat = format!("{key}='");
+        let j = elem.find(&pat)? + pat.len();
+        Some(elem[j..j + elem[j..].find('\'')?].to_string())
+    };
+    let subnet = (|| {
+        let addr: std::net::Ipv4Addr = attr("ip", "address")?.parse().ok()?;
+        let prefix = match (attr("ip", "netmask"), attr("ip", "prefix")) {
+            (Some(m), _) => {
+                let m: std::net::Ipv4Addr = m.parse().ok()?;
+                u32::from(m).count_ones()
+            }
+            (None, Some(p)) => p.parse().ok()?,
+            (None, None) => return None,
+        };
+        let mask = if prefix == 0 { 0 } else { u32::MAX << (32 - prefix) };
+        Some(format!("{}/{}", std::net::Ipv4Addr::from(u32::from(addr) & mask), prefix))
+    })();
+    NetworkShape { has_dhcp: xml.contains("<dhcp"), subnet }
+}
+
 /// Create a directory-based storage pool if it doesn't exist
 pub fn ensure_storage_pool(uri: &str, name: &str, path: &str) -> Result<()> {
     // Check if pool already exists
@@ -371,5 +413,25 @@ mod gateway_tests {
         assert_eq!(subnet_gateway("192.168.100.0").unwrap().0, "192.168.100.1");
         assert!(subnet_gateway("192.168.100.0/31").is_err());
         assert!(subnet_gateway("nope/24").is_err());
+    }
+}
+
+#[cfg(test)]
+mod shape_tests {
+    use super::*;
+
+    #[test]
+    fn shape_of_our_own_network() {
+        let xml = "<network>\n  <name>xdebbie</name>\n  <bridge name='virbr-xdebbie' stp='off' delay='0'/>\n  <mac address='52:54:00:23:01:fe'/>\n  <dns enable='no'/>\n  <ip address='10.23.0.2' netmask='255.255.0.0'/>\n</network>";
+        assert_eq!(parse_network_shape(xml), NetworkShape { has_dhcp: false, subnet: Some("10.23.0.0/16".into()) });
+    }
+
+    #[test]
+    fn shape_of_libvirt_default() {
+        let xml = "<network>\n  <name>default</name>\n  <forward mode='nat'/>\n  <bridge name='virbr0' stp='on' delay='0'/>\n  <ip address='192.168.122.1' netmask='255.255.255.0'>\n    <dhcp>\n      <range start='192.168.122.2' end='192.168.122.254'/>\n    </dhcp>\n  </ip>\n</network>";
+        assert_eq!(parse_network_shape(xml), NetworkShape { has_dhcp: true, subnet: Some("192.168.122.0/24".into()) });
+        let bare = "<network><name>x</name><bridge name='br'/><ip address='10.0.0.1' prefix='8'/></network>";
+        assert_eq!(parse_network_shape(bare).subnet.as_deref(), Some("10.0.0.0/8"));
+        assert_eq!(parse_network_shape("<network><name>x</name></network>").subnet, None);
     }
 }

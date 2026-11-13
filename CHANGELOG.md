@@ -18,6 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   address, not only the default route's. A box whose default route leaves by
   a bridge or VPN no longer goes deaf to peers on the LAN.
 
+### Fixed
+- Bootstrap wrote the bridge of whichever libvirt network sorted first
+  (`default`/`virbr0`, usually inactive) into `[mesh]` and `[[hosts]]`
+  instead of the `xdebbie` network it had just ensured. The mesh then sat on
+  `BridgeMissing virbr0` and VMs would have landed on a bridge that does not
+  exist. Now the network and pool bootstrap ensured are selected by name.
+- Bootstrap commented `[network]` out for any adopted libvirt network,
+  assuming dnsmasq. It now reads the network XML: no `<dhcp>` range means
+  the bridge is xdebbied's to serve and `[network]` is written live with the
+  bridge's actual subnet.
+
 ### Changed
 - Election score gains a state term: 2000 for any VM in the box's store plus
   200 per VM (capped at ten), outweighing uptime, capacity and the incumbent

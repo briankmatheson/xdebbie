@@ -13,7 +13,23 @@ use super::libvirt_setup::{get_hostname, LibvirtResources};
 /// network was adopted — then `[network]` is emitted commented out, because
 /// turning on a second DHCP server on a bridge that already has one is
 /// exactly the mistake we want operators to make on purpose, not by default.
+#[cfg(test)]
 pub fn generate_config(resources: &LibvirtResources, uri: &str, created_subnet: Option<&str>, box_id: u8, join: Option<&str>) -> String {
+    generate_config_for(resources, uri, created_subnet, box_id, join, super::DEFAULT_NETWORK_NAME, super::DEFAULT_POOL_NAME)
+}
+
+/// `network_name` / `pool_name`: what bootstrap ensured exists. Their
+/// bridge and name go into the config; the first discovered network is
+/// only a fallback (libvirt's `default`, often inactive, sorts first).
+pub fn generate_config_for(
+    resources: &LibvirtResources,
+    uri: &str,
+    created_subnet: Option<&str>,
+    box_id: u8,
+    join: Option<&str>,
+    network_name: &str,
+    pool_name: &str,
+) -> String {
     let hostname = get_hostname();
     let ca_url_line = match join {
         Some(u) => format!("ca_url = \"{}\"", u.trim_end_matches('/')),
@@ -27,20 +43,24 @@ pub fn generate_config(resources: &LibvirtResources, uri: &str, created_subnet: 
         None => (
             "# ",
             "10.23.0.0/16".to_string(),
-            "# Commented out because bootstrap adopted an existing libvirt network, which\n# probably runs dnsmasq DHCP. Remove its <dhcp> range (virsh net-edit), set\n# `cidr` to the bridge's subnet, then uncomment.".to_string(),
+            "# Commented out because bootstrap adopted an existing libvirt network that\n# has a <dhcp> range, so dnsmasq already answers on its bridge. Remove the\n# range (virsh net-edit), set `cidr` to the bridge's subnet, then uncomment.".to_string(),
         ),
     };
 
-    // Select network and pool
+    // Select network and pool: the ones bootstrap ensured, by name.
     let network = resources
         .networks
-        .first()
+        .iter()
+        .find(|n| n.name == network_name)
+        .or_else(|| resources.networks.first())
         .map(|n| n.bridge.clone())
         .unwrap_or_else(|| "virbr-xdebbie".to_string());
 
     let pool = resources
         .pools
-        .first()
+        .iter()
+        .find(|p| p.name == pool_name)
+        .or_else(|| resources.pools.first())
         .map(|p| p.name.clone())
         .unwrap_or_else(|| "xdebbie".to_string());
 
@@ -399,6 +419,15 @@ mod tests {
                 name: "default".to_string(),
             }],
         };
+
+        // the network bootstrap ensured wins over whatever sorts first
+        let mut multi = resources.clone();
+        multi.networks.insert(0, super::super::libvirt_setup::NetworkInfo { name: "default".into(), bridge: "virbr0".into() });
+        multi.networks.push(super::super::libvirt_setup::NetworkInfo { name: "xdebbie".into(), bridge: "virbr-xdebbie".into() });
+        let named = generate_config_for(&multi, "qemu:///system", None, 1, None, "xdebbie", "nope");
+        let parsed: crate::config::Config = toml::from_str(&named).unwrap();
+        assert_eq!(parsed.mesh_config().to_spec().bridge(), "virbr-xdebbie", "{named}");
+        assert!(named.contains("bridge = \"virbr-xdebbie\""), "{named}");
 
         let config = generate_config(&resources, "qemu:///system", Some("192.168.100.0/24"), 2, None);
         assert!(config.contains("\n[network]\ncidr = \"192.168.100.0/24\""), "{config}");
