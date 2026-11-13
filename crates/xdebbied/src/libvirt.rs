@@ -12,9 +12,11 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, bail};
 use tokio::process::Command;
-use xdebbie_core::{Address, Attachment, Capacity, Disk, DiskRole, Host, Storage, Vm, Volume};
+use xdebbie_core::{
+    AbeCapacity, Address, Attachment, Capacity, Disk, DiskRole, Host, Storage, Vm, Volume,
+};
 
-use crate::{abe, lvm::LvmManager};
+use crate::{abe, keyed_lock::KeyedLock, lvm::LvmManager};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DomState {
@@ -28,6 +30,27 @@ pub enum DomState {
 /// drive the reconciler without real hosts.
 pub trait Hypervisor: Send + Sync + 'static {
     fn inventory(&self, host: &Host) -> impl Future<Output = Result<Capacity>> + Send;
+    /// What the host's ABE reports (`GET /utilization`), for capacity
+    /// accounting; `Ok(None)` when the host has no ABE.
+    fn abe_utilization(
+        &self,
+        host: &Host,
+    ) -> impl Future<Output = Result<Option<AbeCapacity>>> + Send {
+        let _ = host;
+        async { Ok(None) }
+    }
+    /// ABE re-exports volumes at startup on the port they had, but moves
+    /// one whose port was taken meanwhile. For every disk that is not
+    /// connected here, ask its ABE where it is now and fix the record.
+    /// Returns whether anything changed.
+    fn refresh_endpoints(
+        &self,
+        host: &Host,
+        disks: &mut Vec<Disk>,
+    ) -> impl Future<Output = Result<bool>> + Send {
+        let _ = (host, disks);
+        async { Ok(false) }
+    }
     fn state(&self, host: &Host, vm: &Vm) -> impl Future<Output = Result<Option<DomState>>> + Send;
     /// Allocate and attach the VM's network disks (`storage = abe`) before
     /// `provision`. Appends to `disks` as it goes, so the reconciler can
@@ -95,6 +118,8 @@ pub struct Virsh {
     /// ABE API client and host-side NVMe ops for `storage = abe` VMs.
     pub abe: abe::Client,
     pub nvme: abe::Nvme,
+    /// One base volume per `(abe url, image)` is filled at a time.
+    pub base_locks: Arc<KeyedLock<(String, String)>>,
 }
 
 impl Virsh {
@@ -376,6 +401,103 @@ impl Virsh {
         .await
         .context("creating data disk")?;
         Ok(())
+    }
+}
+
+impl Virsh {
+    /// A blank volume for `role`, named so a retry after a crash finds it
+    /// again (abe >= 0.4.0) instead of making a second one.
+    async fn allocate(
+        &self,
+        server: &str,
+        vm: &Vm,
+        role: DiskRole,
+        bytes: u64,
+        named: bool,
+    ) -> Result<abe::Export> {
+        let e = if named {
+            let name = abe::vm_disk_abe_name(vm.id, role);
+            self.abe.create_named(server, bytes, &name).await
+        } else {
+            self.abe.create(server, bytes).await
+        }
+        .with_context(|| format!("allocating {role:?} disk for {} on {server}", vm.spec.name))?;
+        tracing::info!(vm = %vm.spec.name, ?role, id = %e.id, traddr = %e.traddr, port = %e.port, existing = e.existing, "abe: allocated volume");
+        Ok(e)
+    }
+
+    /// The root disk as a thin clone of the image's base volume on
+    /// `server`, making and filling the base first if this is the first VM
+    /// from that image there. Returns `(base id, clone)`.
+    ///
+    /// Crash-safe at every step: `base()` returns the same base for the
+    /// image (an unsealed one is filled again from the start), `seal` is
+    /// idempotent, and `clone(.., name)` returns the clone a previous
+    /// attempt made.
+    async fn clone_root(
+        &self,
+        host: &Host,
+        vm: &Vm,
+        server: &str,
+        root_bytes: u64,
+    ) -> Result<(String, abe::Export)> {
+        let image = vm.spec.image.clone();
+        let (src, fmt) = self.base_image(host, &image).await?;
+        let image_bytes = self.nvme.virtual_size(&src, fmt).await?;
+        if root_bytes < image_bytes {
+            bail!(
+                "disk_gib {} is smaller than image {} ({} bytes)",
+                vm.spec.disk_gib,
+                image,
+                image_bytes
+            );
+        }
+        let base_id = {
+            let _g = self
+                .base_locks
+                .lock((server.to_string(), image.clone()))
+                .await;
+            let b = self
+                .abe
+                .base(server, &image, image_bytes)
+                .await
+                .with_context(|| format!("base volume for {image} on {server}"))?;
+            if !b.sealed {
+                let d = Disk {
+                    role: DiskRole::Root,
+                    server: server.to_string(),
+                    traddr: b.export.traddr.clone(),
+                    port: b.export.port.clone(),
+                    id: b.export.id.clone(),
+                    bytes: b.bytes,
+                    populated: false,
+                    origin: None,
+                };
+                tracing::info!(%image, id = %d.id, %src, "abe: filling the base volume");
+                self.nvme.connect(&d).await?;
+                let dev = self
+                    .nvme
+                    .wait_dev(&d, std::time::Duration::from_secs(15))
+                    .await?;
+                let filled = self.nvme.populate(&src, fmt, &dev).await;
+                self.nvme.flush(&dev).await;
+                self.nvme.disconnect(d.nqn()).await?;
+                filled?;
+                self.abe
+                    .seal(server, &d.id)
+                    .await
+                    .with_context(|| format!("sealing base {} for {image}", d.id))?;
+                tracing::info!(%image, id = %d.id, "abe: base sealed");
+            }
+            b.export.id
+        };
+        let name = abe::vm_disk_abe_name(vm.id, DiskRole::Root);
+        let e = self
+            .abe
+            .clone(server, &base_id, root_bytes, &name)
+            .await
+            .with_context(|| format!("cloning base {base_id} for {} on {server}", vm.spec.name))?;
+        Ok((base_id, e))
     }
 }
 
@@ -776,6 +898,48 @@ impl Hypervisor for Virsh {
         }
     }
 
+    async fn abe_utilization(&self, host: &Host) -> Result<Option<AbeCapacity>> {
+        let Some(server) = host.abe.as_deref() else {
+            return Ok(None);
+        };
+        let u = self
+            .abe
+            .utilization(server)
+            .await
+            .with_context(|| format!("abe utilization on {}", host.name))?;
+        Ok(Some(u.capacity(chrono::Utc::now())))
+    }
+
+    async fn refresh_endpoints(&self, host: &Host, disks: &mut Vec<Disk>) -> Result<bool> {
+        let mut changed = false;
+        for d in disks.iter_mut() {
+            if self.nvme.connected(d.nqn()) {
+                continue;
+            }
+            let e = self
+                .abe
+                .export(&d.server, &d.id)
+                .await
+                .with_context(|| format!("asking {} where {} is exported", d.server, d.id))?;
+            if e.port == d.port && e.traddr == d.traddr {
+                continue;
+            }
+            tracing::warn!(
+                host = %host.name, id = %d.id,
+                "abe moved {} from {}:{} to {}:{}; record updated",
+                d.id, d.traddr, d.port, e.traddr, e.port
+            );
+            // A controller may still be retrying the old port for ever.
+            if let Err(err) = self.nvme.disconnect_force(d.nqn()).await {
+                tracing::warn!(id = %d.id, "dropping the stale controller: {err:#}");
+            }
+            d.traddr = e.traddr;
+            d.port = e.port;
+            changed = true;
+        }
+        Ok(changed)
+    }
+
     async fn prepare_disks(&self, host: &Host, vm: &Vm, disks: &mut Vec<Disk>) -> Result<()> {
         if vm.spec.storage != Storage::Abe {
             return Ok(());
@@ -786,28 +950,40 @@ impl Hypervisor for Virsh {
                 host.name
             )
         })?;
-        let mut wanted = vec![(DiskRole::Root, abe::gib(vm.spec.disk_gib))];
-        if let Some(g) = vm.spec.data_disk_gib {
-            wanted.push((DiskRole::Data, abe::gib(g)));
-        }
-        for (role, bytes) in wanted {
-            if disks.iter().any(|d| d.role == role) {
-                continue;
+        let named = self.abe.has(server, "name").await?;
+        let thin = self.abe.has(server, "base").await? && self.abe.has(server, "clone").await?;
+        let mk = |role: DiskRole, e: abe::Export, bytes: u64, origin: Option<String>| Disk {
+            role,
+            server: server.to_string(),
+            traddr: e.traddr,
+            port: e.port,
+            id: e.id,
+            bytes,
+            // data disks stay blank; clones carry the image already
+            populated: role == DiskRole::Data || origin.is_some(),
+            origin,
+        };
+        if !disks.iter().any(|d| d.role == DiskRole::Root) {
+            let root_bytes = abe::gib(vm.spec.disk_gib);
+            if thin {
+                let (b, e) = self.clone_root(host, vm, server, root_bytes).await?;
+                tracing::info!(vm = %vm.spec.name, id = %e.id, base = %b, port = %e.port, existing = e.existing, "abe: root is a thin clone of the base");
+                disks.push(mk(DiskRole::Root, e, root_bytes, Some(b)));
+            } else {
+                let e = self
+                    .allocate(server, vm, DiskRole::Root, root_bytes, named)
+                    .await?;
+                disks.push(mk(DiskRole::Root, e, root_bytes, None));
             }
-            let e = self.abe.create(server, bytes).await.with_context(|| {
-                format!("allocating {role:?} disk for {} on {server}", vm.spec.name)
-            })?;
-            tracing::info!(vm = %vm.spec.name, ?role, id = %e.id, traddr = %e.traddr, port = %e.port, "abe: allocated volume");
-            disks.push(Disk {
-                role,
-                server: server.to_string(),
-                traddr: e.traddr,
-                port: e.port,
-                id: e.id,
-                bytes,
-                // data disks stay blank
-                populated: role == DiskRole::Data,
-            });
+        }
+        if let Some(g) = vm.spec.data_disk_gib
+            && !disks.iter().any(|d| d.role == DiskRole::Data)
+        {
+            let bytes = abe::gib(g);
+            let e = self
+                .allocate(server, vm, DiskRole::Data, bytes, named)
+                .await?;
+            disks.push(mk(DiskRole::Data, e, bytes, None));
         }
         for d in disks.iter_mut() {
             self.nvme.connect(d).await?;
@@ -1113,6 +1289,7 @@ mod tests {
             attach_to: None,
             attached: None,
             message: None,
+            deleting: false,
             created: now,
             updated: now,
         };
@@ -1156,6 +1333,7 @@ mod tests {
             id: id.into(),
             bytes: 1,
             populated: true,
+            origin: None,
         };
         vm.disks = vec![
             mk(DiskRole::Root, "0123456789abcdef0123456789abcdef"),

@@ -1065,8 +1065,8 @@ fn main() -> Result<()> {
                 let hs: Vec<Host> = serde_json::from_value(v)?;
                 let vms: Vec<Vm> = serde_json::from_value(api.call(Method::GET, "/vms", None)?)?;
                 println!(
-                    "{:<12} {:<10} {:<9} {:>11} {:>15} {:>9}  STATUS",
-                    "NAME", "FD", "CP", "VCPU", "MEM GiB", "DISK GiB"
+                    "{:<12} {:<10} {:<9} {:>11} {:>15} {:>9} {:>13}  STATUS",
+                    "NAME", "FD", "CP", "VCPU", "MEM GiB", "DISK GiB", "ABE GiB"
                 );
                 for h in hs {
                     let mine: Vec<_> = vms
@@ -1082,8 +1082,21 @@ fn main() -> Result<()> {
                         (_, None) => "Unknown",
                         _ => "Ready",
                     };
+                    // free/total of what the ABE may still promise: thin
+                    // pools against bytes × overcommit, thick against bytes.
+                    let abe_col = match &h.abe_capacity {
+                        Some(c) => {
+                            let limit = c.limit(h.abe_overcommit);
+                            format!(
+                                "{}/{}",
+                                limit.saturating_sub(c.committed()) >> 30,
+                                limit >> 30
+                            )
+                        }
+                        None => "-".into(),
+                    };
                     println!(
-                        "{:<12} {:<10} {:<9} {:>5}/{:<5} {:>7}/{:<7} {:>9}  {status}",
+                        "{:<12} {:<10} {:<9} {:>5}/{:<5} {:>7}/{:<7} {:>9} {:>13}  {status}",
                         h.name,
                         h.failure_domain,
                         h.control_plane_eligible,
@@ -1091,7 +1104,8 @@ fn main() -> Result<()> {
                         a.cpus,
                         m / 1024,
                         a.memory_mib / 1024,
-                        a.disk_free_gib
+                        a.disk_free_gib,
+                        abe_col
                     );
                 }
             }
@@ -1123,6 +1137,10 @@ fn main() -> Result<()> {
                     reserved_cpus,
                     cordoned: false,
                     capacity: None,
+                    abe_capacity: None,
+                    abe_overcommit: 1.0,
+                    abe_max_data_percent: 85.0,
+                    abe_max_metadata_percent: 80.0,
                     last_seen: None,
                 };
                 out(api.call(

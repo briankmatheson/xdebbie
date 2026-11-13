@@ -9,6 +9,7 @@ mod dhcp;
 mod discovery;
 mod election;
 mod enroll;
+mod keyed_lock;
 mod leader;
 mod libvirt;
 mod lvm;
@@ -234,6 +235,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             qemu_img_bin: cfg.qemu_img.clone(),
             sys_class: cfg.nvme_sys.clone(),
         },
+        base_locks: Arc::default(),
     });
 
     if let Some(Cmd::Check) = cli.cmd {
@@ -272,6 +274,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             for mut h in seeds {
                 if let Some(old) = s.hosts.get(&h.name) {
                     h.capacity = old.capacity;
+                    h.abe_capacity = old.abe_capacity.clone();
                     h.last_seen = old.last_seen;
                     h.cordoned |= old.cordoned;
                 }
@@ -356,12 +359,16 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         }
     };
 
+    // Bytes promised to standalone-volume creates still in flight; the API
+    // reserves, the scheduler counts them.
+    let abe_ledger: reconcile::AbeLedger = Arc::default();
     let rec = reconcile::Reconciler {
         store: store.clone(),
         hv,
         cfg: cfg.clone(),
         mesh: Some(mesh.clone()),
         leadership: leadership.clone(),
+        abe_ledger: abe_ledger.clone(),
     };
     tokio::spawn(rec.run());
     tokio::spawn(mesh.clone().run());
@@ -439,6 +446,8 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         leadership,
         http,
         enroll,
+        volume_names: Arc::default(),
+        abe_ledger,
     });
     serve(&cfg, listen, app).await
 }

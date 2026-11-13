@@ -35,8 +35,10 @@ use crate::{
     abe,
     config::Config,
     enroll::{Decision, Enrollments},
+    keyed_lock::KeyedLock,
     leader::Leadership,
     mesh::MeshManager,
+    reconcile::{AbeLedger, hosts_for_placement, ledger_totals},
     store::Store,
     tls::ClientCert,
     token::Tokens,
@@ -69,6 +71,46 @@ pub struct App {
     pub http: reqwest::Client,
     /// Enrolment queue; signs only on the CA box.
     pub enroll: Arc<Enrollments>,
+    /// One volume create per name at a time.
+    pub volume_names: Arc<KeyedLock<String>>,
+    /// Bytes promised to creates in flight, per host; the scheduler counts
+    /// them (shared with the reconciler).
+    pub abe_ledger: AbeLedger,
+}
+
+/// A ledger entry that is taken back when dropped, however the create
+/// ends.
+struct Reservation {
+    ledger: AbeLedger,
+    host: String,
+    bytes: u64,
+}
+
+impl Reservation {
+    fn take(ledger: &AbeLedger, host: &str, bytes: u64) -> Self {
+        *ledger
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(host.to_string())
+            .or_default() += bytes;
+        Self {
+            ledger: ledger.clone(),
+            host: host.to_string(),
+            bytes,
+        }
+    }
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        let mut l = self.ledger.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(b) = l.get_mut(&self.host) {
+            *b = b.saturating_sub(self.bytes);
+            if *b == 0 {
+                l.remove(&self.host);
+            }
+        }
+    }
 }
 
 pub struct ApiErr(StatusCode, String);
@@ -506,6 +548,7 @@ async fn put_host(
         .update(|s| {
             let code = if let Some(old) = s.hosts.get(&n) {
                 h.capacity = old.capacity;
+                h.abe_capacity = old.abe_capacity.clone();
                 h.last_seen = old.last_seen;
                 StatusCode::OK
             } else {
@@ -566,6 +609,7 @@ struct DrainPlan {
 async fn drain(State(a): State<App>, Path(n): Path<String>) -> R<Json<DrainPlan>> {
     let stale = a.cfg.host_stale_secs;
     let policy = a.cfg.policy;
+    let inflight = ledger_totals(&a.abe_ledger);
     a.store
         .update(|s| {
             let h = s.hosts.get_mut(&n).ok_or_else(|| nf("host"))?;
@@ -581,7 +625,7 @@ async fn drain(State(a): State<App>, Path(n): Path<String>) -> R<Json<DrainPlan>
                 .map(|v| v.id)
                 .collect();
             for id in ids {
-                let hosts: Vec<Host> = s.hosts.values().cloned().collect();
+                let hosts = hosts_for_placement(&s.hosts, Utc::now(), stale);
                 let vms: Vec<Vm> = s.vms.values().cloned().collect();
                 let vm = s.vms.get_mut(&id).unwrap();
                 if vm.phase != VmPhase::Running {
@@ -596,6 +640,7 @@ async fn drain(State(a): State<App>, Path(n): Path<String>) -> R<Json<DrainPlan>
                     policy,
                     |h| h.is_healthy(Utc::now(), stale),
                     Some(id),
+                    &inflight,
                 ) {
                     Ok(r) => {
                         plan.moves.insert(vm.spec.name.clone(), r[0].host.clone());
@@ -647,9 +692,9 @@ struct ScoredOut {
 
 async fn dry_run(State(a): State<App>, Json(spec): Json<VmSpec>) -> R<Json<Vec<ScoredOut>>> {
     let s = a.store.read().await;
-    let hosts: Vec<Host> = s.hosts.into_values().collect();
-    let vms: Vec<Vm> = s.vms.into_values().collect();
     let stale = a.cfg.host_stale_secs;
+    let hosts = hosts_for_placement(&s.hosts, Utc::now(), stale);
+    let vms: Vec<Vm> = s.vms.into_values().collect();
     place(
         &spec,
         &hosts,
@@ -657,6 +702,7 @@ async fn dry_run(State(a): State<App>, Json(spec): Json<VmSpec>) -> R<Json<Vec<S
         a.cfg.policy,
         |h| h.is_healthy(Utc::now(), stale),
         None,
+        &ledger_totals(&a.abe_ledger),
     )
     .map(|r| {
         Json(
@@ -884,9 +930,10 @@ async fn migrate(
 ) -> R<(StatusCode, Json<Vm>)> {
     let stale = a.cfg.host_stale_secs;
     let policy = a.cfg.policy;
+    let inflight = ledger_totals(&a.abe_ledger);
     a.store
         .update(|s| {
-            let hosts: Vec<Host> = s.hosts.values().cloned().collect();
+            let hosts = hosts_for_placement(&s.hosts, Utc::now(), stale);
             let vms: Vec<Vm> = s.vms.values().cloned().collect();
             let vm = s.vms.get_mut(&id).ok_or_else(|| nf("vm"))?;
             if vm.phase != VmPhase::Running {
@@ -902,6 +949,7 @@ async fn migrate(
                 policy,
                 |h| h.is_healthy(Utc::now(), stale) && Some(&h.name) != cur.as_ref(),
                 Some(id),
+                &inflight,
             )
             .map_err(|e| ApiErr(StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))?;
             vm.migrate_to = Some(target[0].host.clone());
@@ -950,7 +998,80 @@ async fn get_volume(State(a): State<App>, Path(id): Path<String>) -> R<Json<Volu
         .ok_or_else(|| nf("volume"))
 }
 
-/// Create on ABE now (the id is ABE's), then record it. Idempotent on name.
+/// Where a standalone volume of `bytes` should go: the ABE host with the
+/// most headroom (ties by name), or the pinned one if it fits. `Err` is
+/// the 507 message listing every host's reason.
+fn choose_abe_host(
+    st: &crate::store::State,
+    pinned: Option<&str>,
+    bytes: u64,
+    now: chrono::DateTime<Utc>,
+    stale: i64,
+    inflight: &BTreeMap<String, u64>,
+) -> Result<Host, ApiErr> {
+    let hosts = hosts_for_placement(&st.hosts, now, stale);
+    let vms: Vec<Vm> = st.vms.values().cloned().collect();
+    let mut pending = abe_pending(&hosts, &vms);
+    for (h, b) in inflight {
+        if let Some(p) = pending.get_mut(h) {
+            *p += b;
+        }
+    }
+    let mut reasons = vec![];
+    let mut best: Option<(u64, Host)> = None;
+    for h in hosts {
+        if pinned.is_some_and(|p| p != h.name) {
+            continue;
+        }
+        if !h.is_healthy(now, stale) {
+            reasons.push(format!("{}: unhealthy", h.name));
+            continue;
+        }
+        if h.abe.is_none() {
+            // Not an ABE host at all; only worth a line when pinned.
+            if pinned.is_some() {
+                reasons.push(format!("{}: no abe", h.name));
+            }
+            continue;
+        }
+        match h.abe_fit(pending.get(&h.name).copied().unwrap_or(0), bytes) {
+            Ok(room) => {
+                let better = match &best {
+                    None => true,
+                    Some((r, b)) => room > *r || (room == *r && h.name < b.name),
+                };
+                if better {
+                    best = Some((room, h));
+                }
+            }
+            Err(r) => reasons.push(format!("{}: {r}", h.name)),
+        }
+    }
+    if let Some((_, h)) = best {
+        return Ok(h);
+    }
+    if let Some(p) = pinned
+        && !st.hosts.contains_key(p)
+    {
+        return Err(nf("host"));
+    }
+    if reasons.is_empty() {
+        return Err(ApiErr(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "no healthy host with an ABE ([[hosts]].abe)".into(),
+        ));
+    }
+    Err(ApiErr(
+        StatusCode::INSUFFICIENT_STORAGE,
+        format!("no ABE host fits {bytes} bytes: {}", reasons.join(", ")),
+    ))
+}
+
+/// Create on ABE now (the id is ABE's), then record it. Idempotent on
+/// name, and serialized per name so concurrent POSTs make one ABE call:
+/// the second sees the record the first inserted. The ABE host is chosen
+/// by capacity (3.4) and the bytes are held in the ledger until the record
+/// exists, so the scheduler cannot promise them twice.
 async fn create_volume(
     State(a): State<App>,
     Json(req): Json<CreateVolume>,
@@ -961,6 +1082,7 @@ async fn create_volume(
     if req.bytes == 0 {
         return Err(bad("bytes must be > 0"));
     }
+    let _g = a.volume_names.lock(req.name.clone()).await;
     let st = a.store.read().await;
     if let Some(v) = st.volumes.values().find(|v| v.name == req.name) {
         return if v.bytes >= req.bytes {
@@ -974,34 +1096,39 @@ async fn create_volume(
     }
     let stale = a.cfg.host_stale_secs;
     let now = Utc::now();
-    let server = match &req.host {
-        Some(h) => st
-            .hosts
-            .get(h)
-            .ok_or_else(|| nf("host"))?
-            .abe
-            .clone()
-            .ok_or_else(|| bad(format!("host {h} has no abe configured")))?,
-        None => st
-            .hosts
-            .values()
-            .filter(|h| h.is_healthy(now, stale))
-            .find_map(|h| h.abe.clone())
-            .ok_or_else(|| {
-                ApiErr(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "no healthy host with an ABE ([[hosts]].abe)".into(),
-                )
-            })?,
-    };
+    let host = choose_abe_host(
+        &st,
+        req.host.as_deref(),
+        req.bytes,
+        now,
+        stale,
+        &ledger_totals(&a.abe_ledger),
+    )?;
     drop(st);
-    let e = a
+    let server = host.abe.clone().unwrap_or_default();
+    let _res = Reservation::take(&a.abe_ledger, &host.name, req.bytes);
+    let named = a
         .abe
-        .create(&server, req.bytes)
+        .has(&server, "name")
         .await
         .map_err(|e| ApiErr(StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
+    let e = if named {
+        a.abe
+            .create_named(&server, req.bytes, &abe::volume_abe_name(&req.name))
+            .await
+    } else {
+        a.abe.create(&server, req.bytes).await
+    }
+    .map_err(|e| {
+        let code = match abe::http_status(&e) {
+            Some(503) | Some(507) => StatusCode::INSUFFICIENT_STORAGE,
+            Some(409) => StatusCode::CONFLICT,
+            _ => StatusCode::BAD_GATEWAY,
+        };
+        ApiErr(code, format!("{e:#}"))
+    })?;
     let bytes = e.bytes.unwrap_or(req.bytes);
-    tracing::info!(name = %req.name, id = %e.id, %server, bytes, "created volume");
+    tracing::info!(name = %req.name, id = %e.id, %server, host = %host.name, bytes, existing = e.existing, "created volume");
     let vol = Volume {
         id: e.id,
         name: req.name,
@@ -1013,6 +1140,7 @@ async fn create_volume(
         attach_to: None,
         attached: None,
         message: None,
+        deleting: false,
         created: now,
         updated: now,
     };
@@ -1025,21 +1153,37 @@ async fn create_volume(
 }
 
 /// Delete on ABE and forget. Refused while attached (detach first); a
-/// volume that is already gone is a success.
+/// volume that is already gone is a success. The record is marked
+/// `deleting` first, in the same store update as the attachment check, so
+/// nothing can attach it meanwhile and a retry after an ABE failure (502)
+/// carries on from there.
 async fn delete_volume(State(a): State<App>, Path(id): Path<String>) -> R<StatusCode> {
-    let Some(vol) = a.store.read().await.volumes.remove(&id) else {
+    let vol = a
+        .store
+        .update(|s| {
+            let Some(v) = s.volumes.get_mut(&id) else {
+                return Ok(None);
+            };
+            if v.attach_to.is_some() || v.attached.is_some() {
+                return Err(conflict(format!(
+                    "volume {id} is attached (to {}); detach it first",
+                    v.attached
+                        .as_ref()
+                        .map(|a| a.vm)
+                        .or(v.attach_to)
+                        .unwrap_or_default()
+                )));
+            }
+            if !v.deleting {
+                v.deleting = true;
+                v.updated = Utc::now();
+            }
+            Ok(Some(v.clone()))
+        })
+        .await??;
+    let Some(vol) = vol else {
         return Ok(StatusCode::NO_CONTENT);
     };
-    if vol.attach_to.is_some() || vol.attached.is_some() {
-        return Err(conflict(format!(
-            "volume {id} is attached (to {}); detach it first",
-            vol.attached
-                .as_ref()
-                .map(|a| a.vm)
-                .or(vol.attach_to)
-                .unwrap_or_default()
-        )));
-    }
     a.abe
         .delete(&vol.server, &vol.id)
         .await
@@ -1077,6 +1221,9 @@ async fn attach_volume(
     Json(req): Json<AttachVolume>,
 ) -> R<(StatusCode, Json<Volume>)> {
     mutate_volume(&a, &id, |st, v| {
+        if v.deleting {
+            return Err(conflict("volume is being deleted"));
+        }
         let vm = st.vms.get(&req.vm).ok_or_else(|| nf("vm"))?;
         if vm.phase == VmPhase::Deleting {
             return Err(conflict("vm is deleting"));
@@ -1152,6 +1299,8 @@ mod tests {
             enroll: Arc::new(
                 Enrollments::load(dir.path().join("enroll.json"), None, vec![]).unwrap(),
             ),
+            volume_names: Arc::default(),
+            abe_ledger: Arc::default(),
         };
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", l.local_addr().unwrap());
@@ -1192,6 +1341,8 @@ mod tests {
             enroll: Arc::new(
                 Enrollments::load(dir.path().join("enroll.json"), Some(signer), vec![0]).unwrap(),
             ),
+            volume_names: Arc::default(),
+            abe_ledger: Arc::default(),
         };
         let roots = crate::tls::client_roots(&paths.ca_cert, &dir.path().join("nonexistent"));
         let sc = crate::tls::server_config(&paths.server_cert, &paths.server_key, roots).unwrap();

@@ -7,7 +7,11 @@
 //! computes a `Patch` from a snapshot and merges it, so API writes made in
 //! the meantime (notably delete requests) are never lost.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use chrono::Utc;
 use futures::future::join_all;
@@ -23,6 +27,38 @@ use crate::{
     store::{State, Store},
 };
 
+/// ABE bytes per host name reserved by `POST /v1/volumes` calls still in
+/// progress: promised, but not yet in the ABE's `provisioned_bytes`.
+pub type AbeLedger = Arc<Mutex<BTreeMap<String, u64>>>;
+
+/// A snapshot of the ledger for the scheduler.
+pub fn ledger_totals(l: &AbeLedger) -> BTreeMap<String, u64> {
+    l.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Hosts as the scheduler should see them: an ABE reading older than
+/// `stale_secs` is dropped, so the scheduler (which stays pure) treats the
+/// host's ABE capacity as unknown.
+pub fn hosts_for_placement(
+    hosts: &BTreeMap<String, Host>,
+    now: chrono::DateTime<Utc>,
+    stale_secs: i64,
+) -> Vec<Host> {
+    hosts
+        .values()
+        .map(|h| {
+            let mut h = h.clone();
+            if h.abe_capacity
+                .as_ref()
+                .is_some_and(|c| c.is_stale(now, stale_secs))
+            {
+                h.abe_capacity = None;
+            }
+            h
+        })
+        .collect()
+}
+
 pub struct Reconciler<H> {
     pub store: Store,
     pub hv: Arc<H>,
@@ -31,6 +67,8 @@ pub struct Reconciler<H> {
     pub mesh: Option<Arc<crate::mesh::MeshManager>>,
     /// Only the leader schedules and drives hypervisors; followers idle.
     pub leadership: crate::leader::Leadership,
+    /// Shared with the API: volume creates in flight, per host.
+    pub abe_ledger: AbeLedger,
 }
 
 #[derive(Debug, Default)]
@@ -89,6 +127,8 @@ pub struct VolPatch {
     pub attached: Option<Option<Attachment>>,
     pub clear_attach_to: bool,
     pub message: Option<Option<String>>,
+    /// ABE moved the volume: new `(traddr, port)`.
+    pub endpoint: Option<(String, String)>,
 }
 
 impl VolPatch {
@@ -121,6 +161,13 @@ impl VolPatch {
             && v.message != m
         {
             v.message = m;
+            changed = true;
+        }
+        if let Some((traddr, port)) = self.endpoint
+            && (v.traddr != traddr || v.port != port)
+        {
+            v.traddr = traddr;
+            v.port = port;
             changed = true;
         }
         if changed {
@@ -249,6 +296,11 @@ impl<H: Hypervisor> Reconciler<H> {
                 ..Default::default()
             };
         }
+        // A volume whose DELETE is in flight (or failed half-way) is never
+        // attached; the API already refuses new attach requests for it.
+        if vol.deleting {
+            return VolPatch::default();
+        }
         let Some(vm) = want else {
             return VolPatch::default();
         };
@@ -261,7 +313,20 @@ impl<H: Hypervisor> Reconciler<H> {
         if !self.healthy(h) {
             return VolPatch::msg(format!("host {} unreachable", h.name));
         }
-        match self.hv.attach_volume(h, vm, vol).await {
+        // ABE may have re-exported the volume elsewhere since we last saw
+        // it; refresh the record before plugging it in.
+        let mut disks = vec![vol.disk()];
+        let endpoint = match self.hv.refresh_endpoints(h, &mut disks).await {
+            Ok(true) => disks.first().map(|d| (d.traddr.clone(), d.port.clone())),
+            Ok(false) => None,
+            Err(e) => return VolPatch::msg(format!("refresh endpoint: {e:#}")),
+        };
+        let mut fresh = vol.clone();
+        if let Some((traddr, port)) = &endpoint {
+            fresh.traddr = traddr.clone();
+            fresh.port = port.clone();
+        }
+        match self.hv.attach_volume(h, vm, &fresh).await {
             Ok(target) => VolPatch {
                 attached: Some(Some(Attachment {
                     vm: vm.id,
@@ -269,9 +334,13 @@ impl<H: Hypervisor> Reconciler<H> {
                     target,
                 })),
                 message: Some(None),
+                endpoint,
                 ..Default::default()
             },
-            Err(e) => VolPatch::msg(format!("attach: {e:#}")),
+            Err(e) => VolPatch {
+                endpoint,
+                ..VolPatch::msg(format!("attach: {e:#}"))
+            },
         }
     }
 
@@ -302,15 +371,17 @@ impl<H: Hypervisor> Reconciler<H> {
 
     async fn inventory(&self) -> anyhow::Result<()> {
         let hosts: Vec<Host> = self.store.read().await.hosts.into_values().collect();
-        let res = join_all(
-            hosts
-                .iter()
-                .map(|h| async { (h.name.clone(), self.hv.inventory(h).await) }),
-        )
+        let res = join_all(hosts.iter().map(|h| async {
+            (
+                h.name.clone(),
+                self.hv.inventory(h).await,
+                self.hv.abe_utilization(h).await,
+            )
+        }))
         .await;
         self.store
             .update(|s| {
-                for (name, r) in res {
+                for (name, r, a) in res {
                     let Some(h) = s.hosts.get_mut(&name) else {
                         continue;
                     };
@@ -320,6 +391,13 @@ impl<H: Hypervisor> Reconciler<H> {
                             h.last_seen = Some(Utc::now());
                         }
                         Err(e) => warn!(host = %name, error = %e, "inventory failed"),
+                    }
+                    match a {
+                        // `seen` is the ABE reading's own time; an error
+                        // keeps the old reading until it goes stale.
+                        Ok(Some(c)) => h.abe_capacity = Some(c),
+                        Ok(None) => {}
+                        Err(e) => warn!(host = %name, error = %e, "abe utilization failed; keeping the last reading"),
                     }
                 }
             })
@@ -338,9 +416,11 @@ impl<H: Hypervisor> Reconciler<H> {
             .collect();
         for id in pending {
             let policy = self.cfg.policy;
+            let stale = self.cfg.host_stale_secs;
+            let inflight = ledger_totals(&self.abe_ledger);
             self.store
                 .update(|s| {
-                    let hosts: Vec<Host> = s.hosts.values().cloned().collect();
+                    let hosts = hosts_for_placement(&s.hosts, Utc::now(), stale);
                     let vms: Vec<Vm> = s.vms.values().cloned().collect();
                     let Some(vm) = s.vms.get_mut(&id) else { return };
                     if vm.phase != VmPhase::Pending {
@@ -353,6 +433,7 @@ impl<H: Hypervisor> Reconciler<H> {
                         policy,
                         |h| self.healthy(h),
                         Some(id),
+                        &inflight,
                     ) {
                         Ok(r) => {
                             info!(vm = %vm.spec.name, host = %r[0].host, "placed");
@@ -410,6 +491,15 @@ impl<H: Hypervisor> Reconciler<H> {
                 let mut p = Patch::default();
                 if vm.spec.storage == Storage::Abe {
                     let mut disks = vm.disks.clone();
+                    let r = self.hv.refresh_endpoints(h, &mut disks).await;
+                    if disks != vm.disks {
+                        p.disks = Some(disks.clone());
+                        vm.disks = disks.clone();
+                    }
+                    if let Err(e) = r {
+                        p.message = Some(Some(format!("refresh endpoints: {e:#}")));
+                        return p;
+                    }
                     let r = self.hv.prepare_disks(h, &vm, &mut disks).await;
                     if disks != vm.disks {
                         p.disks = Some(disks.clone());
@@ -486,6 +576,25 @@ impl<H: Hypervisor> Reconciler<H> {
             Err(e) => return Patch::msg(e.to_string()),
         };
         let mut p = Patch::default();
+        let mut fresh;
+        let vm = if vm.power == PowerIntent::On
+            && state == DomState::Off
+            && vm.spec.storage == Storage::Abe
+        {
+            // Starting again after a host or exporter restart: the disks
+            // may have moved port.
+            fresh = vm.clone();
+            match self.hv.refresh_endpoints(h, &mut fresh.disks).await {
+                Ok(true) => p.disks = Some(fresh.disks.clone()),
+                Ok(false) => {}
+                Err(e) => {
+                    return Patch::msg(format!("refresh endpoints: {e:#}"));
+                }
+            }
+            &fresh
+        } else {
+            vm
+        };
         let r = match (vm.power, state) {
             (PowerIntent::On, DomState::Running)
                 if vm.reboot_generation != vm.observed_reboot_generation =>
@@ -498,7 +607,8 @@ impl<H: Hypervisor> Reconciler<H> {
             _ => Ok(()),
         };
         if let Err(e) = r {
-            return Patch::msg(e.to_string());
+            p.message = Some(Some(e.to_string()));
+            return p;
         }
         let running = state == DomState::Running;
         p.phase = Some(if running {
@@ -551,8 +661,37 @@ mod tests {
         fail_populate_once: Mutex<bool>,
         /// (domain, volume id) pairs currently plugged in.
         plugged: Mutex<Vec<(String, String)>>,
+        /// abe "moved" these ids to a new port: id -> port.
+        moved: Mutex<BTreeMap<String, String>>,
+        /// endpoint refreshes that found a change: ids.
+        refreshed: Mutex<Vec<String>>,
+        /// what `abe_utilization` answers for hosts with an abe.
+        abe_cap: Mutex<Option<xdebbie_core::AbeCapacity>>,
     }
     impl Hypervisor for Fake {
+        async fn abe_utilization(
+            &self,
+            h: &Host,
+        ) -> anyhow::Result<Option<xdebbie_core::AbeCapacity>> {
+            if h.abe.is_none() {
+                return Ok(None);
+            }
+            Ok(self.abe_cap.lock().unwrap().clone())
+        }
+        async fn refresh_endpoints(&self, _: &Host, disks: &mut Vec<Disk>) -> anyhow::Result<bool> {
+            let moved = self.moved.lock().unwrap();
+            let mut changed = false;
+            for d in disks.iter_mut() {
+                if let Some(p) = moved.get(&d.id)
+                    && *p != d.port
+                {
+                    d.port = p.clone();
+                    self.refreshed.lock().unwrap().push(d.id.clone());
+                    changed = true;
+                }
+            }
+            Ok(changed)
+        }
         async fn attach_volume(&self, _: &Host, v: &Vm, vol: &Volume) -> anyhow::Result<String> {
             let mut p = self.plugged.lock().unwrap();
             let key = (v.domain_name(), vol.id.clone());
@@ -594,6 +733,7 @@ mod tests {
                     id: format!("{:032x}", *n),
                     bytes: v.spec.disk_gib << 30,
                     populated: false,
+                    origin: None,
                 });
             }
             let mut fail = self.fail_populate_once.lock().unwrap();
@@ -680,6 +820,34 @@ mod tests {
     fn cfg() -> Config {
         toml::from_str("state_file = 'unused'").unwrap()
     }
+    fn abe_cap(bytes_gib: u64, provisioned_gib: u64) -> xdebbie_core::AbeCapacity {
+        xdebbie_core::AbeCapacity {
+            thin: true,
+            bytes: bytes_gib << 30,
+            used_bytes: 0,
+            free_bytes: bytes_gib << 30,
+            provisioned_bytes: provisioned_gib << 30,
+            data_percent: 1.0,
+            metadata_percent: Some(1.0),
+            seen: Utc::now(),
+        }
+    }
+    fn abe_spec(name: &str, disk_gib: u64) -> VmSpec {
+        VmSpec {
+            name: name.into(),
+            vcpus: 1,
+            memory_mib: 512,
+            disk_gib,
+            data_disk_gib: None,
+            ip: None,
+            storage: Storage::Abe,
+            image: "img".into(),
+            placement: Default::default(),
+            user_data: None,
+            meta_data: Default::default(),
+            labels: Default::default(),
+        }
+    }
     fn host(n: &str, fd: &str) -> Host {
         serde_json::from_value(
             serde_json::json!({"name": n, "uri": "test:///", "failureDomain": fd}),
@@ -705,6 +873,7 @@ mod tests {
             cfg: Arc::new(cfg()),
             mesh: None,
             leadership: test_leader(),
+            abe_ledger: Arc::default(),
         };
         let mut ids = vec![];
         for i in 0..2 {
@@ -824,6 +993,7 @@ mod tests {
             .await
             .unwrap();
         let fake = Arc::new(Fake::default());
+        *fake.abe_cap.lock().unwrap() = Some(abe_cap(100, 0));
         *fake.fail_populate_once.lock().unwrap() = true;
         let r = Reconciler {
             store: store.clone(),
@@ -831,6 +1001,7 @@ mod tests {
             cfg: Arc::new(cfg()),
             mesh: None,
             leadership: test_leader(),
+            abe_ledger: Arc::default(),
         };
         let v = vm(VmSpec {
             name: "abe-vm".into(),
@@ -887,7 +1058,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn abe_vm_on_a_host_without_abe_stays_provisioning_with_a_reason() {
+    async fn abe_vm_on_a_host_without_abe_stays_pending_with_a_reason() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path().join("s.json")).unwrap();
         store
@@ -902,21 +1073,9 @@ mod tests {
             cfg: Arc::new(cfg()),
             mesh: None,
             leadership: test_leader(),
+            abe_ledger: Arc::default(),
         };
-        let v = vm(VmSpec {
-            name: "abe-vm".into(),
-            vcpus: 1,
-            memory_mib: 512,
-            disk_gib: 8,
-            data_disk_gib: None,
-            ip: None,
-            storage: Storage::Abe,
-            image: "img".into(),
-            placement: Default::default(),
-            user_data: None,
-            meta_data: Default::default(),
-            labels: Default::default(),
-        });
+        let v = vm(abe_spec("abe-vm", 8));
         let id = v.id;
         store
             .update(|s| {
@@ -926,9 +1085,269 @@ mod tests {
             .unwrap();
         r.tick().await.unwrap();
         let s = store.read().await;
-        assert_eq!(s.vms[&id].phase, VmPhase::Provisioning);
-        assert!(s.vms[&id].message.as_deref().unwrap().contains("no ABE"));
-        assert!(s.vms[&id].disks.is_empty());
+        assert_eq!(
+            s.vms[&id].phase,
+            VmPhase::Pending,
+            "never placed, never stuck in Provisioning"
+        );
+        assert!(
+            s.vms[&id].message.as_deref().unwrap().contains("no abe"),
+            "{:?}",
+            s.vms[&id].message
+        );
+        assert!(s.vms[&id].host.is_none());
+    }
+
+    #[tokio::test]
+    async fn abe_capacity_comes_from_inventory_and_gates_placement() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("s.json")).unwrap();
+        let mut h = host("a", "r1");
+        h.abe = Some("http://10.22.1.1:80".into());
+        store
+            .update(|s| {
+                s.hosts.insert("a".into(), h);
+            })
+            .await
+            .unwrap();
+        let fake = Arc::new(Fake::default());
+        let r = Reconciler {
+            store: store.clone(),
+            hv: fake.clone(),
+            cfg: Arc::new(cfg()),
+            mesh: None,
+            leadership: test_leader(),
+            abe_ledger: Arc::default(),
+        };
+        let v = vm(abe_spec("big", 10));
+        let id = v.id;
+        store
+            .update(|s| {
+                s.vms.insert(id, v);
+            })
+            .await
+            .unwrap();
+        // 1. the abe answers nothing useful yet: capacity unknown
+        r.tick().await.unwrap();
+        {
+            let s = store.read().await;
+            assert_eq!(s.hosts["a"].abe_capacity, None);
+            assert_eq!(s.vms[&id].phase, VmPhase::Pending);
+            assert!(
+                s.vms[&id]
+                    .message
+                    .as_deref()
+                    .unwrap()
+                    .contains("abe capacity unknown")
+            );
+        }
+        // 2. a 15 GiB pool with 10 GiB promised: 10 more do not fit
+        *fake.abe_cap.lock().unwrap() = Some(abe_cap(15, 10));
+        r.tick().await.unwrap();
+        {
+            let s = store.read().await;
+            assert_eq!(s.hosts["a"].abe_capacity.as_ref().unwrap().bytes, 15 << 30);
+            assert_eq!(s.vms[&id].phase, VmPhase::Pending);
+            assert_eq!(
+                s.vms[&id].message.as_deref(),
+                Some("no host satisfies the request: 1×abe capacity")
+            );
+        }
+        // 3. the ledger (a volume create in flight) counts too
+        *fake.abe_cap.lock().unwrap() = Some(abe_cap(15, 0));
+        r.abe_ledger.lock().unwrap().insert("a".into(), 6 << 30);
+        r.tick().await.unwrap();
+        assert_eq!(store.read().await.vms[&id].phase, VmPhase::Pending);
+        r.abe_ledger.lock().unwrap().clear();
+        // 4. room: placed and provisioned
+        r.tick().await.unwrap();
+        assert_eq!(store.read().await.vms[&id].phase, VmPhase::Running);
+        // 5. a stale reading counts as unknown for the next VM
+        store
+            .update(|s| {
+                s.hosts
+                    .get_mut("a")
+                    .unwrap()
+                    .abe_capacity
+                    .as_mut()
+                    .unwrap()
+                    .seen = Utc::now() - chrono::Duration::seconds(3600);
+            })
+            .await
+            .unwrap();
+        *fake.abe_cap.lock().unwrap() = None; // inventory keeps the old (stale) reading
+        let v2 = vm(abe_spec("second", 1));
+        let id2 = v2.id;
+        store
+            .update(|s| {
+                s.vms.insert(id2, v2);
+            })
+            .await
+            .unwrap();
+        r.tick().await.unwrap();
+        let s = store.read().await;
+        assert_eq!(s.vms[&id2].phase, VmPhase::Pending);
+        assert!(
+            s.vms[&id2]
+                .message
+                .as_deref()
+                .unwrap()
+                .contains("abe capacity unknown")
+        );
+    }
+
+    #[tokio::test]
+    async fn moved_exports_are_refreshed_before_a_start_and_before_an_attach() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("s.json")).unwrap();
+        let mut h = host("a", "r1");
+        h.abe = Some("http://10.22.1.1:80".into());
+        store
+            .update(|s| {
+                s.hosts.insert("a".into(), h);
+            })
+            .await
+            .unwrap();
+        let fake = Arc::new(Fake::default());
+        *fake.abe_cap.lock().unwrap() = Some(abe_cap(100, 0));
+        let r = Reconciler {
+            store: store.clone(),
+            hv: fake.clone(),
+            cfg: Arc::new(cfg()),
+            mesh: None,
+            leadership: test_leader(),
+            abe_ledger: Arc::default(),
+        };
+        let v = vm(abe_spec("mv", 8));
+        let id = v.id;
+        let now = Utc::now();
+        let vol = Volume {
+            id: "0123456789abcdef0123456789abcdef".into(),
+            name: "pv".into(),
+            server: "http://10.22.1.1:80".into(),
+            traddr: "10.22.1.1".into(),
+            port: "44002".into(),
+            bytes: 1,
+            perf: None,
+            attach_to: Some(id),
+            attached: None,
+            message: None,
+            deleting: false,
+            created: now,
+            updated: now,
+        };
+        let vid = vol.id.clone();
+        store
+            .update(|s| {
+                s.vms.insert(id, v);
+                s.volumes.insert(vid.clone(), vol);
+            })
+            .await
+            .unwrap();
+        r.tick().await.unwrap(); // placed, disks made on 44001, running; volume attached
+        let rid = store.read().await.vms[&id].disks[0].id.clone();
+        assert_eq!(
+            store.read().await.volumes[&vid]
+                .attached
+                .as_ref()
+                .map(|a| a.vm),
+            Some(id)
+        );
+
+        // abe restarted and re-exported both elsewhere; the domain is off
+        fake.moved
+            .lock()
+            .unwrap()
+            .insert(rid.clone(), "44017".into());
+        fake.moved
+            .lock()
+            .unwrap()
+            .insert(vid.clone(), "44018".into());
+        fake.doms
+            .lock()
+            .unwrap()
+            .insert(("a".into(), "mv".into()), DomState::Off);
+        // ... and the hot-plug did not survive the restart either.
+        store
+            .update(|s| {
+                if let Some(v) = s.volumes.get_mut(&vid) {
+                    v.attached = None;
+                }
+            })
+            .await
+            .unwrap();
+        r.tick().await.unwrap(); // observes Off, refreshes, starts
+        r.tick().await.unwrap(); // observes Running
+        let s = store.read().await;
+        assert_eq!(s.vms[&id].phase, VmPhase::Running);
+        assert_eq!(
+            s.vms[&id].disks[0].port, "44017",
+            "record follows the export"
+        );
+        assert_eq!(
+            (
+                s.volumes[&vid].port.as_str(),
+                s.volumes[&vid].traddr.as_str()
+            ),
+            ("44018", "10.22.1.1")
+        );
+        assert_eq!(fake.refreshed.lock().unwrap().as_slice(), [rid, vid]);
+    }
+
+    #[tokio::test]
+    async fn a_deleting_volume_is_never_attached() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("s.json")).unwrap();
+        store
+            .update(|s| {
+                s.hosts.insert("a".into(), host("a", "r1"));
+            })
+            .await
+            .unwrap();
+        let fake = Arc::new(Fake::default());
+        let r = Reconciler {
+            store: store.clone(),
+            hv: fake.clone(),
+            cfg: Arc::new(cfg()),
+            mesh: None,
+            leadership: test_leader(),
+            abe_ledger: Arc::default(),
+        };
+        let v = vm(VmSpec {
+            storage: Storage::Local,
+            ..abe_spec("one", 8)
+        });
+        let id = v.id;
+        let now = Utc::now();
+        let vol = Volume {
+            id: "0123456789abcdef0123456789abcdef".into(),
+            name: "pv".into(),
+            server: "http://abe".into(),
+            traddr: "10.22.0.1".into(),
+            port: "44002".into(),
+            bytes: 1,
+            perf: None,
+            attach_to: Some(id),
+            attached: None,
+            message: None,
+            deleting: true,
+            created: now,
+            updated: now,
+        };
+        let vid = vol.id.clone();
+        store
+            .update(|s| {
+                s.vms.insert(id, v);
+                s.volumes.insert(vid.clone(), vol);
+            })
+            .await
+            .unwrap();
+        r.tick().await.unwrap();
+        r.tick().await.unwrap();
+        let s = store.read().await;
+        assert_eq!(s.vms[&id].phase, VmPhase::Running);
+        assert_eq!(s.volumes[&vid].attached, None);
+        assert!(fake.plugged.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -948,6 +1367,7 @@ mod tests {
             cfg: Arc::new(cfg()),
             mesh: None,
             leadership: test_leader(),
+            abe_ledger: Arc::default(),
         };
         let mk = |name: &str| {
             vm(VmSpec {
@@ -979,6 +1399,7 @@ mod tests {
             attach_to: Some(id1),
             attached: None,
             message: None,
+            deleting: false,
             created: now,
             updated: now,
         };
