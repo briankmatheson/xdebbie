@@ -1172,8 +1172,10 @@ fn main() -> Result<()> {
                 }
                 let hs: Vec<Host> = serde_json::from_value(v)?;
                 let vms: Vec<Vm> = serde_json::from_value(api.call(Method::GET, "/vms", None)?)?;
+                // the name column fits the longest host name (FQDNs are common)
+                let w = hs.iter().map(|h| h.name.len()).max().unwrap_or(0).max(4);
                 println!(
-                    "{:<12} {:<10} {:<9} {:>11} {:>15} {:>9} {:>13} {:<3}  STATUS",
+                    "{:<w$} {:<10} {:<5} {:^11} {:^15} {:>9} {:>13} {:<3}  STATUS",
                     "NAME", "FD", "CP", "VCPU", "MEM GiB", "DISK GiB", "ABE GiB", "TLS"
                 );
                 for h in hs {
@@ -1210,7 +1212,7 @@ fn main() -> Result<()> {
                         None => "-",
                     };
                     println!(
-                        "{:<12} {:<10} {:<9} {:>5}/{:<5} {:>7}/{:<7} {:>9} {:>13} {:<3}  {status}",
+                        "{:<w$} {:<10} {:<5} {:>5}/{:<5} {:>7}/{:<7} {:>9} {:>13} {:<3}  {status}",
                         h.name,
                         h.failure_domain,
                         h.control_plane_eligible,
