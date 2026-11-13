@@ -30,7 +30,9 @@ use xdebbie_core::{AbeCapacity, Disk, DiskRole};
 const FEATURE_TTL: Duration = Duration::from_secs(60);
 
 /// A non-2xx reply from ABE, kept in the error chain so callers can map
-/// 404 / 409 / 503 / 507 to their own status codes.
+/// 404 / 409 / 503 / 507 to their own status codes. Status 0 means no
+/// reply at all because the TLS handshake failed; `body` is then
+/// `tls: <reason>` (see [`Client::send_error`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AbeHttpError {
     pub status: u16,
@@ -39,6 +41,9 @@ pub struct AbeHttpError {
 
 impl std::fmt::Display for AbeHttpError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.status == 0 {
+            return f.write_str(self.body.trim());
+        }
         let msg = serde_json::from_str::<serde_json::Value>(&self.body)
             .ok()
             .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_owned))
@@ -49,11 +54,38 @@ impl std::fmt::Display for AbeHttpError {
 
 impl std::error::Error for AbeHttpError {}
 
-/// The HTTP status behind an error from [`Client`], if it was one.
+/// The HTTP status behind an error from [`Client`], if it was one. A TLS
+/// failure (status 0) is not an HTTP status and reads as `None`.
 pub fn http_status(e: &anyhow::Error) -> Option<u16> {
     e.chain()
         .find_map(|c| c.downcast_ref::<AbeHttpError>())
         .map(|h| h.status)
+        .filter(|s| *s != 0)
+}
+
+/// Was the request refused by TLS? reqwest wraps the rustls error
+/// several layers deep and the kinds (`connect`, `request`) overlap with
+/// a plain refused connection, so the source chain is read for what the
+/// handshake said: `certificate`, `handshake`, `rustls`, `tls`. Returns
+/// the innermost message, which is the one naming the cause
+/// (`invalid peer certificate: UnknownIssuer`, `received fatal alert:
+/// CertificateRequired`, …).
+fn tls_failure(e: &reqwest::Error) -> Option<String> {
+    let mut cur: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(e);
+    let mut hit = None;
+    while let Some(s) = cur {
+        let m = s.to_string();
+        let l = m.to_ascii_lowercase();
+        if l.contains("certificate")
+            || l.contains("handshake")
+            || l.contains("rustls")
+            || l.contains("tls")
+        {
+            hit = Some(m);
+        }
+        cur = s.source();
+    }
+    hit
 }
 
 /// Reply of `GET /configure` and `GET /id/<id>`.
@@ -112,6 +144,10 @@ pub struct AbeFeatures {
     pub version: String,
     #[serde(default)]
     pub features: BTreeSet<String>,
+    /// The API is served over mutual TLS (abe >= 0.5.0; older ones say
+    /// nothing, which reads as `false`).
+    #[serde(default)]
+    pub tls: bool,
 }
 
 /// `GET /utilization`, the parts capacity accounting needs. Unknown fields
@@ -147,6 +183,7 @@ impl AbeUtilization {
             provisioned_bytes: self.provisioned_bytes,
             data_percent: self.data_percent,
             metadata_percent: self.metadata_percent,
+            tls: false,
             seen,
         }
     }
@@ -192,27 +229,54 @@ pub struct Client {
     legacy_logged: Arc<Mutex<HashSet<String>>>,
 }
 
-impl Default for Client {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+/// How long one ABE call may take: a create waits for fio plus the trim.
+pub const TIMEOUT: Duration = Duration::from_secs(120);
 
 impl Client {
-    pub fn new() -> Self {
+    /// The client the daemon uses: `http` comes from
+    /// [`crate::config::Config::http_client`] (the cluster CA as roots,
+    /// this box's cert as identity), so an ABE behind mutual TLS lets us
+    /// in and a plain `http://` ABE works as before (reqwest only applies
+    /// TLS to `https://` URLs).
+    pub fn with_http(http: reqwest::Client) -> Self {
         Self {
-            http: reqwest::Client::builder()
-                // a create waits for fio plus the trim
-                .timeout(Duration::from_secs(120))
-                .build()
-                .expect("reqwest client"),
+            http,
             features: Arc::default(),
             legacy_logged: Arc::default(),
         }
     }
 
+    /// A bare client (no roots beyond the system's, no identity) for
+    /// tests against a plain-HTTP fake. The daemon never builds one;
+    /// `tests/lint-abe-client.sh` keeps it that way.
+    #[cfg(test)]
+    pub fn new() -> Self {
+        Self::with_http(
+            reqwest::Client::builder()
+                .timeout(TIMEOUT)
+                .build()
+                .expect("reqwest client"),
+        )
+    }
+
     fn url(base: &str, path: &str) -> String {
         format!("{}{}", base.trim_end_matches('/'), path)
+    }
+
+    /// A failed `send()`: a TLS failure (handshake refused, certificate
+    /// not trusted, no client certificate accepted) becomes an
+    /// [`AbeHttpError`] with status 0 and a `tls: …` message, so the
+    /// host list and the log say so instead of looking like a timeout.
+    /// Anything else is the reqwest error as it was.
+    fn send_error(e: reqwest::Error) -> anyhow::Error {
+        if let Some(msg) = tls_failure(&e) {
+            anyhow::Error::new(AbeHttpError {
+                status: 0,
+                body: format!("tls: {msg}"),
+            })
+        } else {
+            e.into()
+        }
     }
 
     /// GET and parse a JSON reply; a non-2xx status becomes an
@@ -229,6 +293,7 @@ impl Client {
             .get(&url)
             .send()
             .await
+            .map_err(Self::send_error)
             .with_context(|| format!("GET {url}"))?;
         let st = r.status();
         let body = r.text().await.unwrap_or_default();
@@ -395,6 +460,7 @@ impl Client {
             .delete(&url)
             .send()
             .await
+            .map_err(Self::send_error)
             .with_context(|| format!("DELETE {url}"))?;
         let st = r.status();
         if st.is_success() || st == reqwest::StatusCode::NOT_FOUND {
@@ -909,6 +975,89 @@ mod tests {
         );
         let cap = u.capacity(chrono::Utc::now());
         assert!(cap.thin && cap.bytes == 1000 && cap.free_bytes == 900);
+    }
+
+    /// An abe 0.5.0: `/version` over mutual TLS with the test CA, client
+    /// certificates required. Returns the URL and the cert paths.
+    async fn mtls_abe(dir: &std::path::Path) -> (String, crate::bootstrap::api_tls::ApiTlsPaths) {
+        use axum::{Router, routing::get};
+        use rustls::pki_types::pem::PemObject;
+        let paths = crate::bootstrap::api_tls::generate_localhost(dir);
+        let roots = crate::tls::client_roots(&paths.ca_cert, std::path::Path::new("/nonexistent"));
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
+            rustls::pki_types::CertificateDer::pem_file_iter(&paths.server_cert)
+                .unwrap()
+                .collect::<std::result::Result<_, _>>()
+                .unwrap();
+        let key = rustls::pki_types::PrivateKeyDer::from_pem_file(&paths.server_key).unwrap();
+        let verifier = rustls::server::WebPkiClientVerifier::builder(Arc::new(roots))
+            .build()
+            .unwrap();
+        let sc = rustls::ServerConfig::builder()
+            .with_client_cert_verifier(verifier)
+            .with_single_cert(certs, key)
+            .unwrap();
+        let r = Router::new().route(
+            "/version",
+            get(|| async {
+                axum::Json(serde_json::json!({
+                    "version": "0.5.0",
+                    "features": ["reexport", "ports", "name", "trim", "tls", "fence", "base", "clone"],
+                    "tls": true
+                }))
+            }),
+        );
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.set_nonblocking(true).unwrap();
+        let url = format!("https://{}", l.local_addr().unwrap());
+        let cfg = axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(sc));
+        tokio::spawn(async move {
+            axum_server::from_tcp_rustls(l, cfg)
+                .unwrap()
+                .serve(r.into_make_service())
+                .await
+                .unwrap()
+        });
+        (url, paths)
+    }
+
+    /// The daemon's client (`Config::http_client`: cluster CA as root,
+    /// box cert as identity) gets through an abe behind mutual TLS and
+    /// reads `tls: true`; a bare client is refused with a `tls: …` error
+    /// that carries no HTTP status.
+    #[tokio::test]
+    async fn mtls_abe_admits_the_identity_client_and_names_a_refusal() {
+        let dir = tempfile::tempdir().unwrap();
+        let (url, paths) = mtls_abe(dir.path()).await;
+        let e = Client::new().version(&url).await.unwrap_err();
+        assert_eq!(http_status(&e), None);
+        let tls = e
+            .chain()
+            .find_map(|c| c.downcast_ref::<AbeHttpError>())
+            .unwrap_or_else(|| panic!("no AbeHttpError in {e:#}"));
+        assert!(tls.body.starts_with("tls: "), "{e:#}");
+        assert!(format!("{e:#}").contains("tls: "), "{e:#}");
+
+        let cfg: crate::config::Config = toml::from_str(&format!(
+            "state_file = 'x'
+tls_cert = {:?}
+tls_key = {:?}
+ca_file = {:?}
+peer_ca_dir = {:?}",
+            paths.server_cert,
+            paths.server_key,
+            paths.ca_cert,
+            dir.path().join("peers")
+        ))
+        .unwrap();
+        let c = Client::with_http(cfg.http_client(TIMEOUT));
+        let f = c.version(&url).await.unwrap().unwrap();
+        assert!(f.tls && f.features.contains("fence"), "{f:?}");
+        // the same client still speaks plain http to an old abe
+        let plain = fake_abe(false).await;
+        let f = c.version(&plain).await.unwrap().unwrap();
+        assert!(!f.tls);
     }
 
     #[tokio::test]

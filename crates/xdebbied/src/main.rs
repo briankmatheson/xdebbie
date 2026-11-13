@@ -230,7 +230,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         seed_command: cfg.seed_command.clone(),
         lvm: lvm_manager,
         overlay: mesh.overlay.clone(),
-        abe: abe::Client::new(),
+        abe: abe::Client::with_http(cfg.http_client(abe::TIMEOUT)),
         nvme: abe::Nvme {
             nvme_bin: cfg.nvme.clone(),
             qemu_img_bin: cfg.qemu_img.clone(),
@@ -443,7 +443,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         token,
         mesh,
         dhcp,
-        abe: abe::Client::new(),
+        abe: abe::Client::with_http(cfg.http_client(abe::TIMEOUT)),
         leadership,
         http,
         enroll,

@@ -35,6 +35,7 @@ release:
 test:
 	$(CARGO) test --workspace
 	tests/lint-links.sh
+	tests/lint-abe-client.sh
 
 fmt:
 	$(CARGO) fmt --all
@@ -42,6 +43,7 @@ fmt:
 lint:
 	$(CARGO) fmt --all -- --check
 	tests/lint-links.sh
+	tests/lint-abe-client.sh
 	$(CARGO) clippy --workspace --all-targets -- -D warnings
 
 clippy: lint
