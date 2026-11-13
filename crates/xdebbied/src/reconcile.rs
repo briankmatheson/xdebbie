@@ -200,7 +200,7 @@ impl<H: Hypervisor> Reconciler<H> {
                 continue;
             }
             if let Err(e) = self.tick().await {
-                warn!(error = %e, "reconcile tick failed");
+                warn!(error = format!("{e:#}"), "reconcile tick failed");
             }
         }
     }
@@ -390,14 +390,14 @@ impl<H: Hypervisor> Reconciler<H> {
                             h.capacity = Some(c);
                             h.last_seen = Some(Utc::now());
                         }
-                        Err(e) => warn!(host = %name, error = %e, "inventory failed"),
+                        Err(e) => warn!(host = %name, error = format!("{e:#}"), "inventory failed"),
                     }
                     match a {
                         // `seen` is the ABE reading's own time; an error
                         // keeps the old reading until it goes stale.
                         Ok(Some(c)) => h.abe_capacity = Some(c),
                         Ok(None) => {}
-                        Err(e) => warn!(host = %name, error = %e, "abe utilization failed; keeping the last reading"),
+                        Err(e) => warn!(host = %name, error = format!("{e:#}"), "abe utilization failed; keeping the last reading"),
                     }
                 }
             })
