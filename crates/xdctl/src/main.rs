@@ -9,6 +9,8 @@ use reqwest::{Method, blocking::Client};
 use serde_json::Value;
 use xdebbie_core::*;
 
+mod image;
+
 /// Format a timestamp as a Kubernetes-style age (e.g., "5m", "2h", "3d")
 fn format_age(created: DateTime<Utc>) -> String {
     let now = Utc::now();
@@ -102,6 +104,10 @@ enum Cmd {
     /// Standalone ABE volumes, hot-plugged into VMs as virtio disks.
     #[command(subcommand)]
     Volume(VolumeCmd),
+    /// Base images in this host's thin pool. Local to the box it runs on;
+    /// never contacts xdebbied.
+    #[command(subcommand)]
+    Image(ImageCmd),
     /// Show xdctl client version and the daemon version on the local box and
     /// the cluster leader (if different). Per-box state; never redirected.
     Version,
@@ -152,6 +158,39 @@ enum TokenCmd {
     /// Mint a new token on the leader. The old one keeps working until
     /// every node has taken the new one; then it is retired everywhere.
     Rotate,
+}
+
+#[derive(Subcommand)]
+enum ImageCmd {
+    /// Copy a disk image into the thin pool as `base-<name>` and trim its
+    /// free space, so it takes no more of the pool than its files. Needs
+    /// root. The file itself is not modified.
+    Import {
+        /// Image file (raw unless --format says otherwise).
+        file: String,
+        /// Image name, as used by `--image` (default: the file name
+        /// without its extension).
+        #[arg(long)]
+        name: Option<String>,
+        /// Format of the file: raw or qcow2.
+        #[arg(long, default_value = "raw")]
+        format: String,
+        /// Volume group (default: `volume_group` in the xdebbied config).
+        #[arg(long)]
+        vg: Option<String>,
+        /// Thin pool (default: `thin_pool` in the xdebbied config).
+        #[arg(long)]
+        pool: Option<String>,
+        /// xdebbied config to read the volume group and thin pool from.
+        #[arg(long, default_value = image::CONFIG)]
+        config: String,
+        /// Replace an existing base of the same name.
+        #[arg(long)]
+        force: bool,
+        /// Skip trimming the filesystems' free space (no virt-sparsify).
+        #[arg(long)]
+        no_sparsify: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -883,6 +922,28 @@ fn main() -> Result<()> {
         generate(shell, &mut Cli::command(), "xdctl", &mut std::io::stdout());
         return Ok(());
     }
+    if let Cmd::Image(ImageCmd::Import {
+        file,
+        name,
+        format,
+        vg,
+        pool,
+        config,
+        force,
+        no_sparsify,
+    }) = cli.cmd
+    {
+        return image::import(image::Import {
+            file,
+            name,
+            format,
+            vg,
+            pool,
+            config,
+            force,
+            no_sparsify,
+        });
+    }
     let mut api = Api {
         c: http_client(&cli.ca, cli.insecure)?,
         url: cli.url.clone(),
@@ -1511,6 +1572,7 @@ fn main() -> Result<()> {
                 out(api.call(Method::POST, &format!("/volumes/{id}/detach"), None)?)?
             }
         },
+        Cmd::Image(_) => unreachable!("handled before contacting xdebbied"),
         Cmd::Version => unreachable!("handled before contacting xdebbied"),
         Cmd::Completion { .. } => unreachable!("handled before contacting xdebbied"),
     }

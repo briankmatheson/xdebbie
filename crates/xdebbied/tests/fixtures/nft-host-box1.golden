@@ -10,6 +10,8 @@ table ip xdebbie_host {
   }
   chain postrouting {
     type nat hook postrouting priority srcnat; policy accept;
+    iifname "virbr-xdebbie" oifname "virbr-xdebbie" ip daddr 192.168.1.1 udp dport 53 counter masquerade
+    iifname "virbr-xdebbie" oifname "virbr-xdebbie" ip daddr 192.168.1.1 tcp dport 53 counter masquerade
     ip saddr 10.23.1.0/24 oifname != "virbr-xdebbie" counter masquerade
   }
 }

@@ -5,6 +5,27 @@ All notable changes to XDebbie will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `xdctl image import <file>` puts a raw (or `--format qcow2`) image into
+  the host's thin pool as `base-<name>`: it creates the thin LV, copies only
+  the written parts of the image and trims the free space of the
+  filesystems inside it, so the base takes no more of the pool than its
+  files. Runs on the host as root, without xdebbied; the volume group and
+  thin pool come from `xdebbied.toml` unless `--vg`/`--pool` are given.
+  The "base image not found" errors now point at it (they named an
+  `lvm-import-base` that never existed). See docs/storage.md.
+
+### Fixed
+- VM DNS failed when the first `upstream_dns` server was itself on the
+  overlay bridge (a DNS service in a VM, e.g. the management cluster's
+  gateway): the box DNATed the query to it but did not masquerade, so the
+  server answered the VM directly from its own address and the VM dropped
+  the answer (UDP ignored, TCP reset). The `xdebbie_host` table now
+  masquerades port-53 traffic that hairpins through the bridge to the
+  upstream.
+
 ## [0.16.6] - 2026-11-13
 
 ### Added

@@ -177,9 +177,10 @@ impl LvmManager {
         if !base_exists {
             let err_msg = format!(
                 "Base image '{}/{}' not found. Import it with:\n  \
-                 sudo lvcreate -L 10G -n {} {}\n  \
-                 sudo qemu-img convert -f qcow2 -O raw <image>.qcow2 /dev/{}/{}",
-                self.vg_name, base_lv, base_lv, self.vg_name, self.vg_name, base_lv
+                 sudo xdctl image import <image>.raw --name {}",
+                self.vg_name,
+                base_lv,
+                base_lv.trim_start_matches("base-")
             );
             tracing::error!("{}", err_msg);
             anyhow::bail!("{}", err_msg);

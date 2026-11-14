@@ -213,8 +213,23 @@ impl FirewallSpec {
             "  chain forward {{\n    type filter hook forward priority -10; policy accept;\n    iifname != {br} oifname {br} ct state new counter drop\n  }}\n",
             br = quote(&e.bridge)
         ));
+        out.push_str(
+            "  chain postrouting {\n    type nat hook postrouting priority srcnat; policy accept;\n",
+        );
+        // An upstream on the bridge itself (a DNS service in a VM) would
+        // answer the asking VM directly, from its own address instead of the
+        // gateway's the VM asked, and the VM drops that. Masquerading the
+        // hairpinned query brings the answer back through this box.
+        if let Some(dns) = e.upstream_dns.first() {
+            for proto in ["udp", "tcp"] {
+                out.push_str(&format!(
+                    "    iifname {br} oifname {br} ip daddr {dns} {proto} dport 53 counter masquerade\n",
+                    br = quote(&e.bridge)
+                ));
+            }
+        }
         out.push_str(&format!(
-            "  chain postrouting {{\n    type nat hook postrouting priority srcnat; policy accept;\n    ip saddr {net} oifname != {br} counter masquerade\n  }}\n",
+            "    ip saddr {net} oifname != {br} counter masquerade\n  }}\n",
             net = e.vm_net,
             br = quote(&e.bridge)
         ));

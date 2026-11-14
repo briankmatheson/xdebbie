@@ -241,7 +241,7 @@ impl Virsh {
             };
             let path = format!("/dev/{}/{lv}", lvm.vg_name());
             if !Path::new(&path).exists() {
-                bail!("base image {path} not found (import it with lvm-import-base)");
+                bail!("base image {path} not found (import it with `xdctl image import`)");
             }
             return Ok((path, "raw"));
         }

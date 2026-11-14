@@ -75,6 +75,30 @@ path is not there yet), migration (refused with a clear message), base
 garbage collection (a sealed base stays until someone `DELETE`s it on ABE),
 picking a different ABE than the scheduled host's.
 
+### Importing a base image
+
+With LVM (`volume_group` and `thin_pool` set in `xdebbied.toml`) the host's
+copy of an image is the thin LV `base-<image>`. Put one there with:
+
+```bash
+sudo xdctl image import ~/images/debian-13-k8s-v1.36.raw
+```
+
+This runs on the host itself and does not go through xdebbied. It creates
+`base-debian-13-k8s-v1.36` at the image's virtual size, copies only the
+written parts of the file (`qemu-img convert --target-is-zero -S 4k`) and
+then trims the free space of the filesystems inside the LV
+(`virt-sparsify --in-place`), so the base takes no more of the pool than
+its files. The source file is not modified.
+
+- `--name` sets the image name when the file name is not it.
+- `--format qcow2` imports a qcow2; the format is never guessed.
+- `--vg` / `--pool` override the values read from `xdebbied.toml`.
+- `--force` replaces an existing base. Disks already cloned from it are
+  unaffected, and so is an ABE base already sealed from that image name
+  (see below).
+- `--no-sparsify` skips the trim, for hosts without `guestfs-tools`.
+
 ### Base volumes
 
 With ABE ≥ 0.4.0 (`GET /version` lists `base` and `clone`) a root disk is
