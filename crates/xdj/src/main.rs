@@ -33,6 +33,12 @@ fn home() -> String { env("XDJ_HOME").or_else(|| env("HOME")).unwrap_or_else(|| 
 fn cpath() -> String { env("XDJ_CONF").unwrap_or_else(|| format!("{}/.config/xdj/xdj.conf", home())) }
 fn kpath() -> String { format!("{}/.config/xdj/wg.key", home()) }
 
+/// A wg endpoint needs host:port. A bare host/IP (no colon) gets the wg port
+/// appended; anything already carrying a colon (host:port, or IPv6) is left be.
+fn ep_with_port(ep: &str, port: u16) -> String {
+    if ep.is_empty() || ep.contains(':') { ep.to_string() } else { format!("{ep}:{port}") }
+}
+
 /// Run `p a…`, feeding `i` on stdin; `soft` swallows a failure (link exists).
 fn r(p: &str, a: &[&str], i: Option<&str>, soft: bool) -> Result<String> {
     let mut c = X::new(p);
@@ -296,8 +302,9 @@ impl C {
         let rem = self.peer();
         let ka = self.ka.to_string();
         let aip = format!("{rem}/32");
+        let ep = ep_with_port(&self.ep, self.port);
         let mut pa = vec!["set", &ul, "peer", &self.pk];
-        if !self.ep.is_empty() { pa.extend(["endpoint", &self.ep]); }
+        if !ep.is_empty() { pa.extend(["endpoint", &ep]); }
         pa.extend(["allowed-ips", &aip, "persistent-keepalive", &ka]);
         r("wg", &pa, None, false)?;
 
@@ -305,17 +312,26 @@ impl C {
         r("ip", &["link", "add", &d, "type", "geneve", "id", &vni, "remote", &rem, "dstport", &dp, "ttl", "64", "df", "set"], None, true)?;
         r("ip", &["link", "set", &d, "alias", A], None, false)?;
         r("ip", &["link", "set", &d, "mtu", &mmtu], None, false)?;
-        r("ip", &["link", "set", &d, "master", &self.br], None, false)?;
-        // Learn mode: flood BUM to the single tunnel and learn MACs from it,
-        // so we reach the hub's bridge whatever its MAC is. The derived-MAC
-        // static FDB only worked when every bridge carried a 52:54:00:23:*
-        // MAC; the hub's does not, so unicast to it was dropped.
-        r("bridge", &["link", "set", "dev", &d, "isolated", "on", "learning", "on", "flood",
-            "on", "mcast_flood", "on", "bcast_flood", "on", "neigh_suppress", "off"], None, false)?;
+        // A hypervisor enslaves the tunnel to the mesh bridge so its VMs share
+        // the overlay. A plain host has no such bridge and carries the overlay
+        // on the tunnel itself. Learn mode (flood BUM to the single tunnel,
+        // learn MACs) lets us reach the hub's bridge whatever its MAC is — the
+        // derived-MAC static FDB only worked when every bridge had a
+        // 52:54:00:23:* MAC, which the hub's does not.
+        let bridged = !self.br.is_empty() && have(&self.br);
+        if bridged {
+            r("ip", &["link", "set", &d, "master", &self.br], None, false)?;
+            r("bridge", &["link", "set", "dev", &d, "isolated", "on", "learning", "on", "flood",
+                "on", "mcast_flood", "on", "bcast_flood", "on", "neigh_suppress", "off"], None, false)?;
+        }
         r("ip", &["link", "set", &d, "up"], None, false)?;
 
-        // Our place on the overlay, then the internal resolver on top of it.
-        if !self.oaddr.is_empty() { r("ip", &["addr", "replace", &self.oaddr, "dev", &self.br], None, false)?; }
+        // Our place on the overlay — on the bridge when bridged, else on the
+        // tunnel — then the internal resolver on top of it.
+        if !self.oaddr.is_empty() {
+            let dev = if bridged { self.br.as_str() } else { d.as_str() };
+            r("ip", &["addr", "replace", &self.oaddr, "dev", dev], None, false)?;
+        }
         if !self.dns.is_empty() {
             // Only hand the resolver over once it actually answers over the
             // mesh — otherwise a half-up tunnel would cost you all DNS.
@@ -358,7 +374,7 @@ impl C {
     fn show(&self) {
         let pk = if self.pk.is_empty() { "<hub_pubkey>" } else { &self.pk };
         let (m, p) = (self.me(), self.peer());
-        let ep = if self.ep.is_empty() { String::new() } else { format!("endpoint {} ", self.ep) };
+        let ep = if self.ep.is_empty() { String::new() } else { format!("endpoint {} ", ep_with_port(&self.ep, self.port)) };
         println!("ip link add {0} type wireguard; ip link set {0} alias {A}", self.ul);
         println!("wg set {} private-key {} listen-port {}", self.ul, kpath(), self.port);
         println!("ip addr replace {m}/16 dev {0}; ip link set {0} mtu {1} up", self.ul, self.wmtu);
