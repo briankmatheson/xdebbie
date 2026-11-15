@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `xdj`, a standalone tool to join the mesh from a box that does not run
+  xdebbied (a laptop). It brings up the same WireGuard underlay
+  (`wg-flock`, `10.22.<box>.1/16`) and Geneve tunnel (`gnv-b<peer>`) with
+  the derived static FDB that the daemon would, driving `ip`/`wg`/`bridge`
+  directly. `xdj` with no argument toggles the mesh up or down; it adopts
+  this box's xdebbie WireGuard key when one is on disk, otherwise asks for
+  one (or mints it), and remembers the hub's key and endpoint in
+  `~/.config/xdj/xdj.conf`. No reconcile loop: it writes state once.
 - `xdctl image import <file>` puts a raw (or `--format qcow2`) image into
   the host's thin pool as `base-<name>`: it creates the thin LV, copies only
   the written parts of the image and trims the free space of the

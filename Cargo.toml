@@ -1,6 +1,9 @@
 [workspace]
 resolver = "2"
-members = ["crates/xdebbie-core", "crates/xdebbied", "crates/xdctl", "crates/capx"]
+members = ["crates/xdebbie-core", "crates/xdebbied", "crates/xdctl", "crates/capx", "crates/xdj"]
+
+[profile.release]
+strip = true   # drop symbols from shipped binaries (workspace-wide)
 
 [workspace.package]
 version = "0.16.8"
