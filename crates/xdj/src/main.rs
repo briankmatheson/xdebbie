@@ -74,13 +74,6 @@ fn save(path: &str, body: &str, mode: &str) -> Result<()> {
     Ok(())
 }
 
-/// The 17 slot MACs a `derived` box owns: 52:54:00:23:<box>:{00..0f,fe}.
-fn macs(b: u8) -> Vec<String> {
-    let mut v: Vec<String> = (0u8..16).map(|s| format!("52:54:00:23:{b:02x}:{s:02x}")).collect();
-    v.push(format!("52:54:00:23:{b:02x}:fe"));
-    v
-}
-
 /// `key = val` reader (`#` comments, quotes stripped). Missing file = empty.
 fn conf() -> M<String, String> {
     let mut m = M::new();
@@ -119,9 +112,80 @@ fn pubkey_of(priv_: &str) -> Result<String> {
     Ok(r("wg", &["pubkey"], Some(&format!("{}\n", priv_.trim())), false)?.trim().into())
 }
 
+fn dns_state() -> String { format!("{}/.config/xdj/dns.conn", home()) }
+
+/// Does `server` answer DNS? A real query, not ping: the mesh resolver is a
+/// LoadBalancer IP that never replies to ICMP but serves port 53 fine. Retries
+/// briefly so a just-up overlay has time to prime its learned FDB.
+fn dns_answers(server: &str) -> bool {
+    use std::net::UdpSocket;
+    use std::time::Duration;
+    // Minimal DNS query: id, RD flag, one question for the root "." A IN.
+    let q: [u8; 17] = [
+        0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+        0x00, 0x01,
+    ];
+    for _ in 0..4 {
+        if let Ok(s) = UdpSocket::bind("0.0.0.0:0") {
+            let _ = s.set_read_timeout(Some(Duration::from_millis(1200)));
+            if s.send_to(&q, format!("{server}:53")).is_ok() {
+                let mut buf = [0u8; 64];
+                if s.recv_from(&mut buf).is_ok() {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// The interface carrying the default route (gram's real uplink).
+fn default_iface() -> Option<String> {
+    let o = r("ip", &["route", "show", "default"], None, true).ok()?;
+    let t: Vec<&str> = o.lines().next().unwrap_or("").split_whitespace().collect();
+    t.iter().position(|&w| w == "dev").and_then(|i| t.get(i + 1)).map(|s| s.to_string())
+}
+
+/// The active NetworkManager connection on `iface`.
+fn conn_for(iface: &str) -> Option<String> {
+    let o = r("nmcli", &["-t", "-f", "NAME,DEVICE", "connection", "show", "--active"], None, true).ok()?;
+    o.lines().find_map(|l| l.rsplit_once(':').filter(|(_, d)| *d == iface).map(|(n, _)| n.to_string()))
+}
+
+/// Point the uplink connection at the internal resolver and remember which
+/// one we changed, so `down` can put it back. Mirrors simple/bin/set-dns.sh.
+fn dns_set(server: &str) -> Result<()> {
+    let Some(iface) = default_iface() else { eprintln!("xdj: no default route; leaving DNS alone"); return Ok(()); };
+    let Some(conn) = conn_for(&iface) else { eprintln!("xdj: no NM connection on {iface}; leaving DNS alone"); return Ok(()); };
+    let m = |k: &str, v: &str, soft: bool| r("nmcli", &["connection", "modify", &conn, k, v], None, soft).map(|_| ());
+    m("ipv4.dns", "", false)?;
+    m("ipv4.dns", server, false)?;
+    m("ipv6.dns", "", true)?;
+    m("ipv4.ignore-auto-dns", "yes", false)?;
+    m("ipv6.ignore-auto-dns", "yes", true)?;
+    r("nmcli", &["connection", "up", &conn], None, false)?;
+    save(&dns_state(), &format!("{conn}\n"), "644")?;
+    eprintln!("xdj: dns -> {server} on \"{conn}\"");
+    Ok(())
+}
+
+/// Undo `dns_set`: hand the remembered connection its DHCP resolvers back.
+fn dns_revert() {
+    let Ok(c) = std::fs::read_to_string(dns_state()) else { return; };
+    let conn = c.trim();
+    if conn.is_empty() { return; }
+    let m = |k: &str, v: &str| { let _ = r("nmcli", &["connection", "modify", conn, k, v], None, true); };
+    m("ipv4.dns", "");
+    m("ipv4.ignore-auto-dns", "no");
+    m("ipv6.ignore-auto-dns", "no");
+    let _ = r("nmcli", &["connection", "up", conn], None, true);
+    let _ = std::fs::remove_file(dns_state());
+    eprintln!("xdj: dns reverted on \"{conn}\"");
+}
+
 struct C {
     sb: u8, pb: u8, pk: String, ep: String,
-    br: String, ul: String, xk: String,
+    br: String, ul: String, xk: String, oaddr: String, dns: String,
     port: u16, vni: u32, dport: u16, wmtu: u16, mmtu: u16, ka: u16,
 }
 
@@ -129,14 +193,21 @@ impl C {
     fn load() -> C {
         let m = conf();
         let g = |k: &str, d: &str| m.get(k).cloned().unwrap_or_else(|| d.into());
+        let sb: u8 = num(g("self_box", "1"));
         C {
-            sb: num(g("self_box", "1")),
+            sb,
             pb: num(g("peer_box", "0")),
             pk: g("peer_pubkey", ""),
             ep: g("peer_endpoint", ""),
             br: g("bridge", "virbr-xdebbie"),
             ul: g("underlay", "wg-flock"),
             xk: g("xdebbie_key", ""),
+            // Our address on the overlay bridge, so we can reach 10.23.x
+            // services (and the internal DNS). Empty = don't assign one.
+            oaddr: g("overlay", &format!("10.23.{sb}.1/16")),
+            // Internal resolver, set while the tunnel is up. Empty = leave
+            // the system DNS alone.
+            dns: g("dns", "10.23.0.11"),
             port: num(g("wg_port", "51820")),
             vni: num(g("vni", "23")),
             dport: num(g("dstport", "6081")),
@@ -235,23 +306,44 @@ impl C {
         r("ip", &["link", "set", &d, "alias", A], None, false)?;
         r("ip", &["link", "set", &d, "mtu", &mmtu], None, false)?;
         r("ip", &["link", "set", &d, "master", &self.br], None, false)?;
-        r("bridge", &["link", "set", "dev", &d, "isolated", "on", "learning", "off", "flood",
-            "off", "mcast_flood", "on", "bcast_flood", "on", "neigh_suppress", "off"], None, false)?;
+        // Learn mode: flood BUM to the single tunnel and learn MACs from it,
+        // so we reach the hub's bridge whatever its MAC is. The derived-MAC
+        // static FDB only worked when every bridge carried a 52:54:00:23:*
+        // MAC; the hub's does not, so unicast to it was dropped.
+        r("bridge", &["link", "set", "dev", &d, "isolated", "on", "learning", "on", "flood",
+            "on", "mcast_flood", "on", "bcast_flood", "on", "neigh_suppress", "off"], None, false)?;
         r("ip", &["link", "set", &d, "up"], None, false)?;
-        for m in macs(self.pb) { r("bridge", &["fdb", "replace", &m, "dev", &d, "master", "static"], None, false)?; }
+
+        // Our place on the overlay, then the internal resolver on top of it.
+        if !self.oaddr.is_empty() { r("ip", &["addr", "replace", &self.oaddr, "dev", &self.br], None, false)?; }
+        if !self.dns.is_empty() {
+            // Only hand the resolver over once it actually answers over the
+            // mesh — otherwise a half-up tunnel would cost you all DNS.
+            let host = self.dns.split('/').next().unwrap_or(&self.dns);
+            if dns_answers(host) {
+                if let Err(e) = dns_set(host) { eprintln!("xdj: dns setup failed ({e}); mesh is still up"); }
+            } else {
+                eprintln!("xdj: {host} unreachable over the mesh — leaving DNS alone");
+                eprintln!("      (is this box registered on the hub, and the tunnel passing traffic?)");
+            }
+        }
 
         let pk = pubkey_of(&priv_).unwrap_or_default();
         eprintln!("xdj: up — {} on {ul}, peer {}", self.me(), self.peer());
-        match tag {
-            "minted" => eprintln!("xdj: minted a new key — register it on the hub:\n      {pk}"),
-            "pasted" => eprintln!("xdj: using the key you gave (pubkey {pk})"),
-            "adopted" => eprintln!("xdj: adopted this box's xdebbie key — the hub already knows it"),
-            _ => eprintln!("xdj: key {pk}"),
+        if tag == "adopted" {
+            eprintln!("xdj: adopted this box's xdebbie key — the hub already knows it");
+        } else {
+            // minted / pasted / local: the hub may not have this box yet.
+            eprintln!("xdj: key {pk}");
+            eprintln!("xdj: if the hub does not know this box yet, run there:");
+            eprintln!("      xdctl mesh peer add {} --pubkey {pk}", self.sb);
         }
         Ok(())
     }
 
     fn down(&self) -> Result<()> {
+        dns_revert();
+        if !self.oaddr.is_empty() { r("ip", &["addr", "del", &self.oaddr, "dev", &self.br], None, true)?; }
         r("ip", &["link", "del", &self.tun()], None, true)?;
         r("ip", &["link", "del", &self.ul], None, true)?;
         eprintln!("xdj: down — left the mesh");
@@ -274,8 +366,11 @@ impl C {
         let d = self.tun();
         println!("ip link add {d} type geneve id {} remote {p} dstport {} ttl 64 df set", self.vni, self.dport);
         println!("ip link set {d} alias {A} mtu {} master {} up", self.mmtu, self.br);
-        println!("bridge link set dev {d} isolated on learning off flood off mcast_flood on bcast_flood on neigh_suppress off");
-        println!("bridge fdb replace {{{} macs}} dev {d} master static", macs(self.pb).len());
+        println!("bridge link set dev {d} isolated on learning on flood on mcast_flood on bcast_flood on neigh_suppress off");
+        if !self.oaddr.is_empty() { println!("ip addr replace {} dev {}", self.oaddr, self.br); }
+        if !self.dns.is_empty() {
+            println!("nmcli connection modify <uplink> ipv4.dns {} ipv4.ignore-auto-dns yes; nmcli connection up <uplink>", self.dns);
+        }
     }
 }
 
