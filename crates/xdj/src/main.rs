@@ -15,7 +15,13 @@
 //! (/var/lib/xdebbie/wg.key), so the hub already knows us; otherwise it asks
 //! for a key to paste (Enter mints a fresh one) and saves it beside the conf.
 //! The hub's public key and endpoint are asked for once and kept in
-//! ~/.config/xdj/xdj.conf. The ip/wg/bridge calls want root — it re-execs
+//! ~/.config/xdj/xdj.conf. The endpoint prompt offers a guess read off `w`:
+//! on a remote box, the address you are logged in from is usually the hub's.
+//!
+//! A box without the mesh bridge (a cloud VM, not a hypervisor) carries the
+//! overlay on the tunnel itself, under the MAC the hub's derived plan expects
+//! for this box's bridge (52:54:00:23:<box>:fe) — the hub has a static FDB
+//! entry for that MAC and for no other. The ip/wg/bridge calls want root — it re-execs
 //! under sudo, carrying your $HOME so it reads your conf, not root's.
 
 use std::collections::BTreeMap as M;
@@ -37,6 +43,33 @@ fn kpath() -> String { format!("{}/.config/xdj/wg.key", home()) }
 /// appended; anything already carrying a colon (host:port, or IPv6) is left be.
 fn ep_with_port(ep: &str, port: u16) -> String {
     if ep.is_empty() || ep.contains(':') { ep.to_string() } else { format!("{ep}:{port}") }
+}
+
+/// The MAC the hub's `derived` FDB plan files this box's bridge under
+/// (xdebbied mesh/model.rs `bridge_mac`): `52:54:00:23:<box hex>:fe`.
+fn bridge_mac(box_id: u8) -> String { format!("52:54:00:23:{box_id:02x}:fe") }
+
+/// The likeliest hub address in `w -h` output: the IPv4 address most sessions
+/// here were opened FROM, a public one before a private one. FROM is the
+/// second or third column (a session without a tty has no TTY column); later
+/// columns are the command line and are left alone.
+fn from_w(out: &str) -> Option<String> {
+    use std::net::Ipv4Addr;
+    let mut seen: M<Ipv4Addr, usize> = M::new();
+    for l in out.lines() {
+        if let Some(ip) = l.split_whitespace().skip(1).take(2).find_map(|t| t.parse::<Ipv4Addr>().ok()) {
+            if !(ip.is_loopback() || ip.is_unspecified() || ip.is_link_local()) {
+                *seen.entry(ip).or_default() += 1;
+            }
+        }
+    }
+    seen.into_iter().max_by_key(|(ip, n)| (!ip.is_private(), *n)).map(|(ip, _)| ip.to_string())
+}
+
+/// Guess the hub's endpoint from who is logged in (`w`), or None.
+fn guess_endpoint() -> Option<String> {
+    let o = r("w", &["-h", "-i"], None, false).or_else(|_| r("w", &["-h"], None, false)).ok()?;
+    from_w(&o)
 }
 
 /// Run `p a…`, feeding `i` on stdin; `soft` swallows a failure (link exists).
@@ -223,6 +256,8 @@ impl C {
         }
     }
 
+    /// Is the mesh bridge here (a hypervisor), or do we ride the tunnel alone?
+    fn bridged(&self) -> bool { !self.br.is_empty() && have(&self.br) }
     fn me(&self) -> String { format!("10.22.{}.1", self.sb) }
     fn peer(&self) -> String { format!("10.22.{}.1", self.pb) }
     fn tun(&self) -> String { format!("gnv-b{}", self.pb) }
@@ -274,7 +309,16 @@ impl C {
             conf_set("peer_pubkey", &self.pk)?;
         }
         if self.ep.is_empty() {
-            self.ep = ask("Hub endpoint host:port (Enter for none / NAT'd hub): ");
+            // A remote box is usually driven over ssh from behind the hub, so
+            // the address `w` shows us logged in from is offered as the default.
+            self.ep = match guess_endpoint() {
+                Some(g) => match ask(&format!("Hub endpoint host:port (Enter for {g}, seen in `w`; - for none / NAT'd hub): ")).as_str() {
+                    "" => g,
+                    "-" => String::new(),
+                    v => v.to_string(),
+                },
+                None => ask("Hub endpoint host:port (Enter for none / NAT'd hub): "),
+            };
             if !self.ep.is_empty() { conf_set("peer_endpoint", &self.ep)?; }
         }
         Ok(())
@@ -318,11 +362,17 @@ impl C {
         // learn MACs) lets us reach the hub's bridge whatever its MAC is — the
         // derived-MAC static FDB only worked when every bridge had a
         // 52:54:00:23:* MAC, which the hub's does not.
-        let bridged = !self.br.is_empty() && have(&self.br);
+        let bridged = self.bridged();
         if bridged {
             r("ip", &["link", "set", &d, "master", &self.br], None, false)?;
             r("bridge", &["link", "set", "dev", &d, "isolated", "on", "learning", "on", "flood",
                 "on", "mcast_flood", "on", "bcast_flood", "on", "neigh_suppress", "off"], None, false)?;
+        } else {
+            // The other direction is not learned: the hub (fdb = derived, tunnel
+            // ports not learning) only forwards to the MACs its plan gives this
+            // box, so the tunnel answers as the bridge the plan expects here.
+            // Under its random MAC every reply from the hub is dropped there.
+            r("ip", &["link", "set", &d, "address", &bridge_mac(self.sb)], None, false)?;
         }
         r("ip", &["link", "set", &d, "up"], None, false)?;
 
@@ -359,7 +409,9 @@ impl C {
 
     fn down(&self) -> Result<()> {
         dns_revert();
-        if !self.oaddr.is_empty() { r("ip", &["addr", "del", &self.oaddr, "dev", &self.br], None, true)?; }
+        // Bridged, the overlay address is on the bridge, which outlives us;
+        // bridgeless it is on the tunnel and goes with it.
+        if !self.oaddr.is_empty() && self.bridged() { r("ip", &["addr", "del", &self.oaddr, "dev", &self.br], None, true)?; }
         r("ip", &["link", "del", &self.tun()], None, true)?;
         r("ip", &["link", "del", &self.ul], None, true)?;
         eprintln!("xdj: down — left the mesh");
@@ -381,9 +433,15 @@ impl C {
         println!("wg set {} peer {pk} {ep}allowed-ips {p}/32 persistent-keepalive {}", self.ul, self.ka);
         let d = self.tun();
         println!("ip link add {d} type geneve id {} remote {p} dstport {} ttl 64 df set", self.vni, self.dport);
-        println!("ip link set {d} alias {A} mtu {} master {} up", self.mmtu, self.br);
-        println!("bridge link set dev {d} isolated on learning on flood on mcast_flood on bcast_flood on neigh_suppress off");
-        if !self.oaddr.is_empty() { println!("ip addr replace {} dev {}", self.oaddr, self.br); }
+        let odev = if self.bridged() {
+            println!("ip link set {d} alias {A} mtu {} master {} up", self.mmtu, self.br);
+            println!("bridge link set dev {d} isolated on learning on flood on mcast_flood on bcast_flood on neigh_suppress off");
+            self.br.clone()
+        } else {
+            println!("ip link set {d} alias {A} mtu {} address {} up", self.mmtu, bridge_mac(self.sb));
+            d.clone()
+        };
+        if !self.oaddr.is_empty() { println!("ip addr replace {} dev {odev}", self.oaddr); }
         if !self.dns.is_empty() {
             println!("nmcli connection modify <uplink> ipv4.dns {} ipv4.ignore-auto-dns yes; nmcli connection up <uplink>", self.dns);
         }
@@ -443,5 +501,37 @@ fn go() -> Result<i32> {
             Ok(0)
         }
         o => Err(e(format!("unknown move {o:?}; try up|down|key|show|status"))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bridge_mac_matches_the_daemons_plan() {
+        assert_eq!(bridge_mac(2), "52:54:00:23:02:fe");
+        assert_eq!(bridge_mac(253), "52:54:00:23:fd:fe");
+    }
+
+    #[test]
+    fn w_guess_takes_the_ssh_source() {
+        // A session without a tty has no TTY column: FROM is the second field.
+        let w = "root              203.0.113.9     18:44           0.00s   ?    sshd-session: root [priv]\n\
+                 root     pts/0    203.0.113.9     18:25   17:55   0.01s  0.01s -bash\n";
+        assert_eq!(from_w(w).as_deref(), Some("203.0.113.9"));
+    }
+
+    #[test]
+    fn w_guess_prefers_public_and_ignores_the_command_column() {
+        let w = "me   pts/0  192.168.1.20   10:00  1:00  0.01s 0.01s -bash\n\
+                 me   pts/1  192.168.1.20   10:01  1:00  0.01s 0.01s -bash\n\
+                 me   pts/2  198.51.100.7   10:02  1:00  0.01s 0.01s ssh 10.9.9.9\n";
+        assert_eq!(from_w(w).as_deref(), Some("198.51.100.7"));
+        // Local sessions only: nothing to go on.
+        let local = "me  tty2  -      12:19  1:24m 0.01s 0.01s gnome-session ping 10.9.9.9\n\
+                     me  pts/3 :0     12:20  1:00  0.01s 0.01s -bash\n\
+                     me  pts/4 127.0.0.1 12:21 1:00 0.01s 0.01s -bash\n";
+        assert_eq!(from_w(local), None);
     }
 }

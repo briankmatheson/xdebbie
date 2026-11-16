@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `xdj` guesses the hub's endpoint when it asks for one: the address most
+  sessions on this box are logged in from, read off `w` (a public address
+  before a private one). Enter takes the guess, `-` means no endpoint.
 - `xdj`, a standalone tool to join the mesh from a box that does not run
   xdebbied (a laptop). It brings up the same WireGuard underlay
   (`wg-flock`, `10.22.<box>.1/16`) and Geneve tunnel (`gnv-b<peer>`) with
@@ -26,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `lvm-import-base` that never existed). See docs/storage.md.
 
 ### Fixed
+- `xdj` on a box without the mesh bridge could not be reached from the hub:
+  the tunnel kept its random MAC, and a hub with `fdb = derived` only forwards
+  to the MACs its plan gives each box. Bridgeless, the tunnel now takes this
+  box's derived bridge MAC (`52:54:00:23:<box>:fe`). `xdj show` prints the
+  bridgeless moves on such a box, and `xdj down` no longer tries to take the
+  overlay address off a bridge that is not there.
 - VM DNS failed when the first `upstream_dns` server was itself on the
   overlay bridge (a DNS service in a VM, e.g. the management cluster's
   gateway): the box DNATed the query to it but did not masquerade, so the
