@@ -141,9 +141,12 @@ where
     type Future = Pin<Box<dyn Future<Output = io::Result<(Self::Stream, Self::Service)>> + Send>>;
 
     fn accept(&self, stream: TcpStream, service: S) -> Self::Future {
-        let fut = self.inner.accept(stream, service);
+        let inner = self.inner.clone();
         Box::pin(async move {
-            let (tls, service) = fut.await?;
+            if !speaks_tls(&stream).await {
+                return Err(thumbs_up(stream).await);
+            }
+            let (tls, service) = inner.accept(stream, service).await?;
             let peer = tls
                 .get_ref()
                 .1
@@ -162,6 +165,31 @@ where
             ))
         })
     }
+}
+
+/// What a connection that is not TLS gets instead of a TLS alert (which
+/// `nc` shows as a stray byte): a bright green thumbs up, then a close.
+pub const NOT_TLS_REPLY: &[u8] = "\x1b[1;92m\u{1F44D}\x1b[0m\r\n".as_bytes();
+
+/// A TLS client speaks first, and its first byte is a handshake record
+/// (0x16). Anything else, or silence for [`FIRST_BYTE_WAIT`], is not TLS.
+const FIRST_BYTE_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+async fn speaks_tls(stream: &TcpStream) -> bool {
+    let mut b = [0u8; 1];
+    matches!(
+        tokio::time::timeout(FIRST_BYTE_WAIT, stream.peek(&mut b)).await,
+        Ok(Ok(1)) if b[0] == 0x16
+    )
+}
+
+async fn thumbs_up(mut stream: TcpStream) -> io::Error {
+    use tokio::io::AsyncWriteExt;
+    let peer = stream.peer_addr().ok();
+    let _ = stream.write_all(NOT_TLS_REPLY).await;
+    let _ = stream.shutdown().await;
+    tracing::debug!(?peer, "not TLS: answered with a thumbs up");
+    io::Error::new(io::ErrorKind::InvalidData, "not a TLS client")
 }
 
 /// Per-connection service that stamps [`ClientCert`] onto every request.
@@ -189,5 +217,52 @@ where
     fn call(&mut self, mut req: axum::http::Request<B>) -> Self::Future {
         req.extensions_mut().insert(self.peer.clone());
         self.inner.call(req)
+    }
+}
+
+#[cfg(test)]
+mod not_tls_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// Connect, send `first`, and return what the acceptor's check decided
+    /// plus whatever came back.
+    async fn probe(first: &[u8]) -> (bool, Vec<u8>) {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        let first = first.to_vec();
+        let client = tokio::spawn(async move {
+            let mut c = TcpStream::connect(addr).await.unwrap();
+            c.write_all(&first).await.unwrap();
+            let mut got = vec![];
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                c.read_to_end(&mut got),
+            )
+            .await;
+            got
+        });
+        let (s, _) = l.accept().await.unwrap();
+        let tls = speaks_tls(&s).await;
+        if !tls {
+            thumbs_up(s).await;
+        }
+        (tls, client.await.unwrap())
+    }
+
+    #[tokio::test]
+    async fn plain_text_gets_a_green_thumbs_up() {
+        let (tls, got) = probe(b"get /\n").await;
+        assert!(!tls);
+        assert_eq!(got, NOT_TLS_REPLY);
+        let s = String::from_utf8(got).unwrap();
+        assert!(s.contains('\u{1F44D}') && s.starts_with("\x1b[1;92m"), "{s:?}");
+    }
+
+    #[tokio::test]
+    async fn handshake_byte_goes_on_to_tls() {
+        let (tls, got) = probe(&[0x16, 0x03, 0x01]).await;
+        assert!(tls);
+        assert!(got.is_empty());
     }
 }
