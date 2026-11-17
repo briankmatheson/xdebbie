@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use anyhow::{Context, Result};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
-use tracing::{debug, warn};
-
-use super::messages::DiscoveryMessage;
+use tracing::debug;
 
 pub const DEFAULT_MULTICAST_ADDR: &str = "239.0.0.42:7442";
 const MAX_PACKET_SIZE: usize = 65536;
@@ -90,60 +88,27 @@ impl MulticastSocket {
         })
     }
 
-    pub fn send(&self, msg: &DiscoveryMessage) -> Result<()> {
-        let json = msg.to_json()?;
-        let bytes = json.as_bytes();
-
+    /// Send one datagram (built by [`super::wire::seal`]) to the group.
+    pub fn send(&self, bytes: &[u8]) -> Result<()> {
         if bytes.len() > MAX_PACKET_SIZE {
             anyhow::bail!("Message too large: {} bytes", bytes.len());
         }
-
         self.socket
             .send_to(bytes, self.multicast_addr)
             .context("Failed to send multicast message")?;
-
-        debug!(
-            "Sent {} message to {} ({} bytes)",
-            match msg {
-                DiscoveryMessage::Announce { .. } => "ANNOUNCE",
-                DiscoveryMessage::Heartbeat { .. } => "HEARTBEAT",
-                DiscoveryMessage::ElectionPropose { .. } => "ELECTION_PROPOSE",
-                DiscoveryMessage::ElectionVote { .. } => "ELECTION_VOTE",
-            },
-            self.multicast_addr,
-            bytes.len()
-        );
-
+        debug!("Sent {} bytes to {}", bytes.len(), self.multicast_addr);
         Ok(())
     }
 
-    pub fn recv(&self) -> Result<Option<(DiscoveryMessage, SocketAddr)>> {
+    /// One received datagram, unparsed (see [`super::wire::open`]), or
+    /// `None` when nothing is waiting.
+    pub fn recv(&self) -> Result<Option<(Vec<u8>, SocketAddr)>> {
         let mut buf = vec![0u8; MAX_PACKET_SIZE];
-
         match self.socket.recv_from(&mut buf) {
             Ok((len, addr)) => {
-                let json = std::str::from_utf8(&buf[..len]).context("Received non-UTF8 message")?;
-
-                match DiscoveryMessage::from_json(json) {
-                    Ok(msg) => {
-                        debug!(
-                            "Received {} message from {} ({} bytes)",
-                            match msg {
-                                DiscoveryMessage::Announce { .. } => "ANNOUNCE",
-                                DiscoveryMessage::Heartbeat { .. } => "HEARTBEAT",
-                                DiscoveryMessage::ElectionPropose { .. } => "ELECTION_PROPOSE",
-                                DiscoveryMessage::ElectionVote { .. } => "ELECTION_VOTE",
-                            },
-                            addr,
-                            len
-                        );
-                        Ok(Some((msg, addr)))
-                    }
-                    Err(e) => {
-                        warn!("Failed to parse message from {}: {}", addr, e);
-                        Ok(None)
-                    }
-                }
+                buf.truncate(len);
+                debug!("Received {len} bytes from {addr}");
+                Ok(Some((buf, addr)))
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
             Err(e) => Err(e).context("Failed to receive from multicast socket"),

@@ -94,6 +94,39 @@ certificates carry every local address as a SAN, so TLS still verifies.
 does the same, so the offered join URL is dialable. Daemons older than 0.15
 send no `addrs`; their source address still works.
 
+## Authentication
+
+Anyone on the LAN can send to the group, so a box with a `token_file`
+signs every datagram and drops any that do not verify
+(`discovery/wire.rs`). A signed datagram wraps the message:
+
+```json
+{"v":1,"ts":1763400000,"msg":"{\"type\":\"HEARTBEAT\",…}","mac":"<64 hex>"}
+```
+
+- **Key.** `HMAC-SHA256(token, "xdebbie discovery v1")`: derived from
+  the cluster token, never the token itself. `mac` is
+  `HMAC-SHA256(key, "v1" || ts (8 bytes, big-endian) || msg)`.
+- **Rotation.** Receivers try the current token's key, then the previous
+  one's. While a rotation is in flight senders sign with the *previous*
+  token, which every box still holds; once it is retired everywhere they
+  sign with the new one.
+- **Replay.** `ts` is Unix seconds; a datagram more than 30 s from the
+  receiver's clock is dropped. Boxes need clocks within 30 s of each
+  other (NTP), or they stop hearing each other and each leads alone.
+- **Dropped datagrams.** The first from each source address logs a
+  warning naming the reason (bad signature, out of the clock window,
+  unsigned); the rest are at debug.
+- **No token.** A box without `token_file` (unauthenticated API) sends
+  plain messages and hears only plain ones.
+- **Upgrades.** Daemons before signing send plain JSON and cannot read
+  envelopes. While a cluster has both, set `discovery_accept_unsigned =
+  true` on the new ones so they still hear the old (the old ones log a
+  parse warning per datagram until they are upgraded), then remove it.
+- **Bootstrap.** `xdebbied bootstrap` listens before it holds a token, so
+  it reads announces without verifying them: they only become a join URL
+  to offer, and the join is what has to be trusted.
+
 ## Election
 
 Bully, by score. A follower that misses leader heartbeats for 5 s proposes

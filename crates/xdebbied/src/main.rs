@@ -338,6 +338,8 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         api_url: api_url.clone(),
         hostname: hostname.clone(),
         vm_count,
+        tokens: token.clone(),
+        accept_unsigned: cfg.discovery_accept_unsigned,
         ..Default::default()
     };
     let leadership = if !cfg.enable_discovery {
