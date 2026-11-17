@@ -27,6 +27,10 @@ pub struct Config {
     /// File holding the API bearer token. Unset = no auth (lab use only).
     #[serde(default)]
     pub token_file: Option<PathBuf>,
+    /// A second token that opens `/v1/settings` and nothing else, for a
+    /// caller that only flips the runtime settings (the aviary page).
+    #[serde(default)]
+    pub settings_token_file: Option<PathBuf>,
     /// PEM certificate chain and key. Both set = HTTPS; neither = plain HTTP.
     #[serde(default)]
     pub tls_cert: Option<PathBuf>,
@@ -74,7 +78,8 @@ pub struct Config {
     /// Hosts to register at startup (merged with persisted state).
     #[serde(default)]
     pub hosts: Vec<Host>,
-    /// Enable multicast discovery (default: true)
+    /// Take part in multicast discovery and election at startup (default:
+    /// false). `PUT /v1/settings` turns it on and off while running.
     #[serde(default = "d_discovery")]
     pub enable_discovery: bool,
     /// Multicast address for discovery
@@ -107,7 +112,7 @@ fn d_nvme_sys() -> String {
     "/sys/class/nvme".into()
 }
 fn d_discovery() -> bool {
-    true
+    false
 }
 fn d_multicast() -> String {
     "239.0.0.42:7442".to_string()
@@ -204,7 +209,9 @@ pub const DEFAULT_PORT: u16 = 7443;
 
 impl Config {
     pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
-        let cfg: Self = toml::from_str(&std::fs::read_to_string(path)?)?;
+        let mut cfg: Self = toml::from_str(&std::fs::read_to_string(path)?)?;
+        // What `PUT /v1/settings` last set wins over the file.
+        crate::settings::apply_saved(&mut cfg);
         if let Some(n) = &cfg.network {
             n.validate()
                 .map_err(|e| anyhow::anyhow!("[network]: {e}"))?;

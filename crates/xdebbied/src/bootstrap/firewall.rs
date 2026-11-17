@@ -234,12 +234,8 @@ impl FirewallSpec {
         out.push_str(
             "  chain forward {\n    type filter hook forward priority -10; policy accept;\n",
         );
-        if let Some((ul, net)) = &e.routed_from {
-            out.push_str(&format!(
-                "    iifname {ul} ip saddr {net} oifname {br} counter accept\n",
-                ul = quote(ul),
-                br = quote(&e.bridge)
-            ));
+        if let Some(r) = routed_rule(self) {
+            out.push_str(&format!("    {r}\n"));
         }
         out.push_str(&format!(
             "    iifname != {br} oifname {br} ct state new counter drop\n  }}\n",
@@ -323,6 +319,25 @@ pub fn local_ipv4_prefixes() -> Vec<String> {
     nets.sort();
     nets.dedup();
     nets
+}
+
+/// The nft accept that lets routed mesh peers into the bridge, tagged
+/// [`crate::settings::ROUTED_TAG`] so it can be found and removed alone.
+/// `None` without `[network]` or without `mesh_routed`.
+pub fn routed_rule(spec: &FirewallSpec) -> Option<String> {
+    let e = spec.egress.as_ref()?;
+    let (ul, net) = e.routed_from.as_ref()?;
+    Some(format!(
+        "iifname {} ip saddr {net} oifname {} counter accept comment {}",
+        quote(ul),
+        quote(&e.bridge),
+        quote(crate::settings::ROUTED_TAG)
+    ))
+}
+
+/// Run one ufw rule (an argument list from [`FirewallSpec::rules`]).
+pub fn ufw_run(argv: &[String]) -> Result<String> {
+    ufw(argv)
 }
 
 fn ufw(argv: &[String]) -> Result<String> {

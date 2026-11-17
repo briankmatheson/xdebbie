@@ -62,6 +62,9 @@ pub struct DiscoveryEngine {
     peers: Arc<RwLock<PeerTable>>,
     election: Arc<RwLock<ElectionStateMachine>>,
     start_time: Instant,
+    /// Discovery switched on (`PUT /v1/settings`). Off: send nothing, drop
+    /// what arrives, forget the peers, and lead alone.
+    enabled: std::sync::atomic::AtomicBool,
 }
 
 impl DiscoveryEngine {
@@ -92,12 +95,21 @@ impl DiscoveryEngine {
 
         Ok(Self {
             node_id,
+            enabled: std::sync::atomic::AtomicBool::new(config.enable_discovery),
             config,
             socket,
             peers,
             election,
             start_time: Instant::now(),
         })
+    }
+
+    pub fn set_enabled(&self, on: bool) {
+        self.enabled.store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn enabled(&self) -> bool {
+        self.enabled.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn node_id(&self) -> Uuid {
@@ -313,12 +325,7 @@ impl DiscoveryEngine {
 
     /// Main discovery loop
     pub async fn run(self: Arc<Self>) -> Result<()> {
-        if !self.config.enable_discovery {
-            info!("Discovery disabled, running in standalone mode");
-            return Ok(());
-        }
-
-        info!("Starting discovery engine");
+        info!(enabled = self.enabled(), "Starting discovery engine");
 
         // Activate election state machine
         self.election.write().await.activate();
@@ -333,6 +340,23 @@ impl DiscoveryEngine {
         }
 
         loop {
+            if !self.enabled() {
+                // Paused: lead alone, hear nobody. Checked every tick, so a
+                // switch back on rejoins within a second.
+                heartbeat_ticker.tick().await;
+                while let Ok(Some(_)) = self.socket.recv() {}
+                let mut election = self.election.write().await;
+                if !election.is_leader() {
+                    info!("discovery off: leading alone");
+                    election.become_leader();
+                }
+                drop(election);
+                let mut peers = self.peers.write().await;
+                for p in peers.remove_stale(Duration::ZERO) {
+                    info!("discovery off: dropped peer {} ({})", p.hostname, p.node_id);
+                }
+                continue;
+            }
             tokio::select! {
                 _ = announce_ticker.tick() => {
                     if let Err(e) = self.send_announce().await {

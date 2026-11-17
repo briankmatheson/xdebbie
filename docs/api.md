@@ -31,6 +31,28 @@ node accepts the new one (docs/operations.md). Fingerprints are the first
 | PUT | `/v1/token` | Local. `{current, previous}` — the set this box must accept. What the leader pushes to peers; authenticate with any token the box still holds |
 | POST | `/v1/token/rotate` | Leader. 201 `{token, id, previous}`; the only time a token is returned. 409 while an earlier rotation is still being distributed |
 
+## Settings
+
+This box's runtime switches, applied in place (no restart) and kept in
+`settings.json` beside `state_file`, which overrides `xdebbied.toml`.
+
+```
+GET /v1/settings   -> {"mesh_routed": false, "discovery": false}
+PUT /v1/settings   {"discovery": true}   -> the whole object, as now applied
+```
+
+| key | effect | default |
+|---|---|---|
+| `mesh_routed` | routed mesh peers (xdj) may open connections to this box's VMs: one tagged nft accept in `xdebbie_host` and one ufw route rule, added or removed alone | off |
+| `discovery` | LAN discovery and election; off pauses the engine (this box leads alone) and closes the discovery port in ufw | off |
+
+A `PUT` that cannot be applied answers `409` with the reason (for
+example `mesh_routed` on a box without `[network]`). Besides the cluster
+token and cluster client certificates, the token in
+`settings_token_file` is accepted here, and answers `403` everywhere
+else: hand that one to a caller that only flips these switches (the
+aviary page).
+
 ## Enrolment
 
 How a box joins (BOOTSTRAP.md, "Joining a cluster"). Decided by the box

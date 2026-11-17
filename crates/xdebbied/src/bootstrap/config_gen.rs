@@ -185,7 +185,8 @@ seed_command = ["cloud-localds", "--network-config={{net}}", "--vendor-data={{ve
 # Multicast discovery and leader election (docs/autodiscovery.md). The
 # elected leader runs the reconciler and answers every cluster request;
 # followers forward to it. No peers = this box leads.
-enable_discovery = true
+enable_discovery = false  # PUT /v1/settings switches it at runtime
+# settings_token_file = "/etc/xdebbie/settings-token"   # a token for /v1/settings only
 multicast_addr = "239.0.0.42:7442"
 # URL peers and xdctl use to reach this box. Auto-detected from the hostname,
 # or from this box's address when the hostname does not resolve.

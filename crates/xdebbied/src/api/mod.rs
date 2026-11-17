@@ -79,6 +79,8 @@ pub struct App {
     pub abe_ledger: AbeLedger,
     /// Serves `/v1/agent/*` for the leader; `None` in tests.
     pub agent: Option<crate::agent::AgentApi>,
+    /// `/v1/settings`; `None` in tests that do not need it.
+    pub settings: Option<Arc<crate::settings::SettingsCtl>>,
 }
 
 /// A ledger entry that is taken back when dropped, however the create
@@ -188,6 +190,7 @@ pub fn router(app: App) -> Router {
         .route("/cert", get(cert_chain))
         .route("/network", get(network))
         .route("/version", get(version_info))
+        .route("/settings", get(get_settings).put(put_settings))
         .with_state(app.clone())
         .merge(mesh::router(mesh::MeshApi {
             mesh: app.mesh.clone(),
@@ -212,6 +215,8 @@ pub enum Authn {
     Token,
     /// Another xdebbied: client cert signed by the cluster CA.
     Cert(crate::tls::PeerIdentity),
+    /// The settings-only token: `/v1/settings` and nothing else.
+    Settings,
     /// Only allowed on the public enrolment routes.
     Anonymous,
 }
@@ -252,9 +257,20 @@ pub async fn authenticate(
     let authn = match (&tokens, presented, peer) {
         (None, _, _) => Authn::Token,
         (Some(t), Some(p), _) if t.accepts(&p).await => Authn::Token,
+        (Some(t), Some(p), _) if t.accepts_settings(&p) => Authn::Settings,
         (Some(_), _, Some(id)) => Authn::Cert(id),
         _ => Authn::Anonymous,
     };
+    // Nested under /v1, the path may arrive with or without the prefix.
+    let path = req.uri().path();
+    let path = path.strip_prefix("/v1").unwrap_or(path);
+    if authn == Authn::Settings && path.trim_end_matches('/') != "/settings" {
+        return ApiErr(
+            StatusCode::FORBIDDEN,
+            "the settings token opens /v1/settings only".into(),
+        )
+        .into_response();
+    }
     if authn == Authn::Anonymous && !is_public(req.method(), req.uri().path()) {
         return ApiErr(
             StatusCode::UNAUTHORIZED,
@@ -264,6 +280,32 @@ pub async fn authenticate(
     }
     req.extensions_mut().insert(authn);
     next.run(req).await
+}
+
+// ---------- settings (this box) ----------
+
+fn settings_ctl(a: &App) -> R<&Arc<crate::settings::SettingsCtl>> {
+    a.settings.as_ref().ok_or_else(|| {
+        ApiErr(
+            StatusCode::NOT_IMPLEMENTED,
+            "no runtime settings on this box".into(),
+        )
+    })
+}
+
+async fn get_settings(State(a): State<App>) -> R<Json<crate::settings::Settings>> {
+    Ok(Json(settings_ctl(&a)?.get().await))
+}
+
+async fn put_settings(
+    State(a): State<App>,
+    Json(c): Json<crate::settings::Change>,
+) -> R<Json<crate::settings::Settings>> {
+    settings_ctl(&a)?
+        .set(c)
+        .await
+        .map(Json)
+        .map_err(|e| ApiErr(StatusCode::CONFLICT, format!("{e:#}")))
 }
 
 // ---------- tokens ----------
@@ -1369,6 +1411,7 @@ mod tests {
             volume_names: Arc::default(),
             abe_ledger: Arc::default(),
             agent: None,
+            settings: None,
         };
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", l.local_addr().unwrap());
@@ -1377,6 +1420,46 @@ mod tests {
             drop(dir);
         });
         url
+    }
+
+    #[tokio::test]
+    async fn settings_token_opens_settings_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let tokens = Arc::new(
+            Tokens::in_memory(TokenSet {
+                current: "secret".into(),
+                previous: None,
+            })
+            .with_settings_token(Some("knobs".into())),
+        );
+        let url = spawn_with(
+            Leadership::standalone("box", "http://box:23443"),
+            Store::open(dir.path().join("s.json")).unwrap(),
+            tokens,
+        )
+        .await;
+        let c = reqwest::Client::new();
+        let get = |p: &str, t: Option<&str>| {
+            let r = c.get(format!("{url}{p}"));
+            match t {
+                Some(t) => r.bearer_auth(t),
+                None => r,
+            }
+            .send()
+        };
+        // Past auth: this test app has no settings controller.
+        assert_eq!(
+            get("/v1/settings", Some("knobs")).await.unwrap().status(),
+            501
+        );
+        assert_eq!(get("/v1/vms", Some("knobs")).await.unwrap().status(), 403);
+        assert_eq!(get("/v1/token", Some("knobs")).await.unwrap().status(), 403);
+        assert_eq!(get("/v1/settings", None).await.unwrap().status(), 401);
+        assert_eq!(
+            get("/v1/settings", Some("secret")).await.unwrap().status(),
+            501
+        );
+        assert_eq!(get("/v1/vms", Some("secret")).await.unwrap().status(), 200);
     }
 
     /// The real thing: HTTPS with client certificates, this box holding the
@@ -1412,6 +1495,7 @@ mod tests {
             volume_names: Arc::default(),
             abe_ledger: Arc::default(),
             agent: None,
+            settings: None,
         };
         let roots = crate::tls::client_roots(&paths.ca_cert, &dir.path().join("nonexistent"));
         let sc = crate::tls::server_config(&paths.server_cert, &paths.server_key, roots).unwrap();
