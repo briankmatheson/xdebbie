@@ -48,7 +48,8 @@ pub struct Key([u8; 32]);
 
 impl Key {
     pub fn from_token(token: &str) -> Self {
-        let mut m = HmacSha256::new_from_slice(token.as_bytes()).expect("HMAC takes any key length");
+        let mut m =
+            HmacSha256::new_from_slice(token.as_bytes()).expect("HMAC takes any key length");
         m.update(KEY_LABEL);
         Self(m.finalize().into_bytes().into())
     }
@@ -128,7 +129,10 @@ fn open_at(bytes: &[u8], keys: &[Key], now: u64) -> Result<Opened> {
     }
     let mac = hex::decode(&env.mac).context("mac is not hex")?;
     // verify_slice compares in constant time.
-    if !keys.iter().any(|k| k.mac(env.ts, &env.msg).verify_slice(&mac).is_ok()) {
+    if !keys
+        .iter()
+        .any(|k| k.mac(env.ts, &env.msg).verify_slice(&mac).is_ok())
+    {
         bail!("bad signature (a different cluster token, or forged)");
     }
     if now.abs_diff(env.ts) > MAX_SKEW.as_secs() {
@@ -156,7 +160,9 @@ pub fn peek(bytes: &[u8]) -> Result<DiscoveryMessage> {
 fn envelope(bytes: &[u8]) -> Result<Option<Envelope>> {
     let v: serde_json::Value = serde_json::from_slice(bytes).context("not JSON")?;
     if v.get("mac").is_some() && v.get("type").is_none() {
-        Ok(Some(serde_json::from_value(v).context("malformed envelope")?))
+        Ok(Some(
+            serde_json::from_value(v).context("malformed envelope")?,
+        ))
     } else {
         Ok(None)
     }
@@ -203,7 +209,10 @@ mod tests {
         let old = Key::from_token("old");
         let b = signed(&old, 1000);
         let held = [Key::from_token("new"), old];
-        assert!(matches!(open_at(&b, &held, 1000).unwrap(), Opened::Verified(_)));
+        assert!(matches!(
+            open_at(&b, &held, 1000).unwrap(),
+            Opened::Verified(_)
+        ));
     }
 
     #[test]
@@ -252,9 +261,15 @@ mod tests {
     #[test]
     fn peek_reads_either() {
         let k = Key::from_token("tok");
-        assert!(matches!(peek(&signed(&k, 1)).unwrap(), DiscoveryMessage::Heartbeat { .. }));
+        assert!(matches!(
+            peek(&signed(&k, 1)).unwrap(),
+            DiscoveryMessage::Heartbeat { .. }
+        ));
         let b = hb().to_json().unwrap().into_bytes();
-        assert!(matches!(peek(&b).unwrap(), DiscoveryMessage::Heartbeat { .. }));
+        assert!(matches!(
+            peek(&b).unwrap(),
+            DiscoveryMessage::Heartbeat { .. }
+        ));
     }
 
     #[test]

@@ -167,7 +167,11 @@ impl DiscoveryEngine {
             }
             Err(e) => format!("{e:#}"),
         };
-        let first = self.warned.lock().map(|mut w| w.insert(src.ip())).unwrap_or(false);
+        let first = self
+            .warned
+            .lock()
+            .map(|mut w| w.insert(src.ip()))
+            .unwrap_or(false);
         if first {
             warn!(%src, "discovery: dropping datagram: {why} (further drops from this address at debug)");
         } else {

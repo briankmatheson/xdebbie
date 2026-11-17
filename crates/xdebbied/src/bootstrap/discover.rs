@@ -226,39 +226,51 @@ mod tests {
         };
         let sender = std::thread::spawn(move || {
             for _ in 0..30 {
-                let _ = send(&tx, &DiscoveryMessage::Announce {
-                    node_id: a,
-                    hostname: "alpha".into(),
-                    api_url: "https://192.0.2.1:7443".into(),
-                    addrs: vec![],
-                    capacity: cap.clone(),
-                    score: 1.0,
-                    sequence: 1,
-                });
-                let _ = send(&tx, &DiscoveryMessage::Announce {
-                    node_id: b,
-                    hostname: "beta".into(),
-                    api_url: "https://192.0.2.2:7443".into(),
-                    addrs: vec![],
-                    capacity: cap.clone(),
-                    score: 1.0,
-                    sequence: 1,
-                });
-                let _ = send(&tx, &DiscoveryMessage::Announce {
-                    node_id: Uuid::new_v4(),
-                    hostname: "me".into(),
-                    api_url: "https://me:7443".into(),
-                    addrs: vec![],
-                    capacity: cap.clone(),
-                    score: 1.0,
-                    sequence: 1,
-                });
-                let _ = send(&tx, &DiscoveryMessage::Heartbeat {
-                    node_id: b,
-                    score: 1.0,
-                    is_leader: true,
-                    sequence: 2,
-                });
+                let _ = send(
+                    &tx,
+                    &DiscoveryMessage::Announce {
+                        node_id: a,
+                        hostname: "alpha".into(),
+                        api_url: "https://192.0.2.1:7443".into(),
+                        addrs: vec![],
+                        capacity: cap.clone(),
+                        score: 1.0,
+                        sequence: 1,
+                    },
+                );
+                let _ = send(
+                    &tx,
+                    &DiscoveryMessage::Announce {
+                        node_id: b,
+                        hostname: "beta".into(),
+                        api_url: "https://192.0.2.2:7443".into(),
+                        addrs: vec![],
+                        capacity: cap.clone(),
+                        score: 1.0,
+                        sequence: 1,
+                    },
+                );
+                let _ = send(
+                    &tx,
+                    &DiscoveryMessage::Announce {
+                        node_id: Uuid::new_v4(),
+                        hostname: "me".into(),
+                        api_url: "https://me:7443".into(),
+                        addrs: vec![],
+                        capacity: cap.clone(),
+                        score: 1.0,
+                        sequence: 1,
+                    },
+                );
+                let _ = send(
+                    &tx,
+                    &DiscoveryMessage::Heartbeat {
+                        node_id: b,
+                        score: 1.0,
+                        is_leader: true,
+                        sequence: 2,
+                    },
+                );
                 std::thread::sleep(Duration::from_millis(200));
             }
         });
