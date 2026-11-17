@@ -151,7 +151,7 @@ fn generate_default_config() -> Config {
     let discovered = discover_libvirt()?;
     
     Config {
-        listen: "0.0.0.0:7443".parse().unwrap(),
+        listen: "0.0.0.0:23443".parse().unwrap(),
         state_file: "/var/lib/xdebbie/state.json".into(),
         token_file: Some("/var/lib/xdebbie/token".into()),
         tls_cert: None,  // Start with HTTP
@@ -361,7 +361,7 @@ To start serving:
   xdebbied serve
 
 To use the API:
-  export XDEBBIE_URL=http://localhost:7443
+  export XDEBBIE_URL=http://localhost:23443
   export XDEBBIE_TOKEN=$(cat /var/lib/xdebbie/token)
   xdctl host ls
 ```

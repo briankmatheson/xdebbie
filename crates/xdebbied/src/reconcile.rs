@@ -652,7 +652,7 @@ mod tests {
     use xdebbie_core::{Capacity, Placement, VmSpec};
 
     fn test_leader() -> crate::leader::Leadership {
-        crate::leader::Leadership::standalone("test", "http://127.0.0.1:7443")
+        crate::leader::Leadership::standalone("test", "http://127.0.0.1:23443")
     }
 
     #[derive(Default)]

@@ -35,7 +35,7 @@ pub struct Found {
 /// Listen on `multicast_addr` for up to `timeout`. Returns what was heard,
 /// leader first, our own hostname excluded.
 pub fn listen(multicast_addr: &str, timeout: Duration, own_hostname: &str) -> Result<Vec<Found>> {
-    let port = multicast_addr.rsplit(':').next().unwrap_or("7442");
+    let port = multicast_addr.rsplit(':').next().unwrap_or("23442");
     let sock = MulticastSocket::new(multicast_addr, &format!("0.0.0.0:{port}"))?;
     let start = Instant::now();
     let mut first_heard: Option<Instant> = None;
@@ -186,7 +186,7 @@ pub fn choose(multicast_addr: &str, timeout: Duration, own_hostname: &str) -> Re
     }
     eprintln!();
     eprintln!("No running cluster heard on {multicast_addr}.");
-    let a = ask("URL of a box to join (https://host:7443), or Enter if this is the first box: ")?;
+    let a = ask("URL of a box to join (https://host:23443), or Enter if this is the first box: ")?;
     Ok(match a.as_str() {
         "" => Choice::First,
         url if url.starts_with("https://") => Choice::Join(url.to_string()),
@@ -213,8 +213,8 @@ mod tests {
         // group: a daemon on this box or the LAN only receives the group it
         // joined (IP_MULTICAST_ALL is off), so "alpha", "beta" and "me" never
         // show up as peers of a real cluster.
-        let addr = "239.0.0.43:7442";
-        let tx = MulticastSocket::new(addr, "0.0.0.0:7442").unwrap();
+        let addr = "239.0.0.43:23442";
+        let tx = MulticastSocket::new(addr, "0.0.0.0:23442").unwrap();
         let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
         let cap = NodeCapacity {
             total_cpus: 1,
@@ -231,7 +231,7 @@ mod tests {
                     &DiscoveryMessage::Announce {
                         node_id: a,
                         hostname: "alpha".into(),
-                        api_url: "https://192.0.2.1:7443".into(),
+                        api_url: "https://192.0.2.1:23443".into(),
                         addrs: vec![],
                         capacity: cap.clone(),
                         score: 1.0,
@@ -243,7 +243,7 @@ mod tests {
                     &DiscoveryMessage::Announce {
                         node_id: b,
                         hostname: "beta".into(),
-                        api_url: "https://192.0.2.2:7443".into(),
+                        api_url: "https://192.0.2.2:23443".into(),
                         addrs: vec![],
                         capacity: cap.clone(),
                         score: 1.0,
@@ -255,7 +255,7 @@ mod tests {
                     &DiscoveryMessage::Announce {
                         node_id: Uuid::new_v4(),
                         hostname: "me".into(),
-                        api_url: "https://me:7443".into(),
+                        api_url: "https://me:23443".into(),
                         addrs: vec![],
                         capacity: cap.clone(),
                         score: 1.0,
@@ -288,7 +288,7 @@ mod tests {
             get("beta"),
             Found {
                 hostname: "beta".into(),
-                api_url: "https://192.0.2.2:7443".into(),
+                api_url: "https://192.0.2.2:23443".into(),
                 is_leader: true
             }
         );
@@ -296,7 +296,7 @@ mod tests {
             get("alpha"),
             Found {
                 hostname: "alpha".into(),
-                api_url: "https://192.0.2.1:7443".into(),
+                api_url: "https://192.0.2.1:23443".into(),
                 is_leader: false
             }
         );

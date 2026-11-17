@@ -8,7 +8,7 @@
 //! |---|---|
 //! | ssh (22/tcp) | anywhere — never lock the operator out |
 //! | WireGuard (`[mesh.wireguard].listen_port`) | anywhere — peers may come from the internet |
-//! | API (`listen` port, 7443/tcp) | every network this host has an address on: LAN, WireGuard underlay, mesh overlay |
+//! | API (`listen` port, 23443/tcp) | every network this host has an address on: LAN, WireGuard underlay, mesh overlay |
 //! | discovery multicast (`multicast_addr` port) | the same local networks — a box not yet meshed finds the cluster over the LAN |
 //!
 //! Everything else is only accepted on the mesh's own interfaces — the
@@ -531,13 +531,13 @@ mod tests {
 
     fn full() -> FirewallSpec {
         FirewallSpec {
-            api_port: 7443,
+            api_port: 23443,
             local_nets: vec!["10.22.0.0/16".into(), "192.168.1.0/24".into()],
             mesh_ifs: vec!["wg-flock".into(), "virbr-xdebbie".into()],
             dhcp_bridge: Some("virbr-xdebbie".into()),
             wireguard_port: Some(51820),
             geneve: Some(("wg-flock".into(), 6081)),
-            discovery_port: Some(7442),
+            discovery_port: Some(23442),
             egress: Some(Egress {
                 bridge: "virbr-xdebbie".into(),
                 bridge_addr: "10.23.1.1".parse().unwrap(),
@@ -617,8 +617,8 @@ mod tests {
         assert!(rules.contains(
             &"allow proto udp to any port 51820 comment xdebbie wireguard underlay".to_string()
         ));
-        assert!(rules.contains(&"allow proto tcp from 192.168.1.0/24 to any port 7443 comment xdebbie api from 192.168.1.0/24".to_string()));
-        assert!(rules.contains(&"allow proto tcp from 10.22.0.0/16 to any port 7443 comment xdebbie api from 10.22.0.0/16".to_string()));
+        assert!(rules.contains(&"allow proto tcp from 192.168.1.0/24 to any port 23443 comment xdebbie api from 192.168.1.0/24".to_string()));
+        assert!(rules.contains(&"allow proto tcp from 10.22.0.0/16 to any port 23443 comment xdebbie api from 10.22.0.0/16".to_string()));
         // everything else names a mesh interface
         for r in &rules {
             let unrestricted = !r.contains(" in on ") && !r.starts_with("route ");
@@ -627,16 +627,16 @@ mod tests {
                     r.starts_with("default ")
                         || r.contains("port 22 ")
                         || r.contains("port 51820 ")
-                        || r.contains("port 7443 ")
-                        || r.contains("port 7442 "),
+                        || r.contains("port 23443 ")
+                        || r.contains("port 23442 "),
                     "LAN-reachable rule that should not be: {r}"
                 );
             }
         }
         assert!(rules.contains(&"allow in on wg-flock proto tcp to any port 16514 comment xdebbie libvirt tls on wg-flock".to_string()));
         assert!(rules.contains(&"allow in on virbr-xdebbie proto tcp to any port 16514 comment xdebbie libvirt tls on virbr-xdebbie".to_string()));
-        assert!(rules.contains(&"allow proto udp from 192.168.1.0/24 to any port 7442 comment xdebbie discovery from 192.168.1.0/24".to_string()));
-        assert!(rules.contains(&"allow proto udp from 10.22.0.0/16 to any port 7442 comment xdebbie discovery from 10.22.0.0/16".to_string()));
+        assert!(rules.contains(&"allow proto udp from 192.168.1.0/24 to any port 23442 comment xdebbie discovery from 192.168.1.0/24".to_string()));
+        assert!(rules.contains(&"allow proto udp from 10.22.0.0/16 to any port 23442 comment xdebbie discovery from 10.22.0.0/16".to_string()));
         assert!(rules.contains(&"allow in on wg-flock proto udp to any port 6081 comment xdebbie geneve on wg-flock".to_string()));
         assert!(rules.contains(&"allow in on virbr-xdebbie proto udp to any port 67 comment xdebbie dhcp on virbr-xdebbie".to_string()));
         assert!(rules.contains(&"route allow in on virbr-xdebbie from 10.23.1.0/24 comment xdebbie vm egress 10.23.1.0/24 via virbr-xdebbie".to_string()));
@@ -667,7 +667,7 @@ mod tests {
     #[test]
     fn no_mesh_no_mesh_rules() {
         let spec = FirewallSpec {
-            api_port: 7443,
+            api_port: 23443,
             ..Default::default()
         };
         assert_eq!(spec.rules().len(), 3);
@@ -678,7 +678,7 @@ mod tests {
     fn stale_rules_are_the_tagged_ones_not_wanted_highest_first() {
         let status = "Status: active\n\n     To                         Action      From\n     --                         ------      ----\n\
             [ 1] 22/tcp                     ALLOW IN    Anywhere                   # xdebbie ssh\n\
-            [ 2] 7443/tcp                   ALLOW IN    10.22.0.0/16               # xdebbie api\n\
+            [ 2] 23443/tcp                   ALLOW IN    10.22.0.0/16               # xdebbie api\n\
             [ 3] 16514/tcp                  ALLOW IN    192.168.1.0/24             # xdebbie libvirt tls\n\
             [ 4] 8080/tcp                   ALLOW IN    Anywhere                   # operator's thing\n\
             [ 5] 6081/udp on wg-flock       ALLOW IN    Anywhere                   # xdebbie geneve on wg-flock\n\

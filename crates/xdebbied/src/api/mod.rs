@@ -1558,7 +1558,7 @@ mod tests {
         let req = EnrollRequest {
             hostname: "joiner.test".into(),
             box_id: None,
-            api_url: "https://joiner.test:7443".into(),
+            api_url: "https://joiner.test:23443".into(),
             csr: csr.csr_pem,
             wg_pubkey: None,
         };

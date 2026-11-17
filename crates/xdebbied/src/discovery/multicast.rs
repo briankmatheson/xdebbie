@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use tracing::debug;
 
-pub const DEFAULT_MULTICAST_ADDR: &str = "239.0.0.42:7442";
+pub const DEFAULT_MULTICAST_ADDR: &str = "239.0.0.42:23442";
 const MAX_PACKET_SIZE: usize = 65536;
 
 /// Multicast socket for discovery messages

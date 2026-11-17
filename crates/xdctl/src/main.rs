@@ -38,7 +38,7 @@ struct Cli {
     /// Any xdebbied in the cluster (comma-separated to try several). xdctl
     /// asks it who the leader is and talks to the leader from then on —
     /// except `mesh`, which is per-box state and talks to this box itself.
-    #[arg(long, env = "XDEBBIE_URL", default_value = "https://127.0.0.1:7443")]
+    #[arg(long, env = "XDEBBIE_URL", default_value = "https://127.0.0.1:23443")]
     url: String,
     #[arg(long, env = "XDEBBIE_TOKEN", hide_env_values = true)]
     token: Option<String>,

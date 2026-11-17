@@ -5,7 +5,7 @@ BINARY="$HOME/src/xdebbie/target/release/xdebbied"
 
 echo "=== Starting xdebbied ==="
 echo ""
-echo "Server will listen on: 0.0.0.0:7443"
+echo "Server will listen on: 0.0.0.0:23443"
 echo "Config: /etc/xdebbie/xdebbied.toml"
 echo "Token: /etc/xdebbie/token"
 echo ""

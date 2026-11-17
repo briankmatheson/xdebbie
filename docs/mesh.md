@@ -60,7 +60,7 @@ the URL of the box whose peer list it edits (on that box, the sourced
 
 Those `xdctl` calls go to the API over HTTPS. Every box's cert is signed
 by the one cluster CA, which the second box got when it was enrolled
-(`xdebbied bootstrap --join https://first:7443`, then `xdctl approve` —
+(`xdebbied bootstrap --join https://first:23443`, then `xdctl approve` —
 see BOOTSTRAP.md, "Joining a cluster"). A box that was never enrolled
 cannot be reached by the others' daemons or `xdctl`.
 

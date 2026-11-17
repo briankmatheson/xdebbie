@@ -241,10 +241,10 @@ mod tests {
 
     #[test]
     fn unresolvable_name_becomes_address() {
-        let u = reachable_url("https://no-such-host.invalid:7443", [IP]);
-        assert_eq!(u, "https://192.0.2.7:7443");
-        let u = reachable_url("https://no-such-host.invalid:7443/v1/x", [IP]);
-        assert_eq!(u, "https://192.0.2.7:7443/v1/x");
+        let u = reachable_url("https://no-such-host.invalid:23443", [IP]);
+        assert_eq!(u, "https://192.0.2.7:23443");
+        let u = reachable_url("https://no-such-host.invalid:23443/v1/x", [IP]);
+        assert_eq!(u, "https://192.0.2.7:23443/v1/x");
         let u = reachable_url("http://no-such-host.invalid", [IP]);
         assert_eq!(u, "http://192.0.2.7");
     }
@@ -252,16 +252,16 @@ mod tests {
     #[test]
     fn resolvable_and_literal_hosts_untouched() {
         assert_eq!(
-            reachable_url("https://localhost:7443", [IP]),
-            "https://localhost:7443"
+            reachable_url("https://localhost:23443", [IP]),
+            "https://localhost:23443"
         );
         assert_eq!(
-            reachable_url("https://10.0.0.1:7443", [IP]),
-            "https://10.0.0.1:7443"
+            reachable_url("https://10.0.0.1:23443", [IP]),
+            "https://10.0.0.1:23443"
         );
         assert_eq!(
-            reachable_url("https://[::1]:7443", [IP]),
-            "https://[::1]:7443"
+            reachable_url("https://[::1]:23443", [IP]),
+            "https://[::1]:23443"
         );
     }
 
@@ -269,16 +269,16 @@ mod tests {
     fn unusable_candidates_skipped() {
         let lo = IpAddr::V4(Ipv4Addr::LOCALHOST);
         assert_eq!(
-            reachable_url("https://no-such-host.invalid:7443", [lo, IP]),
-            "https://192.0.2.7:7443"
+            reachable_url("https://no-such-host.invalid:23443", [lo, IP]),
+            "https://192.0.2.7:23443"
         );
         assert_eq!(
-            reachable_url("https://no-such-host.invalid:7443", [lo]),
-            "https://no-such-host.invalid:7443"
+            reachable_url("https://no-such-host.invalid:23443", [lo]),
+            "https://no-such-host.invalid:23443"
         );
         assert_eq!(
-            reachable_url("https://no-such-host.invalid:7443", []),
-            "https://no-such-host.invalid:7443"
+            reachable_url("https://no-such-host.invalid:23443", []),
+            "https://no-such-host.invalid:23443"
         );
     }
 
@@ -286,34 +286,34 @@ mod tests {
     fn v6_rewrite_is_bracketed() {
         let v6: IpAddr = "2001:db8::1".parse().unwrap();
         assert_eq!(
-            reachable_url("https://no-such-host.invalid:7443", [v6]),
-            "https://[2001:db8::1]:7443"
+            reachable_url("https://no-such-host.invalid:23443", [v6]),
+            "https://[2001:db8::1]:23443"
         );
     }
 
     #[test]
     fn split() {
-        let p = split_url("https://user@h.example:7443/v1").unwrap();
+        let p = split_url("https://user@h.example:23443/v1").unwrap();
         assert_eq!(
             (p.scheme, p.host, p.port, p.rest),
-            ("https", "h.example", Some("7443"), "/v1")
+            ("https", "h.example", Some("23443"), "/v1")
         );
-        let p = split_url("https://[::1]:7443").unwrap();
-        assert_eq!((p.host, p.port, p.rest), ("::1", Some("7443"), ""));
+        let p = split_url("https://[::1]:23443").unwrap();
+        assert_eq!((p.host, p.port, p.rest), ("::1", Some("23443"), ""));
         assert!(split_url("not a url").is_none());
     }
 
     #[test]
     fn source_ip_unmaps_v4() {
-        let s: SocketAddr = "[::ffff:192.0.2.7]:7442".parse().unwrap();
+        let s: SocketAddr = "[::ffff:192.0.2.7]:23442".parse().unwrap();
         assert_eq!(source_ip(s), Some(IP));
-        let s: SocketAddr = "127.0.0.1:7442".parse().unwrap();
+        let s: SocketAddr = "127.0.0.1:23442".parse().unwrap();
         assert_eq!(source_ip(s), None);
     }
 
     #[test]
     fn local_addrs_has_no_loopback() {
-        for ip in local_addrs("239.0.0.42:7442") {
+        for ip in local_addrs("239.0.0.42:23442") {
             assert!(usable(ip), "{ip}");
         }
     }

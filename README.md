@@ -36,7 +36,7 @@ No configuration, no coordination service, no shared storage. Just `dpkg -i` and
 ## Features
 
 ✅ **Self-Bootstrapping** — Install on stock Debian 13, auto-configure everything  
-✅ **Auto-Discovery** — Multicast peer discovery on 239.0.0.42:7442  
+✅ **Auto-Discovery** — Multicast peer discovery on 239.0.0.42:23442  
 ✅ **Leader Election** — Bully algorithm with score-based ranking  
 ✅ **High Availability** — Automatic failover in <15s  
 ✅ **Zero Config** — No coordination service, no manual peer lists  
@@ -66,7 +66,7 @@ exports for `xdctl`.
 
 ### Discovery & Election
 
-XDebbie nodes use **multicast UDP (239.0.0.42:7442)** to automatically discover each other:
+XDebbie nodes use **multicast UDP (239.0.0.42:23442)** to automatically discover each other:
 
 1. **ANNOUNCE** (every 5s): Node broadcasts hostname, API URL, capacity
 2. **HEARTBEAT** (every 1s): Node sends score and leader status

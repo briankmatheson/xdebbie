@@ -189,11 +189,11 @@ mod tests {
 
     #[tokio::test]
     async fn standalone_is_leader() {
-        let l = Leadership::standalone("box", "http://10.0.0.1:7443");
+        let l = Leadership::standalone("box", "http://10.0.0.1:23443");
         assert!(l.is_leader().await);
         let s = l.status().await;
         assert_eq!(s.state, "standalone");
-        assert_eq!(s.leader.unwrap().api_url, "http://10.0.0.1:7443");
+        assert_eq!(s.leader.unwrap().api_url, "http://10.0.0.1:23443");
         assert!(l.flag().load(Ordering::Relaxed));
     }
 
@@ -209,7 +209,7 @@ mod tests {
         let me = LeaderRef {
             node_id: Some(me),
             hostname: "me".into(),
-            api_url: "http://me:7443".into(),
+            api_url: "http://me:23443".into(),
         };
         (
             Leadership::for_test(me, c.election.clone(), c.peers.clone()),
@@ -233,7 +233,7 @@ mod tests {
         c.peers.write().await.insert(PeerInfo::new(
             other,
             "other".into(),
-            "http://other:7443".into(),
+            "http://other:23443".into(),
             10.0,
         ));
         c.peers
@@ -247,14 +247,14 @@ mod tests {
             .await
             .received_leader_heartbeat(other, 1e9);
         let lead = l.leader().await.unwrap();
-        assert_eq!(lead.api_url, "http://other:7443");
+        assert_eq!(lead.api_url, "http://other:23443");
         assert_eq!(lead.node_id, Some(other));
         assert!(!l.is_leader().await);
 
         // We win: we are the leader.
         c.election.write().await.become_leader();
         assert!(l.is_leader().await);
-        assert_eq!(l.leader().await.unwrap().api_url, "http://me:7443");
+        assert_eq!(l.leader().await.unwrap().api_url, "http://me:23443");
         let s = l.status().await;
         assert_eq!((s.state.as_str(), s.peers), ("leader", 1));
     }

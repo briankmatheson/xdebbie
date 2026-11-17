@@ -147,9 +147,9 @@ mod tests {
 
     #[test]
     fn local_uri_becomes_tls_to_libvirtd_and_agent_is_set() {
-        let h = remote_view(&host("qemu:///system"), "https://box0:7443", "10.23.0.1");
+        let h = remote_view(&host("qemu:///system"), "https://box0:23443", "10.23.0.1");
         assert_eq!(h.uri, "qemu+tls://10.23.0.1/system");
-        assert_eq!(h.agent.as_deref(), Some("https://box0:7443"));
+        assert_eq!(h.agent.as_deref(), Some("https://box0:23443"));
         assert_eq!(h.abe.as_deref(), Some("https://10.22.0.1:443"));
         assert!(h.capacity.is_none() && h.last_seen.is_none());
     }
@@ -158,10 +158,10 @@ mod tests {
     fn a_remote_uri_in_config_is_kept() {
         let h = remote_view(
             &host("qemu+ssh://xdebbie@203.0.113.9/system"),
-            "https://box0:7443",
+            "https://box0:23443",
             "10.23.0.1",
         );
         assert_eq!(h.uri, "qemu+ssh://xdebbie@203.0.113.9/system");
-        assert_eq!(h.agent.as_deref(), Some("https://box0:7443"));
+        assert_eq!(h.agent.as_deref(), Some("https://box0:23443"));
     }
 }

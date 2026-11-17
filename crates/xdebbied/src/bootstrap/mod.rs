@@ -76,7 +76,7 @@ impl Default for BootstrapOptions {
             network_subnet: DEFAULT_NETWORK_SUBNET.to_string(),
             pool_name: DEFAULT_POOL_NAME.to_string(),
             pool_path: DEFAULT_POOL_PATH.to_string(),
-            listen_addr: "0.0.0.0:7443".to_string(),
+            listen_addr: "0.0.0.0:23443".to_string(),
             force: false,
             box_id: None,
             join: None,
@@ -829,7 +829,7 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
         info!("");
         info!("No cluster CA key here. Either this is the CA box upgraded from 0.13 (run");
         info!("`bootstrap --force` once to create the key) or it should join another:");
-        info!("  sudo xdebbied bootstrap --join https://<ca-box>:7443");
+        info!("  sudo xdebbied bootstrap --join https://<ca-box>:23443");
     }
 
     Ok(())
@@ -890,7 +890,7 @@ fn reach_host(hostname: &str, multicast_addr: &str) -> ReachHost {
 /// address is kept as-is.
 fn derive_advertise_url(listen_addr: &str, host: &str) -> String {
     // Split off the port — listen_addr is "host:port" or "[::]:port".
-    let port = listen_addr.rsplit(':').next().unwrap_or("7443");
+    let port = listen_addr.rsplit(':').next().unwrap_or("23443");
 
     let host = if listen_addr.starts_with("0.0.0.0:")
         || listen_addr.starts_with("[::]:")
@@ -924,19 +924,19 @@ mod tests {
     #[test]
     fn test_derive_advertise_url_wildcard() {
         assert_eq!(
-            derive_advertise_url("0.0.0.0:7443", "gram.example"),
-            "https://gram.example:7443"
+            derive_advertise_url("0.0.0.0:23443", "gram.example"),
+            "https://gram.example:23443"
         );
         assert_eq!(
-            derive_advertise_url("[::]:7443", "192.168.1.164"),
-            "https://192.168.1.164:7443"
+            derive_advertise_url("[::]:23443", "192.168.1.164"),
+            "https://192.168.1.164:23443"
         );
     }
 
     #[test]
     fn test_derive_advertise_url_literal_ip() {
-        let url = derive_advertise_url("192.168.1.10:7443", "gram.example");
-        assert_eq!(url, "https://192.168.1.10:7443");
+        let url = derive_advertise_url("192.168.1.10:23443", "gram.example");
+        assert_eq!(url, "https://192.168.1.10:23443");
     }
 
     #[test]
@@ -959,7 +959,7 @@ mod tests {
 
     #[test]
     fn reach_host_keeps_a_name_that_resolves() {
-        let r = reach_host("192.0.2.7", "239.0.0.42:7442");
+        let r = reach_host("192.0.2.7", "239.0.0.42:23442");
         assert!(r.by_name);
         assert_eq!(r.host, "192.0.2.7");
     }

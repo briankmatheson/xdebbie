@@ -188,7 +188,7 @@ xdctl host ls
 | Bridge name | `virbr-xdebbie` |
 | Pool name | `xdebbie` |
 | Pool path | `/var/lib/libvirt/xdebbie` |
-| Listen address | `0.0.0.0:7443` |
+| Listen address | `0.0.0.0:23443` |
 
 ## Bootstrap Process Flow
 

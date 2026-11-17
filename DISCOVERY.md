@@ -11,7 +11,7 @@ Auto-discovery is **enabled by default**. All xdebbied nodes on the same network
 sudo dpkg -i xdebbied_0.3.0-1_amd64.deb
 
 # Nodes will automatically:
-# 1. Announce themselves on multicast 239.0.0.42:7442
+# 1. Announce themselves on multicast 239.0.0.42:23442
 # 2. Discover other nodes
 # 3. Elect a leader based on score
 # 4. Maintain HA with automatic failover
@@ -25,8 +25,8 @@ Discovery settings in `/etc/xdebbie/xdebbied.toml`:
 # Enable/disable discovery (default: true)
 enable_discovery = true
 
-# Multicast address for discovery (default: 239.0.0.42:7442)
-multicast_addr = "239.0.0.42:7442"
+# Multicast address for discovery (default: 239.0.0.42:23442)
+multicast_addr = "239.0.0.42:23442"
 ```
 
 ### Disable Discovery
@@ -41,7 +41,7 @@ enable_discovery = false
 
 ### Discovery Protocol
 
-XDebbie uses multicast UDP on **239.0.0.42:7442** for peer discovery:
+XDebbie uses multicast UDP on **239.0.0.42:23442** for peer discovery:
 
 1. **ANNOUNCE** (every 5s)
    - Node announces itself with hostname, API URL, capacity
@@ -69,7 +69,7 @@ All messages are JSON over UDP:
   "type": "ANNOUNCE",
   "node_id": "550e8400-e29b-41d4-a716-446655440000",
   "hostname": "node1",
-  "api_url": "http://192.168.1.10:7443",
+  "api_url": "http://192.168.1.10:23443",
   "capacity": {
     "total_cpus": 64,
     "total_memory_mib": 262144,
@@ -173,25 +173,25 @@ Each node's score is calculated from multiple components:
 
 ### Multicast
 
-- **Address**: 239.0.0.42:7442
+- **Address**: 239.0.0.42:23442
 - **Protocol**: UDP
 - **TTL**: 1 (local network only)
 - **Packet Size**: Maximum 64 KB (typical: <1 KB)
 
 ### Firewall Rules
 
-Allow multicast UDP on port 7442:
+Allow multicast UDP on port 23442:
 
 ```bash
 # iptables
-sudo iptables -A INPUT -p udp -d 239.0.0.42 --dport 7442 -j ACCEPT
+sudo iptables -A INPUT -p udp -d 239.0.0.42 --dport 23442 -j ACCEPT
 
 # firewalld
-sudo firewall-cmd --permanent --add-port=7442/udp
+sudo firewall-cmd --permanent --add-port=23442/udp
 sudo firewall-cmd --reload
 
 # ufw
-sudo ufw allow 7442/udp
+sudo ufw allow 23442/udp
 ```
 
 ### Network Switches
@@ -209,7 +209,7 @@ Ensure multicast is enabled on network switches:
 sudo journalctl -u xdebbied -f | grep -i discovery
 
 # Example output:
-# Nov 08 16:00:00 node1 xdebbied[1234]: Discovery engine initialized: node_id=550e8400... multicast=239.0.0.42:7442
+# Nov 08 16:00:00 node1 xdebbied[1234]: Discovery engine initialized: node_id=550e8400... multicast=239.0.0.42:23442
 # Nov 08 16:00:00 node1 xdebbied[1234]: Starting discovery engine
 # Nov 08 16:00:05 node1 xdebbied[1234]: Discovered new peer: node2 (650e8400...)
 # Nov 08 16:00:10 node1 xdebbied[1234]: Won election with majority vote, becoming leader
@@ -251,21 +251,21 @@ sudo journalctl -u xdebbied -f | grep "Score calculation"
 
 2. **Check firewall**:
    ```bash
-   sudo iptables -L -n | grep 7442
+   sudo iptables -L -n | grep 23442
    ```
 
 3. **Test multicast reachability**:
    ```bash
    # On receiver
-   socat UDP4-RECVFROM:7442,ip-add-membership=239.0.0.42:0.0.0.0,fork -
+   socat UDP4-RECVFROM:23442,ip-add-membership=239.0.0.42:0.0.0.0,fork -
    
    # On sender
-   echo "test" | socat - UDP4-DATAGRAM:239.0.0.42:7442
+   echo "test" | socat - UDP4-DATAGRAM:239.0.0.42:23442
    ```
 
 4. **Check network interface**:
    ```bash
-   # Discovery binds to 0.0.0.0:7442 by default
+   # Discovery binds to 0.0.0.0:23442 by default
    # Ensure multicast routing is correct
    route -n | grep 224.0.0.0
    ```

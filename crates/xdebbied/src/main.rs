@@ -85,7 +85,7 @@ enum Cmd {
         #[arg(long, value_parser = clap::value_parser!(u8).range(0..=253))]
         r#box: Option<u8>,
         /// Join an existing cluster: API URL of the box bootstrapped first
-        /// (it holds the cluster CA), e.g. https://node0:7443. This box
+        /// (it holds the cluster CA), e.g. https://node0:23443. This box
         /// gets a certificate from it once an operator runs
         /// `xdctl approve <this hostname>` there, then the cluster token.
         #[arg(long, value_name = "URL")]

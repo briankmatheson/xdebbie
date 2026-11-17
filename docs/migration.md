@@ -86,7 +86,7 @@ Example migration:
 
 ```toml
 # OLD (incorrect)
-bind = "0.0.0.0:7443"
+bind = "0.0.0.0:23443"
 state_path = "/var/lib/xdebbie/state.json"
 
 [[hosts]]
@@ -97,7 +97,7 @@ memory_overcommit = 1.0
 
 ```toml
 # NEW (correct)
-listen = "0.0.0.0:7443"
+listen = "0.0.0.0:23443"
 state_file = "/var/lib/xdebbie/state.json"
 
 [[hosts]]
@@ -192,7 +192,7 @@ source ~/.xdebbie_env
 
 **Option 2**: Continue using your method
 ```bash
-export XDEBBIE_URL=http://myhost:7443
+export XDEBBIE_URL=http://myhost:23443
 export XDEBBIE_TOKEN=$(sudo cat /etc/xdebbie/token)
 ```
 
@@ -332,3 +332,26 @@ The bootstrap functionality is:
 - **Additive** - adds convenience, doesn't remove functionality
 
 Upgrade with confidence! The new version works exactly like the old version when you use `xdebbied serve` without `--bootstrap`.
+
+## Ports 23443/23442
+
+The defaults moved from 7443/tcp (API) and 7442/udp (discovery) to
+23443/tcp and 23442/udp. Bootstrapped boxes write both into
+`xdebbied.toml`, so upgrading the package changes nothing on a running
+cluster. To move one:
+
+1. On every box, set `listen` (and `advertise_url`, if set) to `:23443`
+   and `multicast_addr = "239.0.0.42:23442"` in `/etc/xdebbie/xdebbied.toml`,
+   and `XDEBBIE_URL` in `/etc/xdebbie/xdebbie_env`.
+2. Open the new ports in ufw from the same sources as the old ones, then
+   delete the old rules.
+3. Restart xdebbied on every box together: boxes on different discovery
+   ports do not hear each other, and each leads alone until they match.
+4. Update every client that holds a URL: CAPX's credentials on the
+   management cluster (`make capx-credentials` in simple), the `[[hosts]]`
+   `agent` URLs (the registrar re-sends them within a minute), and any
+   `xdctl --url`.
+
+Restarting xdebbied on a box that runs public NAT rules (`set-nat.sh`)
+drops them; re-run it afterwards.
+
