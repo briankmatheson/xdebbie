@@ -60,7 +60,7 @@ File: `/usr/lib/systemd/system/qfodufk8sd.service`
 ```ini
 [Unit]
 Description=qfodufk8s VM Orchestrator
-Documentation=https://github.com/yourusername/qfodufk8s
+Documentation=https://github.com/briankmatheson/xdebbie
 After=network-online.target libvirtd.service multi-user.target
 Wants=network-online.target
 Requires=libvirtd.service

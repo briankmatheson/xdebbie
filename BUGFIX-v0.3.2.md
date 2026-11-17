@@ -52,7 +52,7 @@ Changed from **hard requirement** to **soft preference**:
 ```diff
  [Unit]
  Description=xdebbie VM Orchestrator
- Documentation=https://github.com/yourusername/xdebbie
+ Documentation=https://github.com/briankmatheson/xdebbie
 -After=network-online.target libvirtd.service local-fs.target
 -Wants=network-online.target
 -Requires=libvirtd.service
