@@ -1,16 +1,30 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! xdj — slip into the xdebbie mesh without running the daemon.
+//! xdj — slip into the xdebbie mesh without running the daemon, from Linux,
+//! macOS or Windows.
 //!
-//! It brings up the two links xdebbied would: a WireGuard underlay
-//! (wg-flock, 10.22.<me>.1/16) with one peer per hub, and a Geneve tunnel
-//! (gnv-b<peer>) folded into the local bridge with the derived static FDB.
+//! It brings up one WireGuard link to the hub (10.22.<me>.1/16, peer
+//! 10.22.<hub>.1) and routes the VM network (`routes`, default
+//! 10.23.0.0/16) into it; the hub forwards to its VMs when it runs with
+//! `[network] mesh_routed = true`. No Geneve, no bridge: the same on every OS.
+//! With `dns_domain` set, that zone (and only it) is resolved by `dns`.
 //!
-//!   xdj           toggle: up if the tunnel is down, down if it is up
+//!   xdj           toggle: up if the link is down, down if it is up
 //!   xdj up/down   force a direction
 //!   xdj key       print our public key (register it on the hub)
 //!   xdj clear     forget our key and the hub's; the next `up` starts over
 //!   xdj show      print the moves, make none
-//!   xdj status    say whether the links are up
+//!   xdj status    say whether the link is up
+//!
+//! The moves are each OS's own (os.rs):
+//!
+//! | | link | address, routes | scoped DNS |
+//! |---|---|---|---|
+//! | Linux | `ip link add … type wireguard`, `wg set` | `ip addr`, `ip route add` | `resolvectl dns/domain` |
+//! | macOS | `wireguard-go utun`, `wg set` | `ifconfig`, `route add` | `/etc/resolver/<zone>` |
+//! | Windows | `wireguard.exe /installtunnelservice` (`Table = off`) | `netsh … add route` | NRPT rule (`Add-DnsClientNrptRule`) |
+//!
+//! WireGuard itself is never installed: without it xdj says what is missing
+//! and exits 1.
 //!
 //! Identity: it adopts this box's xdebbie WireGuard key if one is on disk
 //! (/var/lib/xdebbie/wg.key), so the hub already knows us; otherwise it asks
@@ -20,17 +34,15 @@
 //! on a remote box, the address you are logged in from is usually the hub's.
 //!
 //! It is for boxes WITHOUT the daemon: where xdebbied is running the mesh is
-//! the daemon's (same links, its own keys), and xdj refuses to do anything.
-//!
-//! A box without the mesh bridge (a cloud VM, not a hypervisor) carries the
-//! overlay on the tunnel itself, under the MAC the hub's derived plan expects
-//! for this box's bridge (52:54:00:23:<box>:fe) — the hub has a static FDB
-//! entry for that MAC and for no other. The ip/wg/bridge calls want root — it re-execs
-//! under sudo, carrying your $HOME so it reads your conf, not root's.
+//! the daemon's, and xdj refuses to do anything. Linux and macOS re-exec
+//! under sudo, carrying your $HOME so it reads your conf, not root's;
+//! Windows wants an elevated prompt.
 
 use std::collections::BTreeMap as M;
 use std::io::{Error, ErrorKind::Other, Result, Write};
 use std::process::{Command as X, Stdio as Z};
+
+mod os;
 
 const A: &str = "xdebbie-mesh/v1"; // the ownership alias the daemon stamps
 
@@ -50,6 +62,7 @@ fn rooted() -> bool {
 fn home() -> String {
     env("XDJ_HOME")
         .or_else(|| env("HOME"))
+        .or_else(|| env("USERPROFILE"))
         .unwrap_or_else(|| "/root".into())
 }
 fn cpath() -> String {
@@ -67,12 +80,6 @@ fn ep_with_port(ep: &str, port: u16) -> String {
     } else {
         format!("{ep}:{port}")
     }
-}
-
-/// The MAC the hub's `derived` FDB plan files this box's bridge under
-/// (xdebbied mesh/model.rs `bridge_mac`): `52:54:00:23:<box hex>:fe`.
-fn bridge_mac(box_id: u8) -> String {
-    format!("52:54:00:23:{box_id:02x}:fe")
 }
 
 /// The likeliest hub address in `w -h` output: the IPv4 address most sessions
@@ -139,11 +146,6 @@ fn daemon_pid(proc: &str) -> Option<u32> {
     })
 }
 
-/// Does a link exist? (read-only, no root needed).
-fn have(dev: &str) -> bool {
-    r("ip", &["link", "show", dev], None, false).is_ok()
-}
-
 /// Ask on stderr, read one line from stdin. Empty allowed.
 fn ask(q: &str) -> String {
     eprint!("{q}");
@@ -168,7 +170,9 @@ fn save(path: &str, body: &str, mode: &str) -> Result<()> {
         mine(&d.to_string_lossy());
     }
     std::fs::write(path, body)?;
-    let _ = r("chmod", &[mode, path], None, true);
+    if !cfg!(windows) {
+        let _ = r("chmod", &[mode, path], None, true);
+    }
     mine(path);
     Ok(())
 }
@@ -241,7 +245,7 @@ fn conf_del(key: &str) -> Result<bool> {
 
 fn pubkey_of(priv_: &str) -> Result<String> {
     Ok(r(
-        "wg",
+        &os::Os::here().wg(),
         &["pubkey"],
         Some(&format!("{}\n", priv_.trim())),
         false,
@@ -279,58 +283,8 @@ fn dns_answers(server: &str) -> bool {
     false
 }
 
-/// The interface carrying the default route (gram's real uplink).
-fn default_iface() -> Option<String> {
-    let o = r("ip", &["route", "show", "default"], None, true).ok()?;
-    let t: Vec<&str> = o.lines().next().unwrap_or("").split_whitespace().collect();
-    t.iter()
-        .position(|&w| w == "dev")
-        .and_then(|i| t.get(i + 1))
-        .map(|s| s.to_string())
-}
-
-/// The active NetworkManager connection on `iface`.
-fn conn_for(iface: &str) -> Option<String> {
-    let o = r(
-        "nmcli",
-        &["-t", "-f", "NAME,DEVICE", "connection", "show", "--active"],
-        None,
-        true,
-    )
-    .ok()?;
-    o.lines().find_map(|l| {
-        l.rsplit_once(':')
-            .filter(|(_, d)| *d == iface)
-            .map(|(n, _)| n.to_string())
-    })
-}
-
-/// Point the uplink connection at the internal resolver and remember which
-/// one we changed, so `down` can put it back. Mirrors simple/bin/set-dns.sh.
-fn dns_set(server: &str) -> Result<()> {
-    let Some(iface) = default_iface() else {
-        eprintln!("xdj: no default route; leaving DNS alone");
-        return Ok(());
-    };
-    let Some(conn) = conn_for(&iface) else {
-        eprintln!("xdj: no NM connection on {iface}; leaving DNS alone");
-        return Ok(());
-    };
-    let m = |k: &str, v: &str, soft: bool| {
-        r("nmcli", &["connection", "modify", &conn, k, v], None, soft).map(|_| ())
-    };
-    m("ipv4.dns", "", false)?;
-    m("ipv4.dns", server, false)?;
-    m("ipv6.dns", "", true)?;
-    m("ipv4.ignore-auto-dns", "yes", false)?;
-    m("ipv6.ignore-auto-dns", "yes", true)?;
-    r("nmcli", &["connection", "up", &conn], None, false)?;
-    save(&dns_state(), &format!("{conn}\n"), "644")?;
-    eprintln!("xdj: dns -> {server} on \"{conn}\"");
-    Ok(())
-}
-
-/// Undo `dns_set`: hand the remembered connection its DHCP resolvers back.
+/// Undo the system-wide DNS an xdj from before routing set (nmcli):
+/// hand the remembered connection its DHCP resolvers back.
 fn dns_revert() {
     let Ok(c) = std::fs::read_to_string(dns_state()) else {
         return;
@@ -355,59 +309,73 @@ struct C {
     pb: u8,
     pk: String,
     ep: String,
-    br: String,
     ul: String,
     xk: String,
-    oaddr: String,
     dns: String,
+    domain: String,
+    routes: Vec<String>,
     port: u16,
-    vni: u32,
-    dport: u16,
     wmtu: u16,
-    mmtu: u16,
     ka: u16,
 }
+
+/// Where macOS's wireguard-go keeps its sockets and name files.
+const MAC_RUN: &str = "/var/run/wireguard";
 
 impl C {
     fn load() -> C {
         let m = conf();
         let g = |k: &str, d: &str| m.get(k).cloned().unwrap_or_else(|| d.into());
-        let sb: u8 = num(g("self_box", "1"));
         C {
-            sb,
+            sb: num(g("self_box", "1")),
             pb: num(g("peer_box", "0")),
             pk: g("peer_pubkey", ""),
             ep: g("peer_endpoint", ""),
-            br: g("bridge", "virbr-xdebbie"),
             ul: g("underlay", "wg-flock"),
             xk: g("xdebbie_key", ""),
-            // Our address on the overlay bridge, so we can reach 10.23.x
-            // services (and the internal DNS). Empty = don't assign one.
-            oaddr: g("overlay", &format!("10.23.{sb}.1/16")),
-            // Internal resolver, set while the tunnel is up. Empty = leave
-            // the system DNS alone.
+            // The mesh resolver, asked only for `dns_domain` (scoped DNS).
+            // Empty = leave DNS alone.
             dns: g("dns", "10.23.0.11"),
+            domain: g("dns_domain", ""),
+            // Routed into the tunnel besides the underlay. The hub forwards
+            // them to its VMs (xdebbied `[network] mesh_routed = true`).
+            routes: g("routes", "10.23.0.0/16")
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
             port: num(g("wg_port", "51820")),
-            vni: num(g("vni", "23")),
-            dport: num(g("dstport", "6081")),
             wmtu: num(g("wg_mtu", "1420")),
-            mmtu: num(g("mesh_mtu", "1370")),
             ka: num(g("keepalive", "25")),
         }
     }
 
-    /// Is the mesh bridge here (a hypervisor), or do we ride the tunnel alone?
-    fn bridged(&self) -> bool {
-        !self.br.is_empty() && have(&self.br)
-    }
     fn me(&self) -> String {
         format!("10.22.{}.1", self.sb)
     }
     fn peer(&self) -> String {
         format!("10.22.{}.1", self.pb)
     }
-    fn tun(&self) -> String {
-        format!("gnv-b{}", self.pb)
+
+    fn link(&self) -> os::Link {
+        os::Link {
+            name: self.ul.clone(),
+            me: self.me(),
+            hub: self.peer(),
+            hub_pubkey: if self.pk.is_empty() {
+                "<hub_pubkey>".into()
+            } else {
+                self.pk.clone()
+            },
+            endpoint: ep_with_port(&self.ep, self.port),
+            port: self.port,
+            mtu: self.wmtu,
+            keepalive: self.ka,
+            routes: self.routes.clone(),
+            dns: self.dns.split('/').next().unwrap_or("").to_string(),
+            domain: self.domain.trim_matches('.').to_string(),
+            key_file: kpath(),
+        }
     }
 
     /// Our private key, and a word on where it came from.
@@ -446,7 +414,9 @@ impl C {
         let typed = ask("WireGuard private key to use (Enter to generate one): ");
         let (k, tag) = if typed.is_empty() {
             (
-                r("wg", &["genkey"], None, false)?.trim().to_string(),
+                r(&os::Os::here().wg(), &["genkey"], None, false)?
+                    .trim()
+                    .to_string(),
                 "minted",
             )
         } else {
@@ -461,7 +431,7 @@ impl C {
     fn ensure_peer(&mut self) -> Result<()> {
         if self.pk.is_empty() {
             loop {
-                let v = ask("Hub (master) WireGuard public key [`xdj key` on the hub]: ");
+                let v = ask("Hub (master) WireGuard public key [`xdctl mesh wg` on the hub]: ");
                 if !v.is_empty() {
                     self.pk = v;
                     break;
@@ -492,156 +462,65 @@ impl C {
         Ok(())
     }
 
-    fn keyiface(&self, priv_: &str) -> Result<()> {
-        let s = format!("{}\n", priv_.trim());
-        let p = self.port.to_string();
-        if r(
-            "wg",
-            &[
-                "set",
-                &self.ul,
-                "private-key",
-                "/dev/stdin",
-                "listen-port",
-                &p,
-            ],
-            Some(&s),
-            false,
-        )
-        .is_err()
-        {
-            r(
-                "wg",
-                &["set", &self.ul, "private-key", &kpath(), "listen-port", &p],
-                None,
-                false,
-            )?;
+    /// Is our link up? (read-only)
+    fn is_up(&self) -> bool {
+        match os::Os::here() {
+            os::Os::Linux => r("ip", &["link", "show", &self.ul], None, false).is_ok(),
+            os::Os::Mac => mac_utun(&self.ul)
+                .map(|u| r("ifconfig", &[&u], None, false).is_ok())
+                .unwrap_or(false),
+            os::Os::Win => r("sc", &["query", &os::Os::win_service(&self.ul)], None, true)
+                .map(|o| o.contains("RUNNING"))
+                .unwrap_or(false),
         }
-        Ok(())
     }
 
     fn up(&mut self) -> Result<()> {
+        let here = os::Os::here();
+        if let Some(m) = here.missing_wireguard(on_path, |p| std::path::Path::new(p).exists()) {
+            return Err(e(m));
+        }
         let (priv_, tag) = self.identity()?;
         self.ensure_peer()?;
-        let (ul, wmtu) = (self.ul.clone(), self.wmtu.to_string());
-        r("ip", &["link", "add", &ul, "type", "wireguard"], None, true)?;
-        r("ip", &["link", "set", &ul, "alias", A], None, false)?;
-        self.keyiface(&priv_)?;
-        r(
-            "ip",
-            &["addr", "replace", &format!("{}/16", self.me()), "dev", &ul],
-            None,
-            false,
-        )?;
-        r("ip", &["link", "set", &ul, "mtu", &wmtu], None, false)?;
-        r("ip", &["link", "set", &ul, "up"], None, false)?;
-        let rem = self.peer();
-        let ka = self.ka.to_string();
-        let aip = format!("{rem}/32");
-        let ep = ep_with_port(&self.ep, self.port);
-        let mut pa = vec!["set", &ul, "peer", &self.pk];
-        if !ep.is_empty() {
-            pa.extend(["endpoint", &ep]);
-        }
-        pa.extend(["allowed-ips", &aip, "persistent-keepalive", &ka]);
-        r("wg", &pa, None, false)?;
-
-        let (d, vni, mmtu, dp) = (
-            self.tun(),
-            self.vni.to_string(),
-            self.mmtu.to_string(),
-            self.dport.to_string(),
-        );
-        r(
-            "ip",
-            &[
-                "link", "add", &d, "type", "geneve", "id", &vni, "remote", &rem, "dstport", &dp,
-                "ttl", "64", "df", "set",
-            ],
-            None,
-            true,
-        )?;
-        r("ip", &["link", "set", &d, "alias", A], None, false)?;
-        r("ip", &["link", "set", &d, "mtu", &mmtu], None, false)?;
-        // A hypervisor enslaves the tunnel to the mesh bridge so its VMs share
-        // the overlay. A plain host has no such bridge and carries the overlay
-        // on the tunnel itself. Learn mode (flood BUM to the single tunnel,
-        // learn MACs) lets us reach the hub's bridge whatever its MAC is — the
-        // derived-MAC static FDB only worked when every bridge had a
-        // 52:54:00:23:* MAC, which the hub's does not.
-        let bridged = self.bridged();
-        if bridged {
-            r("ip", &["link", "set", &d, "master", &self.br], None, false)?;
-            r(
-                "bridge",
-                &[
-                    "link",
-                    "set",
-                    "dev",
-                    &d,
-                    "isolated",
-                    "on",
-                    "learning",
-                    "on",
-                    "flood",
-                    "on",
-                    "mcast_flood",
-                    "on",
-                    "bcast_flood",
-                    "on",
-                    "neigh_suppress",
-                    "off",
-                ],
-                None,
-                false,
-            )?;
-        } else {
-            // The other direction is not learned: the hub (fdb = derived, tunnel
-            // ports not learning) only forwards to the MACs its plan gives this
-            // box, so the tunnel answers as the bridge the plan expects here.
-            // Under its random MAC every reply from the hub is dropped there.
-            r(
-                "ip",
-                &["link", "set", &d, "address", &bridge_mac(self.sb)],
-                None,
-                false,
-            )?;
-        }
-        r("ip", &["link", "set", &d, "up"], None, false)?;
-
-        // Our place on the overlay — on the bridge when bridged, else on the
-        // tunnel — then the internal resolver on top of it.
-        if !self.oaddr.is_empty() {
-            let dev = if bridged {
-                self.br.as_str()
-            } else {
-                d.as_str()
-            };
-            r(
-                "ip",
-                &["addr", "replace", &self.oaddr, "dev", dev],
-                None,
-                false,
-            )?;
-        }
-        if !self.dns.is_empty() {
-            // Only hand the resolver over once it actually answers over the
-            // mesh — otherwise a half-up tunnel would cost you all DNS.
-            let host = self.dns.split('/').next().unwrap_or(&self.dns);
-            if dns_answers(host) {
-                if let Err(e) = dns_set(host) {
-                    eprintln!("xdj: dns setup failed ({e}); mesh is still up");
-                }
-            } else {
-                eprintln!("xdj: {host} unreachable over the mesh — leaving DNS alone");
-                eprintln!(
-                    "      (is this box registered on the hub, and the tunnel passing traffic?)"
-                );
+        let l = self.link();
+        match here {
+            os::Os::Linux => {
+                // An xdj from before routing left a Geneve tunnel and system-wide
+                // DNS behind; clear those first.
+                legacy_cleanup(self.pb);
+                run(&os::Os::linux_up(&l))?;
+            }
+            os::Os::Mac => {
+                let (c, name_file) = os::Os::mac_create(&l, MAC_RUN);
+                run(&c)?;
+                let utun = std::fs::read_to_string(&name_file)
+                    .map(|s| s.trim().to_string())
+                    .map_err(|x| {
+                        e(format!(
+                            "wireguard-go wrote no interface name to {name_file}: {x}"
+                        ))
+                    })?;
+                run(&os::Os::mac_up(&l, &utun))?;
+            }
+            os::Os::Win => {
+                let conf = win_conf_path(&self.ul);
+                save(&conf, &os::Os::win_conf(&l, &priv_), "600")?;
+                let cmds = os::Os::win_up(&l, &conf);
+                run(&cmds[..2])?; // icacls, install the tunnel service
+                wait_for_adapter(&self.ul);
+                run(&cmds[2..])?; // routes
             }
         }
+        self.dns_up(&l);
 
         let pk = pubkey_of(&priv_).unwrap_or_default();
-        eprintln!("xdj: up — {} on {ul}, peer {}", self.me(), self.peer());
+        eprintln!(
+            "xdj: up — {} on {}, peer {}, routing {}",
+            self.me(),
+            self.ul,
+            self.peer(),
+            self.routes.join(", ")
+        );
         if tag == "adopted" {
             eprintln!("xdj: adopted this box's xdebbie key — the hub already knows it");
         } else {
@@ -650,23 +529,70 @@ impl C {
             eprintln!("xdj: if the hub does not know this box yet, run there:");
             eprintln!("      xdctl mesh peer add {} --pubkey {pk}", self.sb);
         }
+        eprintln!("xdj: the hub reaches its VMs for you only with `[network] mesh_routed = true`");
         Ok(())
     }
 
-    fn down(&self) -> Result<()> {
-        dns_revert();
-        // Bridged, the overlay address is on the bridge, which outlives us;
-        // bridgeless it is on the tunnel and goes with it.
-        if !self.oaddr.is_empty() && self.bridged() {
-            r(
-                "ip",
-                &["addr", "del", &self.oaddr, "dev", &self.br],
-                None,
-                true,
-            )?;
+    /// Scoped DNS: only `dns_domain` goes to the mesh resolver. Failure here
+    /// never takes the link down.
+    fn dns_up(&self, l: &os::Link) {
+        if l.dns.is_empty() {
+            return;
         }
-        r("ip", &["link", "del", &self.tun()], None, true)?;
-        r("ip", &["link", "del", &self.ul], None, true)?;
+        if l.domain.is_empty() {
+            eprintln!("xdj: set dns_domain = <the mesh zone> in {} to resolve it through {}; DNS left alone", cpath(), l.dns);
+            return;
+        }
+        let done = match os::Os::here() {
+            os::Os::Linux if on_path("resolvectl") => run(&os::Os::linux_dns(l)),
+            os::Os::Linux => Err(e(
+                "scoped DNS needs systemd-resolved (resolvectl); DNS left alone",
+            )),
+            os::Os::Mac => {
+                let (p, body) = os::Os::mac_dns(l);
+                if std::path::Path::new(&p).exists() && !os::ours(&p) {
+                    Err(e(format!("{p} exists and is not xdj's; DNS left alone")))
+                } else {
+                    std::fs::create_dir_all("/etc/resolver")
+                        .and_then(|_| std::fs::write(&p, body))
+                        .map_err(|x| e(format!("{p}: {x}")))
+                }
+            }
+            os::Os::Win => run(&[os::Os::win_dns(l)]),
+        };
+        match done {
+            Ok(()) => {
+                eprintln!("xdj: dns — {} via {}", l.domain, l.dns);
+                if !dns_answers(&l.dns) {
+                    eprintln!("xdj: {} does not answer yet (is the hub routing for us: mesh_routed, and this box registered?)", l.dns);
+                }
+            }
+            Err(x) => eprintln!("xdj: {x}"),
+        }
+    }
+
+    fn down(&self) -> Result<()> {
+        let l = self.link();
+        match os::Os::here() {
+            os::Os::Linux => {
+                legacy_cleanup(self.pb);
+                run(&os::Os::linux_down(&l))?;
+            }
+            os::Os::Mac => {
+                let (p, _) = os::Os::mac_dns(&l);
+                if !l.domain.is_empty() && os::ours(&p) {
+                    let _ = std::fs::remove_file(&p);
+                }
+                if let Some(u) = mac_utun(&self.ul) {
+                    run(&os::Os::mac_down(&u, MAC_RUN))?;
+                }
+                let _ = std::fs::remove_file(format!("{MAC_RUN}/{}.name", self.ul));
+            }
+            os::Os::Win => {
+                run(&os::Os::win_down(&l))?;
+                let _ = std::fs::remove_file(win_conf_path(&self.ul));
+            }
+        }
         eprintln!("xdj: down — left the mesh");
         Ok(())
     }
@@ -688,7 +614,7 @@ impl C {
         } else {
             eprintln!("xdj: no hub public key in {}", cpath());
         }
-        if have(&self.ul) {
+        if self.is_up() {
             eprintln!(
                 "xdj: {} is still up on the old keys — `xdj down`, then `xdj up`",
                 self.ul
@@ -700,73 +626,108 @@ impl C {
     }
 
     fn status(&self) {
-        let s = |d: &str| if have(d) { "up" } else { "down" };
         println!(
-            "underlay {} {}\ntunnel   {} {}",
+            "link {} {}",
             self.ul,
-            s(&self.ul),
-            self.tun(),
-            s(&self.tun())
+            if self.is_up() { "up" } else { "down" }
         );
     }
 
+    /// The moves `up` would make here, made of none.
     fn show(&self) {
-        let pk = if self.pk.is_empty() {
-            "<hub_pubkey>"
-        } else {
-            &self.pk
-        };
-        let (m, p) = (self.me(), self.peer());
-        let ep = if self.ep.is_empty() {
-            String::new()
-        } else {
-            format!("endpoint {} ", ep_with_port(&self.ep, self.port))
-        };
-        println!(
-            "ip link add {0} type wireguard; ip link set {0} alias {A}",
-            self.ul
-        );
-        println!(
-            "wg set {} private-key {} listen-port {}",
-            self.ul,
-            kpath(),
-            self.port
-        );
-        println!(
-            "ip addr replace {m}/16 dev {0}; ip link set {0} mtu {1} up",
-            self.ul, self.wmtu
-        );
-        println!(
-            "wg set {} peer {pk} {ep}allowed-ips {p}/32 persistent-keepalive {}",
-            self.ul, self.ka
-        );
-        let d = self.tun();
-        println!(
-            "ip link add {d} type geneve id {} remote {p} dstport {} ttl 64 df set",
-            self.vni, self.dport
-        );
-        let odev = if self.bridged() {
-            println!(
-                "ip link set {d} alias {A} mtu {} master {} up",
-                self.mmtu, self.br
-            );
-            println!("bridge link set dev {d} isolated on learning on flood on mcast_flood on bcast_flood on neigh_suppress off");
-            self.br.clone()
-        } else {
-            println!(
-                "ip link set {d} alias {A} mtu {} address {} up",
-                self.mmtu,
-                bridge_mac(self.sb)
-            );
-            d.clone()
-        };
-        if !self.oaddr.is_empty() {
-            println!("ip addr replace {} dev {odev}", self.oaddr);
-        }
-        if !self.dns.is_empty() {
-            println!("nmcli connection modify <uplink> ipv4.dns {} ipv4.ignore-auto-dns yes; nmcli connection up <uplink>", self.dns);
+        let l = self.link();
+        let p = |v: Vec<os::Cmd>| v.iter().for_each(|c| println!("{c}"));
+        match os::Os::here() {
+            os::Os::Linux => {
+                p(os::Os::linux_up(&l));
+                if !l.dns.is_empty() && !l.domain.is_empty() {
+                    p(os::Os::linux_dns(&l));
+                }
+            }
+            os::Os::Mac => {
+                p(os::Os::mac_create(&l, MAC_RUN).0);
+                p(os::Os::mac_up(&l, "<utun>"));
+                if !l.dns.is_empty() && !l.domain.is_empty() {
+                    let (f, body) = os::Os::mac_dns(&l);
+                    println!("# {f}:\n{body}");
+                }
+            }
+            os::Os::Win => {
+                println!(
+                    "# {}:\n{}",
+                    win_conf_path(&self.ul),
+                    os::Os::win_conf(&l, "<private key>")
+                );
+                p(os::Os::win_up(&l, &win_conf_path(&self.ul)));
+                if !l.dns.is_empty() && !l.domain.is_empty() {
+                    println!("{}", os::Os::win_dns(&l));
+                }
+            }
         }
     }
+}
+
+/// Run a plan in order; the first hard failure stops it.
+fn run(cmds: &[os::Cmd]) -> Result<()> {
+    for c in cmds {
+        let a: Vec<&str> = c.a.iter().map(String::as_str).collect();
+        r(&c.p, &a, None, c.soft)?;
+    }
+    Ok(())
+}
+
+/// Is `prog` on PATH? (no `which`: Windows has none)
+fn on_path(prog: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|ps| {
+            std::env::split_paths(&ps)
+                .any(|d| d.join(prog).is_file() || d.join(format!("{prog}.exe")).is_file())
+        })
+        .unwrap_or(false)
+}
+
+/// macOS: the utun wireguard-go made for `name`, if it is still there.
+fn mac_utun(name: &str) -> Option<String> {
+    let u = std::fs::read_to_string(format!("{MAC_RUN}/{name}.name"))
+        .ok()?
+        .trim()
+        .to_string();
+    (!u.is_empty()).then_some(u)
+}
+
+/// Windows: the tunnel service's config, outside any one user's profile.
+fn win_conf_path(name: &str) -> String {
+    format!(
+        r"{}\xdj\{name}.conf",
+        env("ProgramData").unwrap_or_else(|| r"C:\ProgramData".into())
+    )
+}
+
+/// Windows: the tunnel service makes the adapter a moment after it starts;
+/// routes need it to exist.
+fn wait_for_adapter(name: &str) {
+    for _ in 0..20 {
+        if r(
+            "netsh",
+            &["interface", "ipv4", "show", "interfaces"],
+            None,
+            true,
+        )
+        .map(|o| o.contains(name))
+        .unwrap_or(false)
+        {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    eprintln!("xdj: adapter {name} did not show up in 10 s; adding routes anyway");
+}
+
+/// Linux: what an xdj from before routing left — a Geneve tunnel and the
+/// uplink's DNS pointed system-wide at the mesh. Harmless when absent.
+fn legacy_cleanup(pb: u8) {
+    let _ = r("ip", &["link", "del", &format!("gnv-b{pb}")], None, true);
+    dns_revert();
 }
 
 /// Re-run ourselves under sudo, handing over $HOME and the user name so the
@@ -805,7 +766,7 @@ fn go() -> Result<i32> {
     let a = std::env::args().nth(1).unwrap_or_default();
     // No verb: toggle on the underlay's presence.
     let mode = if a.is_empty() {
-        if have(&C::load().ul) {
+        if C::load().is_up() {
             "down".into()
         } else {
             "up".into()
@@ -814,7 +775,7 @@ fn go() -> Result<i32> {
         a
     };
 
-    if !matches!(mode.as_str(), "-h" | "--help" | "help") {
+    if !matches!(mode.as_str(), "-h" | "--help" | "help") && os::Os::here() == os::Os::Linux {
         if let Some(pid) = daemon_pid("/proc") {
             return Err(e(format!("xdebbied is running here (pid {pid}) and owns the mesh on this box — use xdctl mesh, or stop the daemon first")));
         }
@@ -847,7 +808,12 @@ fn go() -> Result<i32> {
             Ok(0)
         }
         "up" | "down" => {
-            if !rooted() {
+            if os::Os::here() == os::Os::Win {
+                // No sudo to lean on: `net session` succeeds only elevated.
+                if r("net", &["session"], None, false).is_err() {
+                    return Err(e("run xdj from an elevated prompt (Run as administrator)"));
+                }
+            } else if !rooted() {
                 return reexec(&mode);
             }
             let mut c = C::load();
@@ -871,12 +837,6 @@ fn go() -> Result<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn bridge_mac_matches_the_daemons_plan() {
-        assert_eq!(bridge_mac(2), "52:54:00:23:02:fe");
-        assert_eq!(bridge_mac(253), "52:54:00:23:fd:fe");
-    }
 
     #[test]
     fn conf_del_drops_only_that_key() {

@@ -1,5 +1,8 @@
 # Tag v<version> (make tag && make push) and this builds the .deb and
 # publishes a GitHub Release with the CHANGELOG section for that version.
+# xdj is built on each OS's own runner and attached under fixed names, so
+# .../releases/latest/download/<name> always fetches the newest one (the
+# aviary page links there).
 name: release
 on:
   push:
@@ -7,7 +10,42 @@ on:
 permissions:
   contents: write
 jobs:
+  xdj:
+    strategy:
+      matrix:
+        include:
+          - {os: ubuntu-latest, target: x86_64-unknown-linux-musl, asset: xdj-linux-x86_64}
+          - {os: macos-latest, target: universal, asset: xdj-macos}
+          - {os: windows-latest, target: x86_64-pc-windows-msvc, asset: xdj-windows-x86_64.exe}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target == 'universal' && 'aarch64-apple-darwin,x86_64-apple-darwin' || matrix.target }}
+      - if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: build
+        shell: bash
+        run: |
+          if [ "${{ matrix.target }}" = universal ]; then
+            cargo build --release -p xdj --target aarch64-apple-darwin
+            cargo build --release -p xdj --target x86_64-apple-darwin
+            lipo -create -output "${{ matrix.asset }}" \
+              target/aarch64-apple-darwin/release/xdj target/x86_64-apple-darwin/release/xdj
+          else
+            cargo build --release -p xdj --target "${{ matrix.target }}"
+            ext=; case "${{ matrix.target }}" in *windows*) ext=.exe;; esac
+            cp "target/${{ matrix.target }}/release/xdj$ext" "${{ matrix.asset }}"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
   deb:
+    # One job publishes everything, so parallel jobs never race to create
+    # the release.
+    needs: xdj
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -15,6 +53,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-deb --locked
       - run: cargo deb -p xdebbied
+      - uses: actions/download-artifact@v4
+        with:
+          path: xdj-bin
+          merge-multiple: true
       - name: version and notes
         id: meta
         run: |
@@ -29,4 +71,6 @@ jobs:
         with:
           name: xdebbie ${{ steps.meta.outputs.version }}
           body_path: notes.md
-          files: target/debian/*.deb
+          files: |
+            target/debian/*.deb
+            xdj-bin/*
