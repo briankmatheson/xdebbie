@@ -59,11 +59,23 @@ fn rooted() -> bool {
     env("XDJ_ROOT").is_some()
 }
 // $HOME, but under sudo the user half hands theirs over so root reads it too.
+// Run as `sudo xdj` directly, it is still the invoking user's home, not
+// root's: their conf, their key (root's would adopt xdebbied's key instead).
 fn home() -> String {
     env("XDJ_HOME")
+        .or_else(sudo_user_home)
         .or_else(|| env("HOME"))
         .or_else(|| env("USERPROFILE"))
         .unwrap_or_else(|| "/root".into())
+}
+fn sudo_user_home() -> Option<String> {
+    let u = env("SUDO_USER").filter(|u| u != "root")?;
+    let o = r("getent", &["passwd", &u], None, false).ok()?;
+    o.trim()
+        .split(':')
+        .nth(5)
+        .filter(|h| !h.is_empty())
+        .map(str::to_string)
 }
 fn cpath() -> String {
     env("XDJ_CONF").unwrap_or_else(|| format!("{}/.config/xdj/xdj.conf", home()))
@@ -475,7 +487,18 @@ impl C {
         }
     }
 
+    /// Bring the link up; if any step fails, take down what was made, so
+    /// the next bare `xdj` toggles up again instead of down.
     fn up(&mut self) -> Result<()> {
+        let r = self.up_steps();
+        if let Err(x) = &r {
+            eprintln!("xdj: up failed ({x}); undoing the steps that ran");
+            let _ = self.down();
+        }
+        r
+    }
+
+    fn up_steps(&mut self) -> Result<()> {
         let here = os::Os::here();
         if let Some(m) = here.missing_wireguard(on_path, |p| std::path::Path::new(p).exists()) {
             return Err(e(m));
@@ -488,7 +511,7 @@ impl C {
                 // An xdj from before routing left a Geneve tunnel and system-wide
                 // DNS behind; clear those first.
                 legacy_cleanup(self.pb);
-                run(&os::Os::linux_up(&l))?;
+                run_keyed(&os::Os::linux_up(&l), Some(&priv_))?;
             }
             os::Os::Mac => {
                 let (c, name_file) = os::Os::mac_create(&l, MAC_RUN);
@@ -500,7 +523,7 @@ impl C {
                             "wireguard-go wrote no interface name to {name_file}: {x}"
                         ))
                     })?;
-                run(&os::Os::mac_up(&l, &utun))?;
+                run_keyed(&os::Os::mac_up(&l, &utun), Some(&priv_))?;
             }
             os::Os::Win => {
                 let conf = win_conf_path(&self.ul);
@@ -667,13 +690,23 @@ impl C {
     }
 }
 
-/// Run a plan in order; the first hard failure stops it.
-fn run(cmds: &[os::Cmd]) -> Result<()> {
+/// Run a plan in order; the first hard failure stops it. `key` goes on
+/// stdin to the commands that ask for it.
+fn run_keyed(cmds: &[os::Cmd], key: Option<&str>) -> Result<()> {
     for c in cmds {
         let a: Vec<&str> = c.a.iter().map(String::as_str).collect();
-        r(&c.p, &a, None, c.soft)?;
+        let k = key.map(|k| format!("{}\n", k.trim()));
+        let input = if c.key_stdin { k.as_deref() } else { None };
+        if c.key_stdin && input.is_none() {
+            return Err(e(format!("{} needs the private key", c.p)));
+        }
+        r(&c.p, &a, input, c.soft)?;
     }
     Ok(())
+}
+
+fn run(cmds: &[os::Cmd]) -> Result<()> {
+    run_keyed(cmds, None)
 }
 
 /// Is `prog` on PATH? (no `which`: Windows has none)

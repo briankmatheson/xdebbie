@@ -26,6 +26,10 @@ pub struct Cmd {
     pub p: String,
     pub a: Vec<String>,
     pub soft: bool,
+    /// Feed the private key on stdin (the argument says `/dev/stdin`). `wg`
+    /// may not open a key file itself: on some hosts it is refused even as
+    /// root (an LSM profile on `wg`), so the key never goes by path.
+    pub key_stdin: bool,
 }
 
 fn cmd(p: &str, a: &[&str]) -> Cmd {
@@ -33,6 +37,13 @@ fn cmd(p: &str, a: &[&str]) -> Cmd {
         p: p.into(),
         a: a.iter().map(|s| s.to_string()).collect(),
         soft: false,
+        key_stdin: false,
+    }
+}
+fn keyed(p: &str, a: &[&str]) -> Cmd {
+    Cmd {
+        key_stdin: true,
+        ..cmd(p, a)
     }
 }
 fn soft(p: &str, a: &[&str]) -> Cmd {
@@ -54,6 +65,9 @@ impl std::fmt::Display for Cmd {
         write!(f, "{}", q(&self.p))?;
         for a in &self.a {
             write!(f, " {}", q(a))?;
+        }
+        if self.key_stdin {
+            write!(f, " < <private key>")?;
         }
         Ok(())
     }
@@ -175,9 +189,9 @@ impl Os {
         let mut v = vec![
             soft("ip", &["link", "add", n, "type", "wireguard"]),
             cmd("ip", &["link", "set", n, "alias", super::A]),
-            cmd(
+            keyed(
                 "wg",
-                &["set", n, "private-key", &l.key_file, "listen-port", &port],
+                &["set", n, "private-key", "/dev/stdin", "listen-port", &port],
             ),
             cmd(
                 "ip",
@@ -248,7 +262,7 @@ impl Os {
             "set",
             utun,
             "private-key",
-            &l.key_file,
+            "/dev/stdin",
             "listen-port",
             &port,
             "peer",
@@ -260,7 +274,7 @@ impl Os {
         wg.extend(["allowed-ips", &aips, "persistent-keepalive", &ka]);
         let un = l.underlay_net();
         let mut v = vec![
-            cmd("wg", &wg),
+            keyed("wg", &wg),
             cmd(
                 "ifconfig",
                 &[utun, "inet", &format!("{}/16", l.me), &l.me, "alias"],
@@ -408,6 +422,20 @@ mod tests {
 
     fn lines(v: &[Cmd]) -> Vec<String> {
         v.iter().map(|c| c.to_string()).collect()
+    }
+
+    #[test]
+    fn the_key_goes_on_stdin_never_by_path() {
+        for v in [Os::linux_up(&link()), Os::mac_up(&link(), "utun4")] {
+            let k: Vec<&Cmd> = v.iter().filter(|c| c.key_stdin).collect();
+            assert_eq!(k.len(), 1, "{v:#?}");
+            assert!(k[0].a.iter().any(|a| a == "/dev/stdin"));
+            assert!(k[0].to_string().ends_with("< <private key>"));
+            assert!(
+                !v.iter().any(|c| c.a.iter().any(|a| a.contains("wg.key"))),
+                "{v:#?}"
+            );
+        }
     }
 
     #[test]
