@@ -237,8 +237,8 @@ mod tests {
     fn stale_or_future_rejected() {
         let k = Key::from_token("tok");
         let skew = MAX_SKEW.as_secs();
-        assert!(open_at(&signed(&k, 1000), &[k.clone()], 1000 + skew).is_ok());
-        assert!(open_at(&signed(&k, 1000), &[k.clone()], 1000 + skew + 1).is_err());
+        assert!(open_at(&signed(&k, 1000), std::slice::from_ref(&k), 1000 + skew).is_ok());
+        assert!(open_at(&signed(&k, 1000), std::slice::from_ref(&k), 1000 + skew + 1).is_err());
         assert!(open_at(&signed(&k, 1000 + skew + 1), &[k], 1000).is_err());
     }
 
