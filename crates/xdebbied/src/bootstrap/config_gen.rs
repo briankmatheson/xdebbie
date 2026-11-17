@@ -141,6 +141,7 @@ pub fn generate_config_for(
                  {q}reserved = []\n\
                  {p}# bridge = \"{network}\"              # default: mesh bridge, else first host's\n\
                  {p}# lease_secs = 86400\n\
+                 {p}# mesh_routed = false              # true: mesh peers without Geneve (xdj on macOS/Windows) reach VMs\n\
                  {p}# domain = \"vm.example\"\n\
                  {p}# leader_only = false              # true once control planes share state",
                 p = net_prefix
@@ -186,7 +187,8 @@ seed_command = ["cloud-localds", "--network-config={{net}}", "--vendor-data={{ve
 # followers forward to it. No peers = this box leads. Messages are signed
 # with the cluster token; discovery_accept_unsigned = true hears daemons that
 # predate signing (only while upgrading).
-enable_discovery = true
+enable_discovery = false  # PUT /v1/settings switches it at runtime
+# settings_token_file = "/etc/xdebbie/settings-token"   # a token for /v1/settings only
 multicast_addr = "239.0.0.42:7442"
 # URL peers and xdctl use to reach this box. Auto-detected from the hostname,
 # or from this box's address when the hostname does not resolve.

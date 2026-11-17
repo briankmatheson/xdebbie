@@ -53,6 +53,8 @@ pub struct Tokens {
     current_used: AtomicBool,
     /// Leader-side view of the peers, for `GET /v1/token`.
     nodes: RwLock<Vec<TokenNode>>,
+    /// `settings_token_file`: opens `/v1/settings` only. Not rotated.
+    settings: Option<String>,
 }
 
 impl Tokens {
@@ -86,7 +88,21 @@ impl Tokens {
             set: RwLock::new(set),
             current_used: AtomicBool::new(false),
             nodes: RwLock::new(vec![]),
+            settings: None,
         }
+    }
+
+    /// Also accept `token` for `/v1/settings` (and nothing else).
+    pub fn with_settings_token(mut self, token: Option<String>) -> Self {
+        self.settings = token.filter(|t| !t.is_empty());
+        self
+    }
+
+    /// Is `presented` the settings-only token?
+    pub fn accepts_settings(&self, presented: &str) -> bool {
+        self.settings
+            .as_deref()
+            .is_some_and(|s| constant_time_eq(presented.as_bytes(), s.as_bytes()))
     }
 
     /// Does `presented` authenticate? Constant-time against each held token.

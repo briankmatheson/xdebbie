@@ -33,7 +33,12 @@
 //!   `[network] upstream_dns` — the first box's resolver, copied to every
 //!   joiner, so all VMs ask the same server;
 //! - drops new flows *into* the bridge from any other interface, so a LAN
-//!   host with a route to the overlay still cannot reach a VM.
+//!   host with a route to the overlay still cannot reach a VM. With
+//!   `[network] mesh_routed = true` the WireGuard underlay's own network
+//!   (10.22/16, arriving on the underlay) is let through first, along with
+//!   a matching ufw route rule: peers that join routed, not bridged (xdj on
+//!   macOS and Windows), reach the VMs. Replies need no NAT: the VMs'
+//!   gateway is this box, which routes 10.22/16 into the tunnel.
 //!
 //! Every ufw rule is tagged `comment 'xdebbie …'` and the comment names its
 //! subject (interface, network), so a rule is identified by its comment:
@@ -83,6 +88,9 @@ pub struct Egress {
     pub vm_net: String,
     /// Where VM DNS goes. Empty: no DNAT, VMs' DNS goes nowhere.
     pub upstream_dns: Vec<Ipv4Addr>,
+    /// `[network] mesh_routed`: (underlay interface, underlay network)
+    /// whose new flows may enter the bridge.
+    pub routed_from: Option<(String, String)>,
 }
 
 impl FirewallSpec {
@@ -93,6 +101,10 @@ impl FirewallSpec {
         let mesh = mesh_cfg.to_spec();
         let bridge = mesh.bridge();
         let mesh = mesh.enabled.then_some(mesh);
+        let underlay_net = {
+            let a = u32::from(crate::mesh::model::underlay_addr(mesh_cfg.box_id));
+            format!("{}/16", Ipv4Addr::from(a & 0xffff_0000))
+        };
         let mut mesh_ifs: Vec<String> = vec![];
         if let Some(m) = &mesh {
             mesh_ifs.push(m.underlay.clone());
@@ -110,6 +122,10 @@ impl FirewallSpec {
                 bridge_addr: n.gateway(),
                 vm_net: format!("{}/24", block.network()),
                 upstream_dns: n.upstream_dns.clone(),
+                routed_from: mesh
+                    .as_ref()
+                    .filter(|_| n.mesh_routed)
+                    .map(|m| (m.underlay.clone(), underlay_net.clone())),
             })
         });
         Self {
@@ -181,6 +197,12 @@ impl FirewallSpec {
                 "route allow in on {} from {} comment 'xdebbie vm egress {} via {}'",
                 e.bridge, e.vm_net, e.vm_net, e.bridge
             )));
+            if let Some((ul, net)) = &e.routed_from {
+                r.push(args(&format!(
+                    "route allow in on {ul} out on {} from {net} comment 'xdebbie mesh {net} to vms via {ul}'",
+                    e.bridge
+                )));
+            }
         }
         r
     }
@@ -209,8 +231,14 @@ impl FirewallSpec {
             }
         }
         out.push_str("  }\n");
+        out.push_str(
+            "  chain forward {\n    type filter hook forward priority -10; policy accept;\n",
+        );
+        if let Some(r) = routed_rule(self) {
+            out.push_str(&format!("    {r}\n"));
+        }
         out.push_str(&format!(
-            "  chain forward {{\n    type filter hook forward priority -10; policy accept;\n    iifname != {br} oifname {br} ct state new counter drop\n  }}\n",
+            "    iifname != {br} oifname {br} ct state new counter drop\n  }}\n",
             br = quote(&e.bridge)
         ));
         out.push_str(
@@ -291,6 +319,25 @@ pub fn local_ipv4_prefixes() -> Vec<String> {
     nets.sort();
     nets.dedup();
     nets
+}
+
+/// The nft accept that lets routed mesh peers into the bridge, tagged
+/// [`crate::settings::ROUTED_TAG`] so it can be found and removed alone.
+/// `None` without `[network]` or without `mesh_routed`.
+pub fn routed_rule(spec: &FirewallSpec) -> Option<String> {
+    let e = spec.egress.as_ref()?;
+    let (ul, net) = e.routed_from.as_ref()?;
+    Some(format!(
+        "iifname {} ip saddr {net} oifname {} counter accept comment {}",
+        quote(ul),
+        quote(&e.bridge),
+        quote(crate::settings::ROUTED_TAG)
+    ))
+}
+
+/// Run one ufw rule (an argument list from [`FirewallSpec::rules`]).
+pub fn ufw_run(argv: &[String]) -> Result<String> {
+    ufw(argv)
 }
 
 fn ufw(argv: &[String]) -> Result<String> {
@@ -496,8 +543,39 @@ mod tests {
                 bridge_addr: "10.23.1.1".parse().unwrap(),
                 vm_net: "10.23.1.0/24".into(),
                 upstream_dns: vec!["192.168.1.1".parse().unwrap()],
+                routed_from: None,
             }),
         }
+    }
+
+    #[test]
+    fn mesh_routed_lets_the_underlay_into_the_bridge() {
+        let mut s = full();
+        assert!(!s.render_nft().unwrap().contains("counter accept"));
+        assert!(
+            !s.rules()
+                .iter()
+                .any(|r| r.join(" ").contains("xdebbie mesh"))
+        );
+        s.egress.as_mut().unwrap().routed_from = Some(("wg-flock".into(), "10.22.0.0/16".into()));
+        let nft = s.render_nft().unwrap();
+        let accept = nft
+            .find("iifname \"wg-flock\" ip saddr 10.22.0.0/16 oifname \"virbr-xdebbie\" counter accept")
+            .expect(&nft);
+        let drop = nft.find("ct state new counter drop").unwrap();
+        assert!(
+            accept < drop,
+            "the accept must come before the drop:\n{nft}"
+        );
+        let rules: Vec<String> = s.rules().iter().map(|r| r.join(" ")).collect();
+        assert!(rules.contains(
+            &"route allow in on wg-flock out on virbr-xdebbie from 10.22.0.0/16 comment xdebbie mesh 10.22.0.0/16 to vms via wg-flock".to_string()
+        ), "{rules:#?}");
+        assert!(
+            s.wanted_comments()
+                .iter()
+                .any(|c| c == "xdebbie mesh 10.22.0.0/16 to vms via wg-flock")
+        );
     }
 
     fn golden(name: &str) -> String {

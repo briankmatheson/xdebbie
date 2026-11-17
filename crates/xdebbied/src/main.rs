@@ -18,6 +18,7 @@ mod mesh;
 mod mirror;
 mod reconcile;
 mod registrar;
+mod settings;
 mod store;
 mod tls;
 mod token;
@@ -342,28 +343,27 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         accept_unsigned: cfg.discovery_accept_unsigned,
         ..Default::default()
     };
-    let leadership = if !cfg.enable_discovery {
-        info!("discovery disabled; this box is its own leader");
-        leader::Leadership::standalone(&hostname, &api_url)
-    } else {
-        match discovery::DiscoveryEngine::new(discovery_cfg) {
-            Ok(engine) => {
-                let engine = Arc::new(engine);
-                info!(node_id = %engine.node_id(), "starting discovery engine");
-                let leadership = leader::Leadership::elected(&engine, &hostname, &api_url);
-                tokio::spawn(async move {
-                    if let Err(e) = engine.run().await {
-                        tracing::error!(error = %e, "discovery engine failed");
-                    }
-                });
-                leadership
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "discovery engine failed to start; this box is its own leader");
-                leader::Leadership::standalone(&hostname, &api_url)
-            }
+    // The engine runs even with discovery off (paused: it leads alone), so
+    // `PUT /v1/settings` can switch it on without a restart.
+    let (leadership, engine) = match discovery::DiscoveryEngine::new(discovery_cfg) {
+        Ok(engine) => {
+            let engine = Arc::new(engine);
+            info!(node_id = %engine.node_id(), enabled = cfg.enable_discovery, "starting discovery engine");
+            let leadership = leader::Leadership::elected(&engine, &hostname, &api_url);
+            let run = engine.clone();
+            tokio::spawn(async move {
+                if let Err(e) = run.run().await {
+                    tracing::error!(error = %e, "discovery engine failed");
+                }
+            });
+            (leadership, Some(engine))
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "discovery engine failed to start; this box is its own leader");
+            (leader::Leadership::standalone(&hostname, &api_url), None)
         }
     };
+    let settings = Arc::new(settings::SettingsCtl::new(&cfg, engine));
 
     // Bytes promised to standalone-volume creates still in flight; the API
     // reserves, the scheduler counts them.
@@ -490,6 +490,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             hv,
             cfg: cfg.clone(),
         }),
+        settings: Some(settings),
     });
     serve(&cfg, listen, app).await
 }
@@ -508,7 +509,20 @@ fn fatal_config(e: anyhow::Error) -> ! {
 
 fn load_token(cfg: &config::Config) -> anyhow::Result<Option<Arc<token::Tokens>>> {
     Ok(match &cfg.token_file {
-        Some(p) => Some(Arc::new(token::Tokens::load(p)?)),
+        Some(p) => {
+            let settings = match &cfg.settings_token_file {
+                Some(f) => Some(
+                    std::fs::read_to_string(f)
+                        .with_context(|| format!("reading {}", f.display()))?
+                        .trim()
+                        .to_owned(),
+                ),
+                None => None,
+            };
+            Some(Arc::new(
+                token::Tokens::load(p)?.with_settings_token(settings),
+            ))
+        }
         None => {
             tracing::warn!("no token_file configured: API is unauthenticated");
             None
