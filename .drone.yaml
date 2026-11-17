@@ -3,7 +3,8 @@
 # status and its own cargo cache, run side by side on every push to Gitea.
 # Together they cover what GitHub's ci.yml runs.
 #
-#   xdebbied  the daemon and xdebbie-core; fmt for the whole workspace; .deb on tags
+#   xdebbied  the daemon and xdebbie-core; fmt for the whole workspace; on tags the
+#             .deb, published to https://apt.xdebbie.org (ci/apt-publish)
 #   capx      the Cluster API provider; the CRD check
 #   xdctl     the CLI
 #   xdj       the mesh-join tool; static Linux binary on tags
@@ -39,10 +40,16 @@ volumes:
   - name: cache
     claim:
       name: xdebbie-cargo-cache
+  - name: apt-publish
+    secret:
+      name: apt-publish
+  - name: apt-signing
+    secret:
+      name: apt-signing
 
 steps:
   - name: check
-    image: registry.mesh.bmath.nyc/xdebbie-builder:1
+    image: registry.mesh.bmath.nyc/xdebbie-builder:2
     volumes:
       - name: cache
         path: /cache
@@ -55,16 +62,20 @@ steps:
       - cargo test -p xdebbie-core -p xdebbied
 
   - name: package
-    image: registry.mesh.bmath.nyc/xdebbie-builder:1
+    image: registry.mesh.bmath.nyc/xdebbie-builder:2
     volumes:
       - name: cache
         path: /cache
+      - name: apt-publish
+        path: /secrets/apt
+      - name: apt-signing
+        path: /secrets/apt-signing
     resources:
       limits:
         memory: 2560MiB
     commands:
       - cargo deb -p xdebbied
-      - mkdir -p dist && cp "$CARGO_TARGET_DIR"/debian/*.deb dist/ && ls -l dist
+      - apt-publish "$CARGO_TARGET_DIR"/debian/xdebbied_*.deb
     when:
       event: [tag]
     depends_on: [check]
@@ -94,7 +105,7 @@ volumes:
 
 steps:
   - name: check
-    image: registry.mesh.bmath.nyc/xdebbie-builder:1
+    image: registry.mesh.bmath.nyc/xdebbie-builder:2
     volumes:
       - name: cache
         path: /cache
@@ -131,7 +142,7 @@ volumes:
 
 steps:
   - name: check
-    image: registry.mesh.bmath.nyc/xdebbie-builder:1
+    image: registry.mesh.bmath.nyc/xdebbie-builder:2
     volumes:
       - name: cache
         path: /cache
@@ -167,7 +178,7 @@ volumes:
 
 steps:
   - name: check
-    image: registry.mesh.bmath.nyc/xdebbie-builder:1
+    image: registry.mesh.bmath.nyc/xdebbie-builder:2
     volumes:
       - name: cache
         path: /cache
@@ -179,7 +190,7 @@ steps:
       - cargo test -p xdj
 
   - name: package
-    image: registry.mesh.bmath.nyc/xdebbie-builder:1
+    image: registry.mesh.bmath.nyc/xdebbie-builder:2
     volumes:
       - name: cache
         path: /cache

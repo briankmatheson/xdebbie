@@ -1,0 +1,84 @@
+#!/bin/sh
+# apt-publish DEB...
+#
+# Add packages to the xdebbie apt repository (the Garage bucket `apt`, served
+# at https://apt.xdebbie.org and https://apt.aviary.mesh.bmath.nyc) and
+# re-sign it. Stateless: the bucket is the repository. It fetches the pool,
+# drops the new .debs in, rebuilds Packages and Release with apt-ftparchive,
+# signs (InRelease, Release.gpg) and copies everything back. Copy, never
+# sync: packages already there stay. Two publishes at the same moment can
+# leave the index without one of them; the next publish brings it back.
+#
+# Credentials are files, mounted from Kubernetes Secrets in Drone:
+#   $APT_SECRETS/access_key, $APT_SECRETS/secret_key   Garage key, RW on the bucket
+#   $APT_SIGNING                                       armored private signing key
+set -eu
+: "${APT_S3_ENDPOINT:=http://garage.aviary-garage.svc.cluster.local:3900}"
+: "${APT_BUCKET:=apt}"
+: "${APT_SECRETS:=/secrets/apt}"
+: "${APT_SIGNING:=/secrets/apt-signing/signing.asc}"
+: "${APT_SUITE:=stable}"
+: "${APT_COMPONENT:=main}"
+: "${APT_ARCHES:=amd64}"
+: "${APT_URL:=https://apt.xdebbie.org}"
+[ $# -gt 0 ] || { echo "usage: apt-publish DEB..." >&2; exit 2; }
+
+export RCLONE_CONFIG_G_TYPE=s3 RCLONE_CONFIG_G_PROVIDER=Other \
+  RCLONE_CONFIG_G_ENDPOINT="$APT_S3_ENDPOINT" RCLONE_CONFIG_G_REGION=garage \
+  RCLONE_CONFIG_G_FORCE_PATH_STYLE=true
+RCLONE_CONFIG_G_ACCESS_KEY_ID=$(cat "$APT_SECRETS/access_key")
+RCLONE_CONFIG_G_SECRET_ACCESS_KEY=$(cat "$APT_SECRETS/secret_key")
+export RCLONE_CONFIG_G_ACCESS_KEY_ID RCLONE_CONFIG_G_SECRET_ACCESS_KEY
+
+work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
+repo=$work/repo; mkdir -p "$repo/pool"
+export GNUPGHOME="$work/gnupg"; mkdir -m 700 "$GNUPGHOME"
+
+rclone copy "G:$APT_BUCKET/pool" "$repo/pool"
+for deb; do
+  name=$(dpkg-deb -f "$deb" Package)
+  d="$repo/pool/$APT_COMPONENT/$(printf %.1s "$name")/$name"
+  mkdir -p "$d"; cp "$deb" "$d/"
+  echo "apt-publish: $(basename "$deb")"
+done
+
+cd "$repo"
+dist="dists/$APT_SUITE"
+for arch in $APT_ARCHES; do
+  p="$dist/$APT_COMPONENT/binary-$arch"; mkdir -p "$p"
+  apt-ftparchive --arch "$arch" packages pool > "$p/Packages"
+  gzip -9kf "$p/Packages"
+done
+apt-ftparchive \
+  -o APT::FTPArchive::Release::Origin=xdebbie \
+  -o APT::FTPArchive::Release::Label=xdebbie \
+  -o APT::FTPArchive::Release::Suite="$APT_SUITE" \
+  -o APT::FTPArchive::Release::Codename="$APT_SUITE" \
+  -o APT::FTPArchive::Release::Architectures="$APT_ARCHES" \
+  -o APT::FTPArchive::Release::Components="$APT_COMPONENT" \
+  release "$dist" > "$work/Release"
+mv "$work/Release" "$dist/Release"
+
+gpg --batch --quiet --import "$APT_SIGNING"
+gpg --batch --yes --clearsign -o "$dist/InRelease" "$dist/Release"
+gpg --batch --yes --armor --detach-sign -o "$dist/Release.gpg" "$dist/Release"
+gpg --batch --export > xdebbie-archive-keyring.gpg
+gpg --batch --armor --export > xdebbie-archive-keyring.asc
+
+cat > index.html <<HTML
+<!doctype html><meta charset="utf-8"><title>xdebbie apt</title>
+<h1>xdebbie apt repository</h1>
+<pre>
+sudo curl -fsSLo /usr/share/keyrings/xdebbie-archive-keyring.gpg $APT_URL/xdebbie-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/xdebbie-archive-keyring.gpg] $APT_URL $APT_SUITE $APT_COMPONENT" \\
+  | sudo tee /etc/apt/sources.list.d/xdebbie.list
+sudo apt update
+</pre>
+<p>Signing key: $(gpg --batch --with-colons --list-keys | awk -F: '/^fpr/{print $10; exit}')</p>
+<h2>Packages</h2><pre>
+$(for a in $APT_ARCHES; do awk '/^Package:/{p=$2} /^Version:/{print p, $2}' "$dist/$APT_COMPONENT/binary-$a/Packages"; done | sort -u)
+</pre>
+HTML
+
+rclone copy "$repo" "G:$APT_BUCKET"
+echo "apt-publish: $APT_URL $APT_SUITE $APT_COMPONENT re-signed"
