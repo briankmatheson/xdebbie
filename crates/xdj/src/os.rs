@@ -17,6 +17,7 @@ pub enum Os {
     Linux,
     Mac,
     Win,
+    FreeBsd,
 }
 
 /// One command: program, arguments, and whether a failure is fine (the
@@ -94,8 +95,6 @@ pub struct Link {
     pub dns: String,
     /// The zone it answers for (`dns_domain`), or empty.
     pub domain: String,
-    /// Where the private key is on disk.
-    pub key_file: String,
 }
 
 impl Link {
@@ -125,6 +124,8 @@ impl Os {
             Os::Mac
         } else if cfg!(windows) {
             Os::Win
+        } else if cfg!(target_os = "freebsd") {
+            Os::FreeBsd
         } else {
             Os::Linux
         }
@@ -153,6 +154,10 @@ impl Os {
             Os::Mac => (
                 vec!["wg".into(), "wireguard-go".into()],
                 "wireguard-tools, which brings wireguard-go (e.g. `brew install wireguard-tools`)",
+            ),
+            Os::FreeBsd => (
+                vec!["wg".into()],
+                "wireguard-tools (`pkg install wireguard-tools`); the kernel's if_wg, FreeBSD 13.2 and later, does the rest",
             ),
             Os::Win => (
                 vec![
@@ -385,6 +390,68 @@ impl Os {
         ]
     }
 
+    /// FreeBSD, first half: the kernel makes a `wg<N>` and prints its name.
+    pub fn freebsd_create() -> Cmd {
+        cmd("ifconfig", &["wg", "create"])
+    }
+
+    /// FreeBSD, second half: rename the new interface to ours, then key,
+    /// address, peer and routes. `made` is what `freebsd_create` printed, or
+    /// empty when the interface is already there.
+    pub fn freebsd_up(l: &Link, made: &str) -> Vec<Cmd> {
+        let n = l.name.as_str();
+        let (port, mtu, ka) = (
+            l.port.to_string(),
+            l.mtu.to_string(),
+            l.keepalive.to_string(),
+        );
+        let aips = l.allowed_ips().join(",");
+        let mut v = vec![];
+        if !made.is_empty() {
+            v.push(cmd("ifconfig", &[made, "name", n]));
+        }
+        v.extend([
+            keyed(
+                "wg",
+                &["set", n, "private-key", "/dev/stdin", "listen-port", &port],
+            ),
+            cmd("ifconfig", &[n, "inet", &format!("{}/16", l.me)]),
+            cmd("ifconfig", &[n, "mtu", &mtu, "up"]),
+        ]);
+        let mut peer = vec!["set", n, "peer", &l.hub_pubkey];
+        if !l.endpoint.is_empty() {
+            peer.extend(["endpoint", &l.endpoint]);
+        }
+        peer.extend(["allowed-ips", &aips, "persistent-keepalive", &ka]);
+        v.push(cmd("wg", &peer));
+        for r in &l.routes {
+            v.push(cmd(
+                "route",
+                &["-q", "-n", "add", "-net", r, "-interface", n],
+            ));
+        }
+        v
+    }
+
+    /// FreeBSD scoped DNS: a forward zone for the base system's
+    /// local_unbound (it includes /var/unbound/conf.d/*.conf). Path, body
+    /// and the reload.
+    pub fn freebsd_dns(l: &Link) -> (String, String, Cmd) {
+        (
+            "/var/unbound/conf.d/xdj.conf".into(),
+            format!(
+                "{MARK}: the mesh zone, removed by `xdj down`\nserver:\n  domain-insecure: \"{d}\"\n  private-domain: \"{d}\"\nforward-zone:\n  name: \"{d}\"\n  forward-addr: {s}\n",
+                d = l.domain,
+                s = l.dns
+            ),
+            soft("service", &["local_unbound", "reload"]),
+        )
+    }
+
+    pub fn freebsd_down(l: &Link) -> Vec<Cmd> {
+        vec![soft("ifconfig", &[&l.name, "destroy"])]
+    }
+
     /// The Windows service that carries tunnel `name`.
     pub fn win_service(name: &str) -> String {
         format!("WireGuardTunnel${name}")
@@ -416,7 +483,6 @@ mod tests {
             routes: vec!["10.23.0.0/16".into()],
             dns: "10.23.0.11".into(),
             domain: "mesh.example".into(),
-            key_file: "/home/me/.config/xdj/wg.key".into(),
         }
     }
 
@@ -522,9 +588,39 @@ mod tests {
     }
 
     #[test]
+    fn freebsd_uses_ifconfig_route_and_unbound() {
+        let v = lines(&Os::freebsd_up(&link(), "wg0"));
+        assert_eq!(v[0], "ifconfig wg0 name wg-flock");
+        assert!(
+            v.contains(&"ifconfig wg-flock inet 10.22.5.1/16".into()),
+            "{v:#?}"
+        );
+        assert!(
+            v.contains(&"route -q -n add -net 10.23.0.0/16 -interface wg-flock".into()),
+            "{v:#?}"
+        );
+        assert!(v[1].ends_with("< <private key>"));
+        assert!(!lines(&Os::freebsd_up(&link(), ""))
+            .iter()
+            .any(|c| c.contains(" name ")));
+        let (p, body, reload) = Os::freebsd_dns(&link());
+        assert_eq!(p, "/var/unbound/conf.d/xdj.conf");
+        assert!(
+            body.starts_with(MARK)
+                && body.contains("forward-addr: 10.23.0.11")
+                && body.contains("name: \"mesh.example\"")
+        );
+        assert_eq!(reload.to_string(), "service local_unbound reload");
+        assert_eq!(
+            lines(&Os::freebsd_down(&link())),
+            ["ifconfig wg-flock destroy"]
+        );
+    }
+
+    #[test]
     fn missing_wireguard_is_a_message_never_an_install() {
         let none = |_: &str| false;
-        for os in [Os::Linux, Os::Mac, Os::Win] {
+        for os in [Os::Linux, Os::Mac, Os::Win, Os::FreeBsd] {
             let m = os
                 .missing_wireguard(none, none)
                 .expect("nothing is installed");

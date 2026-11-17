@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! xdj — slip into the xdebbie mesh without running the daemon, from Linux,
-//! macOS or Windows.
+//! macOS, Windows or FreeBSD.
 //!
 //! It brings up one WireGuard link to the hub (10.22.<me>.1/16, peer
 //! 10.22.<hub>.1) and routes the VM network (`routes`, default
@@ -22,6 +22,7 @@
 //! | Linux | `ip link add … type wireguard`, `wg set` | `ip addr`, `ip route add` | `resolvectl dns/domain` |
 //! | macOS | `wireguard-go utun`, `wg set` | `ifconfig`, `route add` | `/etc/resolver/<zone>` |
 //! | Windows | `wireguard.exe /installtunnelservice` (`Table = off`) | `netsh … add route` | NRPT rule (`Add-DnsClientNrptRule`) |
+//! | FreeBSD | `ifconfig wg create` (kernel if_wg), `wg set` | `ifconfig`, `route add` | local_unbound forward zone |
 //!
 //! WireGuard itself is never installed: without it xdj says what is missing
 //! and exits 1.
@@ -386,7 +387,6 @@ impl C {
             routes: self.routes.clone(),
             dns: self.dns.split('/').next().unwrap_or("").to_string(),
             domain: self.domain.trim_matches('.').to_string(),
-            key_file: kpath(),
         }
     }
 
@@ -484,6 +484,7 @@ impl C {
             os::Os::Win => r("sc", &["query", &os::Os::win_service(&self.ul)], None, true)
                 .map(|o| o.contains("RUNNING"))
                 .unwrap_or(false),
+            os::Os::FreeBsd => r("ifconfig", &[&self.ul], None, false).is_ok(),
         }
     }
 
@@ -532,6 +533,18 @@ impl C {
                 run(&cmds[..2])?; // icacls, install the tunnel service
                 wait_for_adapter(&self.ul);
                 run(&cmds[2..])?; // routes
+            }
+            os::Os::FreeBsd => {
+                // `ifconfig wg create` prints the name the kernel chose (wg0…);
+                // a link left over from before is reused as it is.
+                let made = if self.is_up() {
+                    String::new()
+                } else {
+                    let c = os::Os::freebsd_create();
+                    let a: Vec<&str> = c.a.iter().map(String::as_str).collect();
+                    r(&c.p, &a, None, false)?.trim().to_string()
+                };
+                run_keyed(&os::Os::freebsd_up(&l, &made), Some(&priv_))?;
             }
         }
         self.dns_up(&l);
@@ -582,6 +595,21 @@ impl C {
                 }
             }
             os::Os::Win => run(&[os::Os::win_dns(l)]),
+            os::Os::FreeBsd => {
+                let (p, body, reload) = os::Os::freebsd_dns(l);
+                let dir = std::path::Path::new(&p).parent().map(|d| d.to_path_buf());
+                if !dir.as_deref().is_some_and(|d| d.is_dir()) {
+                    Err(e(
+                        "scoped DNS needs local_unbound (/var/unbound/conf.d); DNS left alone",
+                    ))
+                } else if std::path::Path::new(&p).exists() && !os::ours(&p) {
+                    Err(e(format!("{p} exists and is not xdj's; DNS left alone")))
+                } else {
+                    std::fs::write(&p, body)
+                        .map_err(|x| e(format!("{p}: {x}")))
+                        .and_then(|_| run(&[reload]))
+                }
+            }
         };
         match done {
             Ok(()) => {
@@ -614,6 +642,14 @@ impl C {
             os::Os::Win => {
                 run(&os::Os::win_down(&l))?;
                 let _ = std::fs::remove_file(win_conf_path(&self.ul));
+            }
+            os::Os::FreeBsd => {
+                let (p, _, reload) = os::Os::freebsd_dns(&l);
+                if os::ours(&p) {
+                    let _ = std::fs::remove_file(&p);
+                    let _ = run(&[reload]);
+                }
+                run(&os::Os::freebsd_down(&l))?;
             }
         }
         eprintln!("xdj: down — left the mesh");
@@ -684,6 +720,14 @@ impl C {
                 p(os::Os::win_up(&l, &win_conf_path(&self.ul)));
                 if !l.dns.is_empty() && !l.domain.is_empty() {
                     println!("{}", os::Os::win_dns(&l));
+                }
+            }
+            os::Os::FreeBsd => {
+                p(vec![os::Os::freebsd_create()]);
+                p(os::Os::freebsd_up(&l, "<wgN>"));
+                if !l.dns.is_empty() && !l.domain.is_empty() {
+                    let (f, body, reload) = os::Os::freebsd_dns(&l);
+                    println!("# {f}:\n{body}{reload}");
                 }
             }
         }
