@@ -1,6 +1,6 @@
 [Unit]
 Description=Qfodufk8s VM orchestrator
-Documentation=https://github.com/bmatheson/qfodufk8s
+Documentation=https://github.com/briankmatheson/xdebbie
 After=network-online.target
 Wants=network-online.target
 

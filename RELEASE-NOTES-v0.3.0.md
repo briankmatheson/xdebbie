@@ -74,7 +74,7 @@ All messages are JSON over UDP, human-readable for debugging.
 
 ```bash
 # Download package
-wget https://github.com/yourusername/xdebbie/releases/download/v0.3.0/xdebbied_0.3.0-1_amd64.deb
+wget https://github.com/briankmatheson/xdebbie/releases/download/v0.3.0/xdebbied_0.3.0-1_amd64.deb
 
 # Install on each node
 sudo dpkg -i xdebbied_0.3.0-1_amd64.deb
@@ -315,9 +315,9 @@ Planned features for next release:
 
 ## Get Involved
 
-- **GitHub**: https://github.com/yourusername/xdebbie
-- **Issues**: https://github.com/yourusername/xdebbie/issues
-- **Discussions**: https://github.com/yourusername/xdebbie/discussions
+- **GitHub**: https://github.com/briankmatheson/xdebbie
+- **Issues**: https://github.com/briankmatheson/xdebbie/issues
+- **Discussions**: https://github.com/briankmatheson/xdebbie/discussions
 
 ## License
 

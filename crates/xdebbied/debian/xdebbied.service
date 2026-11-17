@@ -1,6 +1,6 @@
 [Unit]
 Description=xdebbie VM Orchestrator
-Documentation=https://github.com/yourusername/xdebbie
+Documentation=https://github.com/briankmatheson/xdebbie
 After=network-online.target local-fs.target lvm2-monitor.service
 After=libvirtd.service virtqemud.service
 Wants=network-online.target
