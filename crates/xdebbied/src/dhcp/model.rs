@@ -116,6 +116,13 @@ pub struct NetworkConfig {
     /// so every VM asks the same server.
     #[serde(default)]
     pub upstream_dns: Vec<Ipv4Addr>,
+    /// Let mesh peers open connections to this box's VMs over the
+    /// WireGuard underlay, routed rather than bridged: what a laptop on
+    /// `xdj` for macOS or Windows (WireGuard only, no Geneve) needs. Off:
+    /// new flows into the bridge from any other interface are dropped
+    /// (bootstrap/firewall.rs).
+    #[serde(default)]
+    pub mesh_routed: bool,
     /// Run the DHCP responder on `bridge`. Off = allocate only.
     #[serde(default = "d_true")]
     pub dhcp: bool,
@@ -286,6 +293,7 @@ mod tests {
             pool_end: None,
             reserved: vec![],
             upstream_dns: vec![],
+            mesh_routed: false,
             dhcp: true,
             bridge: None,
             lease_secs: DEFAULT_LEASE_SECS,

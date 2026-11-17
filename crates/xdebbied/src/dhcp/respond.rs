@@ -203,6 +203,7 @@ mod tests {
                 pool_end: None,
                 reserved: vec![],
                 upstream_dns: vec![],
+                mesh_routed: false,
                 dhcp: true,
                 bridge: None,
                 lease_secs: DEFAULT_LEASE_SECS,

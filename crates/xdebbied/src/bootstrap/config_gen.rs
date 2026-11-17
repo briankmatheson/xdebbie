@@ -141,6 +141,7 @@ pub fn generate_config_for(
                  {q}reserved = []\n\
                  {p}# bridge = \"{network}\"              # default: mesh bridge, else first host's\n\
                  {p}# lease_secs = 86400\n\
+                 {p}# mesh_routed = false              # true: mesh peers without Geneve (xdj on macOS/Windows) reach VMs\n\
                  {p}# domain = \"vm.example\"\n\
                  {p}# leader_only = false              # true once control planes share state",
                 p = net_prefix
