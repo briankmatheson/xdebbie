@@ -7,7 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-11-17
+
 ### Changed
+- `xdj` joins routed, the same way on Linux, macOS and Windows: one
+  WireGuard link to the hub and `routes` (default `10.23.0.0/16`) sent into
+  it. No Geneve tunnel and no bridge any more. Each OS uses its own tools
+  (Linux `ip`/`wg`/`resolvectl`; macOS `wireguard-go`, `ifconfig`,
+  `route`, `/etc/resolver/<zone>`; Windows the WireGuard tunnel service
+  with `Table = off`, `netsh` routes and an NRPT rule). DNS is scoped to
+  `dns_domain`. WireGuard is never installed: if it is missing, xdj names
+  what is missing and exits 1. On Linux, `up`/`down` clear what an older
+  xdj left (the `gnv-b<hub>` tunnel and system-wide nmcli DNS).
+- `enable_discovery` defaults to `false`; `PUT /v1/settings` switches it
+  at runtime.
+- Discovery multicast is signed: an HMAC-SHA256 envelope keyed from the
+  cluster token, with a 30 s replay window. Boxes need clocks within 30 s
+  (NTP). `discovery_accept_unsigned = true` hears older daemons during a
+  rolling upgrade.
 - Default ports moved: the API from 7443/tcp to **23443/tcp**, discovery
   multicast from 239.0.0.42:7442 to **239.0.0.42:23442/udp**; `xdctl`'s
   default URL follows. A box whose `xdebbied.toml` sets `listen` and
@@ -18,6 +35,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tunnel. Every verb but `help` exits with an error naming the daemon's pid.
 
 ### Added
+- `GET`/`PUT /v1/settings`: `mesh_routed` and `discovery`, applied in place
+  (only each switch's own ufw/nft rules change; `xdebbie_host` is never
+  flushed) and kept in `settings.json` beside `state_file`.
+  `settings_token_file` names a token that opens only this route.
+- `[network] mesh_routed`: routed mesh peers (xdj) may open connections to
+  this box's VMs.
+- Release builds attach `xdj-linux-x86_64`, `xdj-macos` (universal) and
+  `xdj-windows-x86_64.exe`.
+- A plain-text connection to the API port gets a bright green 👍 instead
+  of a TLS alert.
+
+### Fixed
+- `Documentation=` in `xdebbied.service`, the changelog links and
+  `Cargo.toml`'s `repository` pointed at placeholder or misspelt GitHub
+  accounts.
 - `xdj clear` forgets both WireGuard keys: this box's saved private key
   (`~/.config/xdj/wg.key`) and the hub's public key in `xdj.conf`. The
   endpoint and box numbers stay. For when either end has been re-keyed and
