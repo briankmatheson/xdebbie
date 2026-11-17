@@ -231,7 +231,9 @@ impl FirewallSpec {
             }
         }
         out.push_str("  }\n");
-        out.push_str("  chain forward {\n    type filter hook forward priority -10; policy accept;\n");
+        out.push_str(
+            "  chain forward {\n    type filter hook forward priority -10; policy accept;\n",
+        );
         if let Some((ul, net)) = &e.routed_from {
             out.push_str(&format!(
                 "    iifname {ul} ip saddr {net} oifname {br} counter accept\n",
@@ -535,19 +537,30 @@ mod tests {
     fn mesh_routed_lets_the_underlay_into_the_bridge() {
         let mut s = full();
         assert!(!s.render_nft().unwrap().contains("counter accept"));
-        assert!(!s.rules().iter().any(|r| r.join(" ").contains("xdebbie mesh")));
+        assert!(
+            !s.rules()
+                .iter()
+                .any(|r| r.join(" ").contains("xdebbie mesh"))
+        );
         s.egress.as_mut().unwrap().routed_from = Some(("wg-flock".into(), "10.22.0.0/16".into()));
         let nft = s.render_nft().unwrap();
         let accept = nft
             .find("iifname \"wg-flock\" ip saddr 10.22.0.0/16 oifname \"virbr-xdebbie\" counter accept")
             .expect(&nft);
         let drop = nft.find("ct state new counter drop").unwrap();
-        assert!(accept < drop, "the accept must come before the drop:\n{nft}");
+        assert!(
+            accept < drop,
+            "the accept must come before the drop:\n{nft}"
+        );
         let rules: Vec<String> = s.rules().iter().map(|r| r.join(" ")).collect();
         assert!(rules.contains(
             &"route allow in on wg-flock out on virbr-xdebbie from 10.22.0.0/16 comment xdebbie mesh 10.22.0.0/16 to vms via wg-flock".to_string()
         ), "{rules:#?}");
-        assert!(s.wanted_comments().iter().any(|c| c == "xdebbie mesh 10.22.0.0/16 to vms via wg-flock"));
+        assert!(
+            s.wanted_comments()
+                .iter()
+                .any(|c| c == "xdebbie mesh 10.22.0.0/16 to vms via wg-flock")
+        );
     }
 
     fn golden(name: &str) -> String {
