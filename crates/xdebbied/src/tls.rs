@@ -235,11 +235,9 @@ mod not_tls_tests {
             let mut c = TcpStream::connect(addr).await.unwrap();
             c.write_all(&first).await.unwrap();
             let mut got = vec![];
-            let _ = tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                c.read_to_end(&mut got),
-            )
-            .await;
+            let _ =
+                tokio::time::timeout(std::time::Duration::from_secs(2), c.read_to_end(&mut got))
+                    .await;
             got
         });
         let (s, _) = l.accept().await.unwrap();
@@ -256,7 +254,10 @@ mod not_tls_tests {
         assert!(!tls);
         assert_eq!(got, NOT_TLS_REPLY);
         let s = String::from_utf8(got).unwrap();
-        assert!(s.contains('\u{1F44D}') && s.starts_with("\x1b[1;92m"), "{s:?}");
+        assert!(
+            s.contains('\u{1F44D}') && s.starts_with("\x1b[1;92m"),
+            "{s:?}"
+        );
     }
 
     #[tokio::test]
