@@ -80,6 +80,11 @@ pub struct Config {
     /// Multicast address for discovery
     #[serde(default = "d_multicast")]
     pub multicast_addr: String,
+    /// Hear unsigned discovery messages too. Discovery is signed with the
+    /// cluster token (docs/autodiscovery.md); set this only while a rolling
+    /// upgrade still has boxes whose daemon does not sign.
+    #[serde(default)]
+    pub discovery_accept_unsigned: bool,
     /// LVM volume group for VM disks (optional, uses qcow2 if not set)
     #[serde(default)]
     pub volume_group: Option<String>,

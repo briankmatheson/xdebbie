@@ -10,6 +10,7 @@ use super::{
     messages::{DiscoveryMessage, NodeCapacity},
     multicast::{DEFAULT_MULTICAST_ADDR, MulticastSocket},
     peer::{PeerInfo, PeerTable},
+    wire,
 };
 use crate::election::{
     scoring::{calculate_score, get_uptime},
@@ -35,6 +36,13 @@ pub struct DiscoveryConfig {
     /// election score so the box holding the state leads.
     pub vm_count: Arc<std::sync::atomic::AtomicUsize>,
     pub enable_discovery: bool,
+    /// The cluster token set. With it, everything sent is signed and only
+    /// what verifies is heard (wire.rs); without it (an unauthenticated
+    /// API) messages go out plain.
+    pub tokens: Option<Arc<crate::token::Tokens>>,
+    /// Also hear unsigned messages: for a rolling upgrade, while some boxes
+    /// still run a daemon that does not sign. Off by default.
+    pub accept_unsigned: bool,
 }
 
 impl Default for DiscoveryConfig {
@@ -50,6 +58,8 @@ impl Default for DiscoveryConfig {
             addrs: vec![],
             vm_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             enable_discovery: true,
+            tokens: None,
+            accept_unsigned: false,
         }
     }
 }
@@ -62,6 +72,8 @@ pub struct DiscoveryEngine {
     peers: Arc<RwLock<PeerTable>>,
     election: Arc<RwLock<ElectionStateMachine>>,
     start_time: Instant,
+    /// Sources already warned about, so a stray sender logs once, not every second.
+    warned: std::sync::Mutex<std::collections::HashSet<std::net::IpAddr>>,
 }
 
 impl DiscoveryEngine {
@@ -97,6 +109,7 @@ impl DiscoveryEngine {
             peers,
             election,
             start_time: Instant::now(),
+            warned: Default::default(),
         })
     }
 
@@ -110,6 +123,57 @@ impl DiscoveryEngine {
 
     pub fn election(&self) -> Arc<RwLock<ElectionStateMachine>> {
         self.election.clone()
+    }
+
+    /// Signing key: the *previous* token's while a rotation is in flight,
+    /// since a box the leader has not reached yet holds only that one;
+    /// otherwise the current token's. Receivers try both.
+    async fn signing_key(&self) -> Option<wire::Key> {
+        let set = self.config.tokens.as_ref()?.get().await;
+        Some(wire::Key::from_token(
+            set.previous.as_deref().unwrap_or(&set.current),
+        ))
+    }
+
+    async fn verify_keys(&self) -> Vec<wire::Key> {
+        let Some(t) = &self.config.tokens else {
+            return vec![];
+        };
+        let set = t.get().await;
+        std::iter::once(set.current.as_str())
+            .chain(set.previous.as_deref())
+            .map(wire::Key::from_token)
+            .collect()
+    }
+
+    async fn send(&self, msg: &DiscoveryMessage) -> Result<()> {
+        let bytes = wire::seal(msg, self.signing_key().await.as_ref())?;
+        self.socket.send(&bytes)
+    }
+
+    /// The message in a datagram if it is welcome here: signed with our
+    /// token, or unsigned where that is allowed.
+    async fn admit(&self, bytes: &[u8], src: std::net::SocketAddr) -> Option<DiscoveryMessage> {
+        let keys = self.verify_keys().await;
+        let why = match wire::open(bytes, &keys) {
+            Ok(wire::Opened::Verified(m)) => return Some(m),
+            Ok(wire::Opened::Unsigned(m)) => {
+                if keys.is_empty() || self.config.accept_unsigned {
+                    return Some(m);
+                }
+                "unsigned (a daemon that predates signing? set \
+                 discovery_accept_unsigned = true while upgrading)"
+                    .to_string()
+            }
+            Err(e) => format!("{e:#}"),
+        };
+        let first = self.warned.lock().map(|mut w| w.insert(src.ip())).unwrap_or(false);
+        if first {
+            warn!(%src, "discovery: dropping datagram: {why} (further drops from this address at debug)");
+        } else {
+            tracing::debug!(%src, "discovery: dropping datagram: {why}");
+        }
+        None
     }
 
     /// Get current node capacity (placeholder - should integrate with actual scheduler)
@@ -156,7 +220,7 @@ impl DiscoveryEngine {
             sequence,
         };
 
-        self.socket.send(&msg)?;
+        self.send(&msg).await?;
         Ok(())
     }
 
@@ -176,7 +240,7 @@ impl DiscoveryEngine {
             sequence,
         };
 
-        self.socket.send(&msg)?;
+        self.send(&msg).await?;
         Ok(())
     }
 
@@ -193,7 +257,7 @@ impl DiscoveryEngine {
             sequence,
         };
 
-        self.socket.send(&msg)?;
+        self.send(&msg).await?;
         Ok(())
     }
 
@@ -209,7 +273,7 @@ impl DiscoveryEngine {
             sequence,
         };
 
-        self.socket.send(&msg)?;
+        self.send(&msg).await?;
         Ok(())
     }
 
@@ -371,7 +435,10 @@ impl DiscoveryEngine {
 
                 _ = tokio::time::sleep(Duration::from_millis(100)) => {
                     // Process incoming messages
-                    while let Ok(Some((msg, addr))) = self.socket.recv() {
+                    while let Ok(Some((bytes, addr))) = self.socket.recv() {
+                        let Some(msg) = self.admit(&bytes, addr).await else {
+                            continue;
+                        };
                         if let Err(e) = self.process_message(msg, addr).await {
                             warn!("Failed to process message: {}", e);
                         }

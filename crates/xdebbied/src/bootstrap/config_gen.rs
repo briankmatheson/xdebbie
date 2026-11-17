@@ -183,7 +183,9 @@ seed_command = ["cloud-localds", "--network-config={{net}}", "--vendor-data={{ve
 
 # Multicast discovery and leader election (docs/autodiscovery.md). The
 # elected leader runs the reconciler and answers every cluster request;
-# followers forward to it. No peers = this box leads.
+# followers forward to it. No peers = this box leads. Messages are signed
+# with the cluster token; discovery_accept_unsigned = true hears daemons that
+# predate signing (only while upgrading).
 enable_discovery = true
 multicast_addr = "239.0.0.42:7442"
 # URL peers and xdctl use to reach this box. Auto-detected from the hostname,

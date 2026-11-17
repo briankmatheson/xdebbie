@@ -42,7 +42,17 @@ pub fn listen(multicast_addr: &str, timeout: Duration, own_hostname: &str) -> Re
     let mut nodes: BTreeMap<Uuid, Found> = BTreeMap::new();
     let mut leaders: Vec<Uuid> = vec![];
     while start.elapsed() < timeout {
-        match sock.recv()? {
+        // Before a join this box holds no token, so nothing can be verified:
+        // what is heard is only offered as a URL, and the join is what gets
+        // trusted. Unreadable datagrams are skipped.
+        let heard = match sock.recv()? {
+            Some((bytes, src)) => match crate::discovery::wire::peek(&bytes) {
+                Ok(m) => Some((m, src)),
+                Err(_) => continue,
+            },
+            None => None,
+        };
+        match heard {
             Some((
                 DiscoveryMessage::Announce {
                     node_id,
@@ -189,6 +199,13 @@ mod tests {
     use super::*;
     use crate::discovery::messages::NodeCapacity;
 
+    /// What a running cluster sends: signed with a token this listener
+    /// does not hold.
+    fn send(tx: &MulticastSocket, m: &DiscoveryMessage) -> Result<()> {
+        let key = crate::discovery::wire::Key::from_token("cluster token");
+        tx.send(&crate::discovery::wire::seal(m, Some(&key))?)
+    }
+
     #[test]
     fn hears_announces_and_marks_the_leader() {
         // The real discovery port, so a host firewall that lets xdebbied talk
@@ -209,7 +226,7 @@ mod tests {
         };
         let sender = std::thread::spawn(move || {
             for _ in 0..30 {
-                let _ = tx.send(&DiscoveryMessage::Announce {
+                let _ = send(&tx, &DiscoveryMessage::Announce {
                     node_id: a,
                     hostname: "alpha".into(),
                     api_url: "https://192.0.2.1:7443".into(),
@@ -218,7 +235,7 @@ mod tests {
                     score: 1.0,
                     sequence: 1,
                 });
-                let _ = tx.send(&DiscoveryMessage::Announce {
+                let _ = send(&tx, &DiscoveryMessage::Announce {
                     node_id: b,
                     hostname: "beta".into(),
                     api_url: "https://192.0.2.2:7443".into(),
@@ -227,7 +244,7 @@ mod tests {
                     score: 1.0,
                     sequence: 1,
                 });
-                let _ = tx.send(&DiscoveryMessage::Announce {
+                let _ = send(&tx, &DiscoveryMessage::Announce {
                     node_id: Uuid::new_v4(),
                     hostname: "me".into(),
                     api_url: "https://me:7443".into(),
@@ -236,7 +253,7 @@ mod tests {
                     score: 1.0,
                     sequence: 1,
                 });
-                let _ = tx.send(&DiscoveryMessage::Heartbeat {
+                let _ = send(&tx, &DiscoveryMessage::Heartbeat {
                     node_id: b,
                     score: 1.0,
                     is_leader: true,

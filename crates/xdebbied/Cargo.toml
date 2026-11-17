@@ -74,6 +74,7 @@ tokio-rustls = "0.26"
 aws-lc-rs = "1.19.0"
 time = "0.3.55"
 tower = "0.5"
+hmac = "0.12"
 
 [dev-dependencies]
 http-body-util = "0.1"
