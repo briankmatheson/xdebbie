@@ -1,27 +1,29 @@
 ---
-# Drone (aviary-drone on w10) runs what GitHub's ci.yml runs, on every push
-# to Gitea, and on a tag also builds the .deb and a static Linux xdj.
+# Drone (aviary-drone on w10): one pipeline per binary, each with its own
+# status and its own cargo cache, run side by side on every push to Gitea.
+# Together they cover what GitHub's ci.yml runs.
 #
-# It builds in registry.mesh.bmath.nyc/xdebbie-builder (ci/builder.Dockerfile:
-# rust with cmake, clippy, rustfmt, cargo-deb and the musl target already in)
-# and keeps cargo's downloads and build output on the PVC
-# aviary-drone-builds/xdebbie-cargo-cache (aviary-deploy
-# by-hand/w10/drone-ha/build-cache.yaml), so a run recompiles only what
-# changed. The PVC is ReadWriteOnce: two builds at once take turns.
+#   xdebbied  the daemon and xdebbie-core; fmt for the whole workspace; .deb on tags
+#   capx      the Cluster API provider; the CRD check
+#   xdctl     the CLI
+#   xdj       the mesh-join tool; static Linux binary on tags
 #
-# w10's workers are small (2 vCPU / 4 GiB) and already busy: the build is
-# held to two rustc jobs and a 2.5 GiB limit so it cannot starve the node
-# (a full node has hung a worker before).
+# They build in registry.mesh.bmath.nyc/xdebbie-builder (ci/builder.Dockerfile)
+# with CARGO_HOME and CARGO_TARGET_DIR on a per-pipeline PVC in
+# aviary-drone-builds (aviary-deploy by-hand/w10/drone-ha/build-cache.yaml),
+# so a run recompiles only what changed. Each PVC is ReadWriteOnce: two runs
+# of the same pipeline take turns.
+#
+# w10's workers are small (2 vCPU / 4 GiB): two rustc jobs per build and a
+# memory limit each; the runner gives build pods real requests
+# (DRONE_RESOURCE_REQUEST_*), so the scheduler places them where there is
+# room instead of stacking them on one node.
 kind: pipeline
 type: kubernetes
-name: xdebbie
+name: xdebbied
 
 trigger:
-  event:
-    - push
-    - tag
-    - pull_request
-    - custom
+  event: [push, tag, pull_request, custom]
 
 clone:
   skip_verify: true
@@ -45,16 +47,12 @@ steps:
       - name: cache
         path: /cache
     resources:
-      requests:
-        cpu: 1000
-        memory: 1536MiB
       limits:
         memory: 2560MiB
     commands:
       - cargo fmt --check
-      - cargo clippy --all-targets -- -D warnings
-      - cargo test
-      - cargo run -q -p capx -- crds | diff - deploy/crds.yaml
+      - cargo clippy -p xdebbie-core -p xdebbied --all-targets -- -D warnings
+      - cargo test -p xdebbie-core -p xdebbied
 
   - name: package
     image: registry.mesh.bmath.nyc/xdebbie-builder:1
@@ -62,20 +60,135 @@ steps:
       - name: cache
         path: /cache
     resources:
-      requests:
-        cpu: 1000
-        memory: 1536MiB
       limits:
         memory: 2560MiB
     commands:
       - cargo deb -p xdebbied
-      - cargo build --release -p xdj --target x86_64-unknown-linux-musl
-      - mkdir -p dist
-      - cp "$CARGO_TARGET_DIR"/debian/*.deb dist/
-      - cp "$CARGO_TARGET_DIR"/x86_64-unknown-linux-musl/release/xdj dist/xdj-linux-x86_64
-      - ls -l dist
+      - mkdir -p dist && cp "$CARGO_TARGET_DIR"/debian/*.deb dist/ && ls -l dist
     when:
-      event:
-        - tag
-    depends_on:
-      - check
+      event: [tag]
+    depends_on: [check]
+
+---
+kind: pipeline
+type: kubernetes
+name: capx
+
+trigger:
+  event: [push, tag, pull_request, custom]
+
+clone:
+  skip_verify: true
+
+environment:
+  CARGO_BUILD_JOBS: "2"
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: never
+  CARGO_HOME: /cache/cargo
+  CARGO_TARGET_DIR: /cache/target
+
+volumes:
+  - name: cache
+    claim:
+      name: capx-cargo-cache
+
+steps:
+  - name: check
+    image: registry.mesh.bmath.nyc/xdebbie-builder:1
+    volumes:
+      - name: cache
+        path: /cache
+    resources:
+      limits:
+        memory: 2560MiB
+    commands:
+      - cargo clippy -p capx --all-targets -- -D warnings
+      - cargo test -p capx
+      - cargo run -q -p capx -- crds | diff - deploy/crds.yaml
+
+---
+kind: pipeline
+type: kubernetes
+name: xdctl
+
+trigger:
+  event: [push, tag, pull_request, custom]
+
+clone:
+  skip_verify: true
+
+environment:
+  CARGO_BUILD_JOBS: "2"
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: never
+  CARGO_HOME: /cache/cargo
+  CARGO_TARGET_DIR: /cache/target
+
+volumes:
+  - name: cache
+    claim:
+      name: xdctl-cargo-cache
+
+steps:
+  - name: check
+    image: registry.mesh.bmath.nyc/xdebbie-builder:1
+    volumes:
+      - name: cache
+        path: /cache
+    resources:
+      limits:
+        memory: 2048MiB
+    commands:
+      - cargo clippy -p xdctl --all-targets -- -D warnings
+      - cargo test -p xdctl
+
+---
+kind: pipeline
+type: kubernetes
+name: xdj
+
+trigger:
+  event: [push, tag, pull_request, custom]
+
+clone:
+  skip_verify: true
+
+environment:
+  CARGO_BUILD_JOBS: "2"
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: never
+  CARGO_HOME: /cache/cargo
+  CARGO_TARGET_DIR: /cache/target
+
+volumes:
+  - name: cache
+    claim:
+      name: xdj-cargo-cache
+
+steps:
+  - name: check
+    image: registry.mesh.bmath.nyc/xdebbie-builder:1
+    volumes:
+      - name: cache
+        path: /cache
+    resources:
+      limits:
+        memory: 1024MiB
+    commands:
+      - cargo clippy -p xdj --all-targets -- -D warnings
+      - cargo test -p xdj
+
+  - name: package
+    image: registry.mesh.bmath.nyc/xdebbie-builder:1
+    volumes:
+      - name: cache
+        path: /cache
+    resources:
+      limits:
+        memory: 1024MiB
+    commands:
+      - cargo build --release -p xdj --target x86_64-unknown-linux-musl
+      - mkdir -p dist && cp "$CARGO_TARGET_DIR"/x86_64-unknown-linux-musl/release/xdj dist/xdj-linux-x86_64 && ls -l dist
+    when:
+      event: [tag]
+    depends_on: [check]
