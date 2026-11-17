@@ -637,11 +637,11 @@ mod tests {
         let sent = host(
             "box0",
             "qemu+tls://10.23.0.1/system",
-            Some("https://box0:7443"),
+            Some("https://box0:23443"),
         );
         let h = localize(&cfg, &sent);
         assert_eq!(h.uri, "qemu:///system");
-        assert_eq!(h.agent.as_deref(), Some("https://box0:7443"));
+        assert_eq!(h.agent.as_deref(), Some("https://box0:23443"));
     }
 
     #[test]
@@ -659,8 +659,8 @@ mod tests {
 
     #[test]
     fn same_url_ignores_trailing_slash_and_case() {
-        assert!(same_url("https://Box0:7443/", "https://box0:7443"));
-        assert!(!same_url("https://box0:7443", "https://box1:7443"));
+        assert!(same_url("https://Box0:23443/", "https://box0:23443"));
+        assert!(!same_url("https://box0:23443", "https://box1:23443"));
     }
 
     /// Records every call; `state` answers Running for domains it provisioned.
@@ -811,7 +811,7 @@ mod tests {
             cfg: Arc::new(toml::from_str("state_file = 'unused'").unwrap()),
             http: reqwest::Client::new(),
             tokens: None,
-            me: "http://leader:7443".into(),
+            me: "http://leader:23443".into(),
         };
         // What the leader's store holds for box1: the registrar's remote view.
         let h = host("box1", "qemu+tls://10.23.1.1/system", Some(&agent_url));
@@ -838,7 +838,7 @@ mod tests {
         let dst = host(
             "box2",
             "qemu+tls://10.23.2.1/system",
-            Some("http://box2:7443"),
+            Some("http://box2:23443"),
         );
         d.migrate(&h, &dst, &v).await.unwrap();
         let vol: Volume = serde_json::from_value(serde_json::json!({
@@ -895,13 +895,13 @@ mod tests {
             ),
             http: reqwest::Client::new(),
             tokens: None,
-            me: "https://box0:7443".into(),
+            me: "https://box0:23443".into(),
         };
         // mirrored from a previous leader: remote view of ourselves
         d.inventory(&host(
             "box0",
             "qemu+tls://10.23.0.1/system",
-            Some("https://box0:7443/"),
+            Some("https://box0:23443/"),
         ))
         .await
         .unwrap();

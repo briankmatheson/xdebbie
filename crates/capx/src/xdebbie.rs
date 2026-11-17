@@ -123,13 +123,13 @@ mod ca_tests {
 
     #[test]
     fn no_ca_builds_a_plain_client() {
-        assert!(XDebbie8s::new("http://x:7443".into(), None, None).is_ok());
-        assert!(XDebbie8s::new("http://x:7443".into(), None, Some("  ")).is_ok());
+        assert!(XDebbie8s::new("http://x:23443".into(), None, None).is_ok());
+        assert!(XDebbie8s::new("http://x:23443".into(), None, Some("  ")).is_ok());
     }
 
     #[test]
     fn a_missing_ca_file_is_named() {
-        let e = XDebbie8s::new("https://x:7443".into(), None, Some("/nonexistent/ca.pem"))
+        let e = XDebbie8s::new("https://x:23443".into(), None, Some("/nonexistent/ca.pem"))
             .err()
             .expect("error")
             .to_string();
@@ -139,7 +139,7 @@ mod ca_tests {
     #[test]
     fn inline_text_that_is_not_a_certificate_is_refused() {
         let e = XDebbie8s::new(
-            "https://x:7443".into(),
+            "https://x:23443".into(),
             None,
             Some("-----BEGIN CERTIFICATE-----\nnope\n-----END CERTIFICATE-----\n"),
         )

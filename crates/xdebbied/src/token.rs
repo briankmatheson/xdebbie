@@ -538,7 +538,7 @@ mod tests {
         let env = dir.path().join("xdebbie_env");
         std::fs::write(
             &env,
-            "# env\nexport XDEBBIE_URL=http://x:7443\nexport XDEBBIE_TOKEN='first'\n",
+            "# env\nexport XDEBBIE_URL=http://x:23443\nexport XDEBBIE_TOKEN='first'\n",
         )
         .unwrap();
 
@@ -551,7 +551,7 @@ mod tests {
         );
         let envtext = std::fs::read_to_string(&env).unwrap();
         assert!(envtext.contains(&format!("export XDEBBIE_TOKEN='{second}'")));
-        assert!(envtext.contains("export XDEBBIE_URL=http://x:7443"));
+        assert!(envtext.contains("export XDEBBIE_URL=http://x:23443"));
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

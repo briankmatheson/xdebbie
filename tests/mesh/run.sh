@@ -40,7 +40,7 @@ want() { [[ -z "${ONLY:-}" ]] || [[ " $ONLY " == *" $1 "* ]]; }
 
 H() { ip netns exec h"$1" "${@:2}"; }                        # run in host N
 V() { ip netns exec vm"$1" "${@:2}"; }                       # run in vm N
-X() { ip netns exec h"$1" "$XDCTL" --url http://127.0.0.1:7443 "${@:2}"; }
+X() { ip netns exec h"$1" "$XDCTL" --url http://127.0.0.1:23443 "${@:2}"; }
 J() { X "$1" mesh get; }                                     # JSON doc
 jq_() { python3 -c "import json,sys; d=json.load(sys.stdin); print($1)"; }
 pingok() { ip netns exec "$1" ping -c1 -W1 "$2" >/dev/null 2>&1; }

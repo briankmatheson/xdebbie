@@ -45,7 +45,7 @@ pass() { echo "PASS $*"; }
 flunk() { echo "FAIL $*" >&2; fail=1; }
 j() { python3 -c "import json,sys; d=json.load(sys.stdin); print(eval(sys.argv[1]))" "$1"; }
 dashed() { echo "$1" | sed -E 's/(.{8})(.{4})(.{4})(.{4})(.{12})/\1-\2-\3-\4-\5/'; }
-API=http://127.0.0.1:7443/v1
+API=http://127.0.0.1:23443/v1
 # curl returning "<status> <body>" on one line
 req() { local b; b=$(mktemp); curl -s -o "$b" -w '%{http_code}' "$@"; echo " $(cat "$b")"; rm -f "$b"; }
 calls() { curl -s http://127.0.0.1:8000/_calls; }
@@ -109,11 +109,11 @@ start_env() {
   start_fake "$@"
   sed "s#@WORK@#$WORK#g" "$HERE/xdebbied.toml.in" > "$WORK/xdebbied.toml"
   [ $noabe = 1 ] && sed -i '/^abe = /d' "$WORK/xdebbied.toml"
-  X="$XDCTL --url http://127.0.0.1:7443"
+  X="$XDCTL --url http://127.0.0.1:23443"
   if [ $tls = 1 ]; then
     make_pki
     sed -i "1a tls_cert = \"$WORK/pki/cert.pem\"\ntls_key = \"$WORK/pki/key.pem\"\nca_file = \"$WORK/pki/ca.pem\"\npeer_ca_dir = \"$WORK/pki/peers\"" "$WORK/xdebbied.toml"
-    X="$XDCTL --url https://127.0.0.1:7443 --ca $WORK/pki/ca.pem"
+    X="$XDCTL --url https://127.0.0.1:23443 --ca $WORK/pki/ca.pem"
   fi
   FAKE_IMAGE_BYTES=$IMG_BYTES RUST_LOG=${RUST_LOG:-info} "$XDEBBIED" --config "$WORK/xdebbied.toml" serve >"$WORK/xdebbied.log" 2>&1 &
   DPID=$!

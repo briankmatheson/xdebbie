@@ -5,7 +5,7 @@ use tracing::{debug, warn};
 
 use super::messages::DiscoveryMessage;
 
-pub const DEFAULT_MULTICAST_ADDR: &str = "239.0.0.42:7442";
+pub const DEFAULT_MULTICAST_ADDR: &str = "239.0.0.42:23442";
 const MAX_PACKET_SIZE: usize = 65536;
 
 /// Multicast socket for discovery messages

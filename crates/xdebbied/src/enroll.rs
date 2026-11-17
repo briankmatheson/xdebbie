@@ -253,7 +253,7 @@ mod tests {
             EnrollRequest {
                 hostname: host.into(),
                 box_id: None,
-                api_url: format!("https://{host}:7443"),
+                api_url: format!("https://{host}:23443"),
                 csr: csr.csr_pem,
                 wg_pubkey: None,
             },

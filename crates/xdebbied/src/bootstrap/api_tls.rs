@@ -391,7 +391,7 @@ fn san_label(s: &SanType) -> String {
 }
 
 /// SubjectAltName list for the server cert: short hostname, FQDN, loopback
-/// (so `xdctl` with its default `https://127.0.0.1:7443` verifies on the
+/// (so `xdctl` with its default `https://127.0.0.1:23443` verifies on the
 /// box itself), and every global-scope IPv4 address currently assigned to
 /// this host — so the cert verifies whether xdctl is pointed at a name or
 /// an address.

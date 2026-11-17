@@ -33,10 +33,10 @@ must share one token — `xdctl token rotate` changes it everywhere
 ## `GET /v1/leader`
 
 ```json
-{"this":   {"node_id": "bef8ad05-…", "hostname": "node0.example.net", "api_url": "http://10.23.0.1:7443"},
+{"this":   {"node_id": "bef8ad05-…", "hostname": "node0.example.net", "api_url": "http://10.23.0.1:23443"},
  "state":  "follower",
  "is_leader": false,
- "leader": {"node_id": "609980bd-…", "hostname": "node1.example.net", "api_url": "http://10.23.0.2:7443"},
+ "leader": {"node_id": "609980bd-…", "hostname": "node1.example.net", "api_url": "http://10.23.0.2:23443"},
  "peers":  2}
 ```
 
@@ -57,20 +57,20 @@ enrol a peer on box B, point `XDEBBIE_URL` (or `--url`) at B.
 
 ```
 $ xdctl leader
-asked   node0.example.net (http://10.23.0.1:7443)  [follower, 2 peers]
-leader  node1.example.net (http://10.23.0.2:7443)
+asked   node0.example.net (http://10.23.0.1:23443)  [follower, 2 peers]
+leader  node1.example.net (http://10.23.0.2:23443)
 ```
 
 ## Advertised URL
 
 Peers and clients reach a box at the URL it announces: `advertise_url` from
-`xdebbied.toml` if set (use the FQDN: `https://node0.example.net:7443`),
+`xdebbied.toml` if set (use the FQDN: `https://node0.example.net:23443`),
 otherwise the scheme plus the listen address, with an unspecified IP
 (`0.0.0.0`) replaced by the default-route interface address.
 
 ## Protocol
 
-UDP multicast on `239.0.0.42:7442` (`multicast_addr`), TTL 1, JSON messages
+UDP multicast on `239.0.0.42:23442` (`multicast_addr`), TTL 1, JSON messages
 with a `type` tag. The socket is bound with `SO_REUSEADDR`/`SO_REUSEPORT`
 so a replacement daemon can join while the old one is still running.
 
@@ -118,7 +118,7 @@ keeps its job unless clearly beaten.
   adds the `ufw` rule for the discovery port from local networks; if you
   change `multicast_addr` afterwards, re-run it or add the rule yourself,
   or the box never sees a peer and leads alone.
-- `7443/tcp` reachable between boxes and from clients at the advertised
+- `23443/tcp` reachable between boxes and from clients at the advertised
   URL.
 
 ## The store is per box; followers keep up

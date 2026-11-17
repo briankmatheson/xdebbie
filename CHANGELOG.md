@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Default ports moved: the API from 7443/tcp to **23443/tcp**, discovery
+  multicast from 239.0.0.42:7442 to **239.0.0.42:23442/udp**; `xdctl`'s
+  default URL follows. A box whose `xdebbied.toml` sets `listen` and
+  `multicast_addr` (every bootstrapped box does) keeps its ports until they
+  are changed there; see docs/migration.md, "Ports 23443/23442".
 - `xdj` refuses to run on a box where xdebbied is running: the daemon owns
   the mesh links and keys there, and two hands on them only breaks the
   tunnel. Every verb but `help` exits with an error naming the daemon's pid.

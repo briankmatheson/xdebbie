@@ -148,7 +148,7 @@ journalctl -u xdebbied -f
 Generated automatically at: `/etc/xdebbie/xdebbied.toml`
 
 ```toml
-listen = "0.0.0.0:7443"
+listen = "0.0.0.0:23443"
 state_file = "/var/lib/xdebbie/state.json"
 token_file = "/etc/xdebbie/token"
 
@@ -283,7 +283,7 @@ systemctl status xdebbied
 
 # Check environment
 source ~/.xdebbie_env
-echo $XDEBBIE_URL      # Should be http://0.0.0.0:7443
+echo $XDEBBIE_URL      # Should be http://0.0.0.0:23443
 echo $XDEBBIE_TOKEN    # Should be set
 
 # Test API directly
@@ -369,7 +369,7 @@ API token stored at `/etc/xdebbie/token` with mode 0600 (root only).
 
 ### Network Exposure
 
-Default: Listens on `0.0.0.0:7443` (all interfaces).
+Default: Listens on `0.0.0.0:23443` (all interfaces).
 
 For production:
 1. Use firewall rules

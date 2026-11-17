@@ -89,7 +89,7 @@ daemon_start() {
   echo $! > "$pidf"
   # Wait for the API.
   for _ in $(seq 1 50); do
-    if ip netns exec h$N "$XDCTL" --url http://127.0.0.1:7443 mesh get >/dev/null 2>&1; then
+    if ip netns exec h$N "$XDCTL" --url http://127.0.0.1:23443 mesh get >/dev/null 2>&1; then
       return 0
     fi
     sleep 0.1
@@ -119,7 +119,7 @@ status() {
   for N in $HOSTS; do
     echo "== h$N =="
     ip -n h$N -br link show type geneve 2>/dev/null || true
-    ip netns exec h$N "$XDCTL" --url http://127.0.0.1:7443 mesh ls 2>/dev/null || echo "(daemon not running)"
+    ip netns exec h$N "$XDCTL" --url http://127.0.0.1:23443 mesh ls 2>/dev/null || echo "(daemon not running)"
   done
 }
 

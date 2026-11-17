@@ -1,6 +1,6 @@
 # xdebbied REST API (v1)
 
-Base URL `https://<xdebbied>:7443`. With `token_file` configured, every `/v1`
+Base URL `https://<xdebbied>:23443`. With `token_file` configured, every `/v1`
 call needs `Authorization: Bearer <token>` **or** a TLS client certificate
 signed by the cluster CA (that is how daemons talk to each other). The
 enrolment routes marked *public* below need neither. Bodies are JSON with

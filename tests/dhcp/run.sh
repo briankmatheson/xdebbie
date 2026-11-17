@@ -38,7 +38,7 @@ ip link set c0 netns cl
 ip -n cl link set lo up
 
 cat > "$WORK/xdebbied.toml" <<EOF
-listen = "127.0.0.1:7443"
+listen = "127.0.0.1:23443"
 state_file = "$WORK/state.json"
 enable_discovery = false
 virsh = "/bin/false"
@@ -58,7 +58,7 @@ RUST_LOG=${RUST_LOG:-info,xdebbied::dhcp=debug} "$XDEBBIED" --config "$WORK/xdeb
   >"$WORK/xdebbied.log" 2>&1 &
 DPID=$!
 trap 'kill $DPID 2>/dev/null || true' EXIT
-X="$XDCTL --url http://127.0.0.1:7443"
+X="$XDCTL --url http://127.0.0.1:23443"
 for _ in $(seq 1 50); do $X net show >/dev/null 2>&1 && break; sleep 0.1; done
 $X net show >/dev/null 2>&1 || { echo "daemon did not come up:"; cat "$WORK/xdebbied.log"; exit 1; }
 

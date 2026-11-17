@@ -46,7 +46,7 @@ impl Default for DiscoveryConfig {
                 .ok()
                 .and_then(|h| h.into_string().ok())
                 .unwrap_or_else(|| "unknown".to_string()),
-            api_url: "http://127.0.0.1:7443".to_string(),
+            api_url: "http://127.0.0.1:23443".to_string(),
             addrs: vec![],
             vm_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             enable_discovery: true,
@@ -73,7 +73,7 @@ impl DiscoveryEngine {
         let bind_addr = match &config.bind_addr {
             Some(b) => b.clone(),
             None => {
-                let port = config.multicast_addr.rsplit(':').next().unwrap_or("7442");
+                let port = config.multicast_addr.rsplit(':').next().unwrap_or("23442");
                 format!("0.0.0.0:{port}")
             }
         };

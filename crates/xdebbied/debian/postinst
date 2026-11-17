@@ -85,7 +85,7 @@ EOF
         echo "  xdctl host ls"
         echo ""
         echo "The API serves HTTPS with a cert from /etc/xdebbie/api-ca.pem."
-        echo "To add another box: on it, run 'sudo xdebbied bootstrap --join https://$(hostname -f):7443'"
+        echo "To add another box: on it, run 'sudo xdebbied bootstrap --join https://$(hostname -f):23443'"
         echo "then approve it here with 'xdctl approve <its hostname>' (see BOOTSTRAP.md)."
         echo ""
         ;;

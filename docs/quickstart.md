@@ -210,7 +210,7 @@ When bootstrapping on stock Debian 13:
 
 ```bash
 # Set by ~/.xdebbie_env
-XDEBBIE_URL=http://0.0.0.0:7443
+XDEBBIE_URL=http://0.0.0.0:23443
 XDEBBIE_TOKEN='<64-char-hex-token>'
 
 # Optional overrides

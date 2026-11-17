@@ -1,5 +1,5 @@
 # Mesh test harness: "host" h0 (network namespace). See netns-3host.sh.
-listen = "127.0.0.1:7443"
+listen = "127.0.0.1:23443"
 state_file = "/tmp/xdebbie-mesh/h0/state.json"
 enable_discovery = false
 

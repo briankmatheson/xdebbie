@@ -153,7 +153,7 @@
         │           │           │                     │
         │          Skip         ▼                     │
         │                Generate TOML:               │
-        │                • listen = "0.0.0.0:7443"    │
+        │                • listen = "0.0.0.0:23443"    │
         │                • state_file = "..."         │
         │                • token_file = "..."         │
         │                • [[hosts]]                  │
@@ -261,7 +261,7 @@
                                        ▼
                     ┌────────────────────────────────┐
                     │  Start API Server              │
-                    │  Listen: 0.0.0.0:7443          │
+                    │  Listen: 0.0.0.0:23443          │
                     │  Auth: Bearer token            │
                     │                                │
                     │  Routes:                       │
@@ -279,7 +279,7 @@
                     ╔════════════════════════════════╗
                     ║   Server Running!              ║
                     ║                                ║
-                    ║   Listening on 0.0.0.0:7443    ║
+                    ║   Listening on 0.0.0.0:23443    ║
                     ║   Token auth enabled           ║
                     ║   Reconciler active            ║
                     ╚════════════════════════════════╝
@@ -301,7 +301,7 @@
                               ▼
                     ┌────────────────────────────────┐
                     │ Environment Variables Set:     │
-                    │  XDEBBIE_URL=http://...:7443 │
+                    │  XDEBBIE_URL=http://...:23443 │
                     │  XDEBBIE_TOKEN='...'         │
                     └────────────────────────────────┘
                               │
@@ -446,7 +446,7 @@
         ┌────────────────────┐    ┌────────────────────┐
         │  xdebbied        │◄───│  CAPX Controller   │
         │  API Server        │    │  (in mgmt cluster) │
-        │  :7443             │    └────────────────────┘
+        │  :23443             │    └────────────────────┘
         └─────────┬──────────┘
                   │
                   │ libvirt API

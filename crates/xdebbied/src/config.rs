@@ -11,13 +11,13 @@ use xdebbie_core::{Host, PlacementPolicy};
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Config {
-    /// API listen address. Omit (or set to 0.0.0.0:7443) to auto-detect the
+    /// API listen address. Omit (or set to 0.0.0.0:23443) to auto-detect the
     /// IP of the interface that holds the default route. Explicit value always
     /// wins.
     #[serde(default)]
     pub listen: Option<SocketAddr>,
     /// URL peers and clients use to reach this box's API, e.g.
-    /// `https://node0.example.net:7443`. Default: scheme + the listen
+    /// `https://node0.example.net:23443`. Default: scheme + the listen
     /// address, with an unspecified IP (0.0.0.0) replaced by the
     /// default-route interface address.
     #[serde(default)]
@@ -110,7 +110,7 @@ fn d_discovery() -> bool {
     true
 }
 fn d_multicast() -> String {
-    "239.0.0.42:7442".to_string()
+    "239.0.0.42:23442".to_string()
 }
 fn d_state() -> PathBuf {
     "/var/lib/xdebbie/state.json".into()
@@ -200,7 +200,7 @@ fn default_route_ip() -> Option<Ipv4Addr> {
     }
 }
 
-pub const DEFAULT_PORT: u16 = 7443;
+pub const DEFAULT_PORT: u16 = 23443;
 
 impl Config {
     pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
@@ -237,8 +237,8 @@ impl Config {
     ///
     /// Priority:
     ///   1. `listen` explicitly set in config — used as-is.
-    ///   2. Auto-detected IP of the default-route interface, port 7443.
-    ///   3. Fallback: `127.0.0.1:7443` (with a warning).
+    ///   2. Auto-detected IP of the default-route interface, port 23443.
+    ///   3. Fallback: `127.0.0.1:23443` (with a warning).
     pub fn effective_listen(&self) -> SocketAddr {
         // 1. Explicit config value.
         if let Some(addr) = self.listen {
@@ -386,28 +386,28 @@ storage_pool = "boot"
     fn advertise_url_follows_listen_unless_set() {
         let c: Config = toml::from_str("state_file = 'x'").unwrap();
         assert_eq!(
-            c.advertise_url("10.0.0.5:7443".parse().unwrap()),
-            "http://10.0.0.5:7443"
+            c.advertise_url("10.0.0.5:23443".parse().unwrap()),
+            "http://10.0.0.5:23443"
         );
 
         let c: Config = toml::from_str("state_file = 'x'\ntls_cert = 'c'\ntls_key = 'k'").unwrap();
         assert_eq!(
-            c.advertise_url("10.0.0.5:7443".parse().unwrap()),
-            "https://10.0.0.5:7443"
+            c.advertise_url("10.0.0.5:23443".parse().unwrap()),
+            "https://10.0.0.5:23443"
         );
 
         let c: Config =
-            toml::from_str("state_file = 'x'\nadvertise_url = 'https://node0.example.net:7443/'")
+            toml::from_str("state_file = 'x'\nadvertise_url = 'https://node0.example.net:23443/'")
                 .unwrap();
         assert_eq!(
-            c.advertise_url("0.0.0.0:7443".parse().unwrap()),
-            "https://node0.example.net:7443"
+            c.advertise_url("0.0.0.0:23443".parse().unwrap()),
+            "https://node0.example.net:23443"
         );
 
         // 0.0.0.0 is never advertised.
         let c: Config = toml::from_str("state_file = 'x'").unwrap();
         assert!(
-            !c.advertise_url("0.0.0.0:7443".parse().unwrap())
+            !c.advertise_url("0.0.0.0:23443".parse().unwrap())
                 .contains("0.0.0.0")
         );
     }

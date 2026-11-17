@@ -17,7 +17,7 @@ Enable xdebbied instances to automatically discover each other via multicast, sh
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Multicast Discovery                          │
-│                    239.0.0.42:7442                              │
+│                    239.0.0.42:23442                              │
 └─────────────────────────────────────────────────────────────────┘
        ▲                    ▲                    ▲
        │                    │                    │
@@ -30,7 +30,7 @@ Enable xdebbied instances to automatically discover each other via multicast, sh
 │  LEADER    │◄────►│  BACKUP    │◄────►│  BACKUP    │
 │  Score: 100│      │  Score: 90 │      │  Score: 80 │
 │            │      │            │      │            │
-│  API :7443 │      │  API :7443 │      │  API :7443 │
+│  API :23443 │      │  API :23443 │      │  API :23443 │
 │  Scheduler │      │  Standby   │      │  Standby   │
 │  Active    │      │  Watching  │      │  Watching  │
 └────────────┘      └────────────┘      └────────────┘
@@ -45,7 +45,7 @@ Enable xdebbied instances to automatically discover each other via multicast, sh
 
 ### Multicast Group
 - **Address**: `239.0.0.42` (IPv4 multicast)
-- **Port**: `7442`
+- **Port**: `23442`
 - **TTL**: `1` (local subnet only, or configurable)
 
 ### Message Types
@@ -58,7 +58,7 @@ Enable xdebbied instances to automatically discover each other via multicast, sh
   "node": {
     "id": "uuid-v4",
     "name": "hostname",
-    "listen_addr": "http://10.0.0.5:7443",
+    "listen_addr": "http://10.0.0.5:23443",
     "started_at": "2026-11-08T19:50:00Z",
     "sequence": 123
   },
@@ -268,7 +268,7 @@ src/xdebbie/crates/xdebbied/src/discovery/
 ```
 
 **Features:**
-- Multicast socket setup (IPv4 239.0.0.42:7442)
+- Multicast socket setup (IPv4 239.0.0.42:23442)
 - Send ANNOUNCE messages (every 5s)
 - Receive and parse announcements
 - Maintain peer list (active peers)
@@ -326,7 +326,7 @@ src/xdebbie/crates/xdebbied/src/
 ```toml
 [discovery]
 enabled = true
-multicast_addr = "239.0.0.42:7442"
+multicast_addr = "239.0.0.42:23442"
 multicast_ttl = 1
 announce_interval_secs = 5
 heartbeat_interval_secs = 1
@@ -351,7 +351,7 @@ pub fn generate_config_with_discovery(...) -> String {
         r#"...
 [discovery]
 enabled = true
-multicast_addr = "239.0.0.42:7442"
+multicast_addr = "239.0.0.42:23442"
 announce_interval_secs = 5
 peer_timeout_secs = 15
 
@@ -383,15 +383,15 @@ min_quorum = 1  # Allow single-node clusters
   "leader": {
     "id": "uuid",
     "name": "node1",
-    "listen_addr": "http://10.0.0.5:7443"
+    "listen_addr": "http://10.0.0.5:23443"
   },
   "state": "stable"
 }
 
 // GET /cluster/peers
 [
-  {"id": "uuid", "name": "node1", "addr": "http://10.0.0.5:7443", "role": "leader"},
-  {"id": "uuid", "name": "node2", "addr": "http://10.0.0.6:7443", "role": "backup"}
+  {"id": "uuid", "name": "node1", "addr": "http://10.0.0.5:23443", "role": "leader"},
+  {"id": "uuid", "name": "node2", "addr": "http://10.0.0.6:23443", "role": "backup"}
 ]
 
 // POST /cluster/election/trigger (admin only)
@@ -486,7 +486,7 @@ xdebbied serve --bootstrap &  # node3
 sleep 10
 
 # Check cluster status
-curl http://localhost:7443/cluster/status
+curl http://localhost:23443/cluster/status
 
 # Kill leader
 pkill -f "xdebbied.*node1"
@@ -495,7 +495,7 @@ pkill -f "xdebbied.*node1"
 sleep 10
 
 # Verify new leader
-curl http://localhost:7443/cluster/status
+curl http://localhost:23443/cluster/status
 ```
 
 ### Chaos Testing
@@ -569,7 +569,7 @@ sleep 30
 systemctl restart xdebbied  # node3
 
 # 4. Verify cluster formed
-curl http://node1:7443/cluster/status
+curl http://node1:23443/cluster/status
 ```
 
 ## Future Enhancements

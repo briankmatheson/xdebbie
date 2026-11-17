@@ -30,7 +30,7 @@ Complete feature list for XDebbie v0.3.0 — Self-Forming Cloud Orchestration
 ## 🔍 Discovery & Clustering
 
 ### Auto-Discovery ✅
-- **Multicast UDP**: 239.0.0.42:7442 for peer discovery
+- **Multicast UDP**: 239.0.0.42:23442 for peer discovery
 - **ANNOUNCE messages**: Every 5s with node info
 - **HEARTBEAT messages**: Every 1s for liveness
 - **Automatic peer detection**: Zero configuration required
@@ -167,7 +167,7 @@ Complete feature list for XDebbie v0.3.0 — Self-Forming Cloud Orchestration
 ## 🎛️ API & CLI
 
 ### REST API ✅
-- **HTTP/HTTPS**: Port 7443 (configurable)
+- **HTTP/HTTPS**: Port 23443 (configurable)
 - **JSON payloads**: Standard REST semantics
 - **Bearer auth**: Authorization: Bearer <token>
 - **Endpoints**:

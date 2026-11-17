@@ -1,4 +1,4 @@
-listen = "127.0.0.1:7443"
+listen = "127.0.0.1:23443"
 state_file = "@WORK@/state.json"
 enable_discovery = false
 reconcile_interval_secs = 1
