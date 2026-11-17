@@ -9,5 +9,5 @@ strip = true   # drop symbols from shipped binaries (workspace-wide)
 version = "0.17.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
-repository = "https://github.com/bmatheson/xdebbie"
+repository = "https://github.com/briankmatheson/xdebbie"
 authors = ["Brian Matheson <bmath@brianmatheson.com>"]
