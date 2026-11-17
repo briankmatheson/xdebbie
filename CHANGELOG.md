@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `xdj` refuses to run on a box where xdebbied is running: the daemon owns
+  the mesh links and keys there, and two hands on them only breaks the
+  tunnel. Every verb but `help` exits with an error naming the daemon's pid.
+
 ### Added
+- `xdj clear` forgets both WireGuard keys: this box's saved private key
+  (`~/.config/xdj/wg.key`) and the hub's public key in `xdj.conf`. The
+  endpoint and box numbers stay. For when either end has been re-keyed and
+  the tunnel no longer handshakes: `xdj down`, `xdj clear`, `xdj up`.
 - `xdj` guesses the hub's endpoint when it asks for one: the address most
   sessions on this box are logged in from, read off `w` (a public address
   before a private one). Enter takes the guess, `-` means no endpoint.

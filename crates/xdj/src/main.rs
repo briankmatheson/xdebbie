@@ -8,6 +8,7 @@
 //!   xdj           toggle: up if the tunnel is down, down if it is up
 //!   xdj up/down   force a direction
 //!   xdj key       print our public key (register it on the hub)
+//!   xdj clear     forget our key and the hub's; the next `up` starts over
 //!   xdj show      print the moves, make none
 //!   xdj status    say whether the links are up
 //!
@@ -17,6 +18,9 @@
 //! The hub's public key and endpoint are asked for once and kept in
 //! ~/.config/xdj/xdj.conf. The endpoint prompt offers a guess read off `w`:
 //! on a remote box, the address you are logged in from is usually the hub's.
+//!
+//! It is for boxes WITHOUT the daemon: where xdebbied is running the mesh is
+//! the daemon's (same links, its own keys), and xdj refuses to do anything.
 //!
 //! A box without the mesh bridge (a cloud VM, not a hypervisor) carries the
 //! overlay on the tunnel itself, under the MAC the hub's derived plan expects
@@ -83,6 +87,16 @@ fn r(p: &str, a: &[&str], i: Option<&str>, soft: bool) -> Result<String> {
     Err(e(format!("{p} {}: {}", a.join(" "), String::from_utf8_lossy(&o.stderr).trim())))
 }
 
+/// The pid of a running xdebbied, if there is one: a numeric entry under
+/// `proc` whose `comm` is the daemon's name. World-readable, so no root needed.
+fn daemon_pid(proc: &str) -> Option<u32> {
+    std::fs::read_dir(proc).ok()?.flatten().find_map(|d| {
+        let pid: u32 = d.file_name().to_str()?.parse().ok()?;
+        let comm = std::fs::read_to_string(d.path().join("comm")).ok()?;
+        (comm.trim() == "xdebbied").then_some(pid)
+    })
+}
+
 /// Does a link exist? (read-only, no root needed).
 fn have(dev: &str) -> bool { r("ip", &["link", "show", dev], None, false).is_ok() }
 
@@ -145,6 +159,17 @@ fn conf_set(key: &str, val: &str) -> Result<()> {
     }
     if !hit { out.push_str(&format!("{key} = {val}\n")); }
     save(&p, &out, "644")
+}
+
+/// Drop one key from the conf, keeping the other lines. True if it was there.
+fn conf_del(key: &str) -> Result<bool> {
+    let p = cpath();
+    let Ok(old) = std::fs::read_to_string(&p) else { return Ok(false) };
+    let is = |l: &str| l.split('#').next().unwrap_or("").split_once('=').map(|(k, _)| k.trim() == key).unwrap_or(false);
+    if !old.lines().any(is) { return Ok(false); }
+    let out: String = old.lines().filter(|l| !is(l)).map(|l| format!("{l}\n")).collect();
+    save(&p, &out, "644")?;
+    Ok(true)
 }
 
 fn pubkey_of(priv_: &str) -> Result<String> {
@@ -418,6 +443,29 @@ impl C {
         Ok(())
     }
 
+    /// Forget both keys: our saved private key and the hub's public key. The
+    /// endpoint, box numbers and the rest of the conf stay. Links that are up
+    /// keep the keys they were given until they are taken down.
+    fn clear(&self) -> Result<()> {
+        let kp = kpath();
+        match std::fs::remove_file(&kp) {
+            Ok(()) => eprintln!("xdj: removed {kp}"),
+            Err(x) if x.kind() == std::io::ErrorKind::NotFound => eprintln!("xdj: no saved key at {kp}"),
+            Err(x) => return Err(e(format!("{kp}: {x}"))),
+        }
+        if conf_del("peer_pubkey")? {
+            eprintln!("xdj: forgot the hub's public key ({})", cpath());
+        } else {
+            eprintln!("xdj: no hub public key in {}", cpath());
+        }
+        if have(&self.ul) {
+            eprintln!("xdj: {} is still up on the old keys — `xdj down`, then `xdj up`", self.ul);
+        } else {
+            eprintln!("xdj: `xdj up` will adopt or ask for a key, and ask for the hub's");
+        }
+        Ok(())
+    }
+
     fn status(&self) {
         let s = |d: &str| if have(d) { "up" } else { "down" };
         println!("underlay {} {}\ntunnel   {} {}", self.ul, s(&self.ul), self.tun(), s(&self.tun()));
@@ -478,6 +526,12 @@ fn go() -> Result<i32> {
         if have(&C::load().ul) { "down".into() } else { "up".into() }
     } else { a };
 
+    if !matches!(mode.as_str(), "-h" | "--help" | "help") {
+        if let Some(pid) = daemon_pid("/proc") {
+            return Err(e(format!("xdebbied is running here (pid {pid}) and owns the mesh on this box — use xdctl mesh, or stop the daemon first")));
+        }
+    }
+
     match mode.as_str() {
         "show" => { C::load().show(); Ok(0) }
         "status" => { C::load().status(); Ok(0) }
@@ -490,6 +544,7 @@ fn go() -> Result<i32> {
                 reexec("key")
             }
         }
+        "clear" => { C::load().clear()?; Ok(0) }
         "up" | "down" => {
             if !rooted() { return reexec(&mode); }
             let mut c = C::load();
@@ -497,10 +552,10 @@ fn go() -> Result<i32> {
             Ok(0)
         }
         "-h" | "--help" | "help" => {
-            eprintln!("usage: xdj [up|down|key|show|status]   (no arg = toggle; conf ~/.config/xdj/xdj.conf)");
+            eprintln!("usage: xdj [up|down|key|clear|show|status]   (no arg = toggle; conf ~/.config/xdj/xdj.conf)");
             Ok(0)
         }
-        o => Err(e(format!("unknown move {o:?}; try up|down|key|show|status"))),
+        o => Err(e(format!("unknown move {o:?}; try up|down|key|clear|show|status"))),
     }
 }
 
@@ -512,6 +567,31 @@ mod tests {
     fn bridge_mac_matches_the_daemons_plan() {
         assert_eq!(bridge_mac(2), "52:54:00:23:02:fe");
         assert_eq!(bridge_mac(253), "52:54:00:23:fd:fe");
+    }
+
+    #[test]
+    fn conf_del_drops_only_that_key() {
+        let p = std::env::temp_dir().join(format!("xdj-test-{}.conf", std::process::id()));
+        std::env::set_var("XDJ_CONF", &p);
+        std::fs::write(&p, "self_box = 3\npeer_pubkey = abc=  # hub\n# note\npeer_endpoint = h:51820\n").unwrap();
+        assert!(conf_del("peer_pubkey").unwrap());
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "self_box = 3\n# note\npeer_endpoint = h:51820\n");
+        assert!(!conf_del("peer_pubkey").unwrap());
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn daemon_is_found_by_comm() {
+        let d = std::env::temp_dir().join(format!("xdj-proc-{}", std::process::id()));
+        for (pid, comm) in [("41", "sshd"), ("self", "xdebbied"), ("77", "xdebbied-helper")] {
+            std::fs::create_dir_all(d.join(pid)).unwrap();
+            std::fs::write(d.join(pid).join("comm"), format!("{comm}\n")).unwrap();
+        }
+        assert_eq!(daemon_pid(&d.to_string_lossy()), None);
+        std::fs::create_dir_all(d.join("1807")).unwrap();
+        std::fs::write(d.join("1807/comm"), "xdebbied\n").unwrap();
+        assert_eq!(daemon_pid(&d.to_string_lossy()), Some(1807));
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
