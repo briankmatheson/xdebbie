@@ -1,10 +1,10 @@
+---
 # Drone (aviary-drone on w10) runs what GitHub's ci.yml runs, on every push
 # to Gitea, and on a tag also builds the .deb and a static Linux xdj.
 #
 # w10's workers are small (2 vCPU / 4 GiB) and already busy: the build is
 # held to two rustc jobs and a 2.5 GiB limit so it cannot starve the node
 # (a full node has hung a worker before).
----
 kind: pipeline
 type: kubernetes
 name: xdebbie
