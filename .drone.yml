@@ -1,0 +1,67 @@
+# Drone (aviary-drone on w10) runs what GitHub's ci.yml runs, on every push
+# to Gitea, and on a tag also builds the .deb and a static Linux xdj.
+#
+# w10's workers are small (2 vCPU / 4 GiB) and already busy: the build is
+# held to two rustc jobs and a 2.5 GiB limit so it cannot starve the node
+# (a full node has hung a worker before).
+---
+kind: pipeline
+type: kubernetes
+name: xdebbie
+
+trigger:
+  event:
+    - push
+    - tag
+    - pull_request
+    - custom
+
+clone:
+  skip_verify: true
+
+environment:
+  CARGO_BUILD_JOBS: "2"
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: never
+
+steps:
+  - name: check
+    image: rust:1-bookworm
+    resources:
+      requests:
+        cpu: 1000
+        memory: 1536MiB
+      limits:
+        memory: 2560MiB
+    commands:
+      # aws-lc-sys (rustls's crypto) builds with cmake
+      - apt-get update -qq && apt-get install -y -qq cmake >/dev/null
+      - rustup component add rustfmt clippy
+      - cargo fmt --check
+      - cargo clippy --all-targets -- -D warnings
+      - cargo test
+      - cargo run -q -p capx -- crds | diff - deploy/crds.yaml
+
+  - name: package
+    image: rust:1-bookworm
+    resources:
+      requests:
+        cpu: 1000
+        memory: 1536MiB
+      limits:
+        memory: 2560MiB
+    commands:
+      - apt-get update -qq && apt-get install -y -qq cmake musl-tools >/dev/null
+      - cargo install cargo-deb --locked
+      - cargo deb -p xdebbied
+      - rustup target add x86_64-unknown-linux-musl
+      - cargo build --release -p xdj --target x86_64-unknown-linux-musl
+      - mkdir -p dist
+      - cp target/debian/*.deb dist/
+      - cp target/x86_64-unknown-linux-musl/release/xdj dist/xdj-linux-x86_64
+      - ls -l dist
+    when:
+      event:
+        - tag
+    depends_on:
+      - check
