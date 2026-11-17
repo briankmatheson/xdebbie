@@ -34,24 +34,46 @@ use std::process::{Command as X, Stdio as Z};
 
 const A: &str = "xdebbie-mesh/v1"; // the ownership alias the daemon stamps
 
-fn num<T: std::str::FromStr + Default>(s: String) -> T { s.trim().parse().unwrap_or_default() }
-fn e(m: impl Into<String>) -> Error { Error::new(Other, m.into()) }
-fn env(k: &str) -> Option<String> { std::env::var(k).ok().filter(|s| !s.is_empty()) }
-fn rooted() -> bool { env("XDJ_ROOT").is_some() }
+fn num<T: std::str::FromStr + Default>(s: String) -> T {
+    s.trim().parse().unwrap_or_default()
+}
+fn e(m: impl Into<String>) -> Error {
+    Error::new(Other, m.into())
+}
+fn env(k: &str) -> Option<String> {
+    std::env::var(k).ok().filter(|s| !s.is_empty())
+}
+fn rooted() -> bool {
+    env("XDJ_ROOT").is_some()
+}
 // $HOME, but under sudo the user half hands theirs over so root reads it too.
-fn home() -> String { env("XDJ_HOME").or_else(|| env("HOME")).unwrap_or_else(|| "/root".into()) }
-fn cpath() -> String { env("XDJ_CONF").unwrap_or_else(|| format!("{}/.config/xdj/xdj.conf", home())) }
-fn kpath() -> String { format!("{}/.config/xdj/wg.key", home()) }
+fn home() -> String {
+    env("XDJ_HOME")
+        .or_else(|| env("HOME"))
+        .unwrap_or_else(|| "/root".into())
+}
+fn cpath() -> String {
+    env("XDJ_CONF").unwrap_or_else(|| format!("{}/.config/xdj/xdj.conf", home()))
+}
+fn kpath() -> String {
+    format!("{}/.config/xdj/wg.key", home())
+}
 
 /// A wg endpoint needs host:port. A bare host/IP (no colon) gets the wg port
 /// appended; anything already carrying a colon (host:port, or IPv6) is left be.
 fn ep_with_port(ep: &str, port: u16) -> String {
-    if ep.is_empty() || ep.contains(':') { ep.to_string() } else { format!("{ep}:{port}") }
+    if ep.is_empty() || ep.contains(':') {
+        ep.to_string()
+    } else {
+        format!("{ep}:{port}")
+    }
 }
 
 /// The MAC the hub's `derived` FDB plan files this box's bridge under
 /// (xdebbied mesh/model.rs `bridge_mac`): `52:54:00:23:<box hex>:fe`.
-fn bridge_mac(box_id: u8) -> String { format!("52:54:00:23:{box_id:02x}:fe") }
+fn bridge_mac(box_id: u8) -> String {
+    format!("52:54:00:23:{box_id:02x}:fe")
+}
 
 /// The likeliest hub address in `w -h` output: the IPv4 address most sessions
 /// here were opened FROM, a public one before a private one. FROM is the
@@ -61,30 +83,50 @@ fn from_w(out: &str) -> Option<String> {
     use std::net::Ipv4Addr;
     let mut seen: M<Ipv4Addr, usize> = M::new();
     for l in out.lines() {
-        if let Some(ip) = l.split_whitespace().skip(1).take(2).find_map(|t| t.parse::<Ipv4Addr>().ok()) {
+        if let Some(ip) = l
+            .split_whitespace()
+            .skip(1)
+            .take(2)
+            .find_map(|t| t.parse::<Ipv4Addr>().ok())
+        {
             if !(ip.is_loopback() || ip.is_unspecified() || ip.is_link_local()) {
                 *seen.entry(ip).or_default() += 1;
             }
         }
     }
-    seen.into_iter().max_by_key(|(ip, n)| (!ip.is_private(), *n)).map(|(ip, _)| ip.to_string())
+    seen.into_iter()
+        .max_by_key(|(ip, n)| (!ip.is_private(), *n))
+        .map(|(ip, _)| ip.to_string())
 }
 
 /// Guess the hub's endpoint from who is logged in (`w`), or None.
 fn guess_endpoint() -> Option<String> {
-    let o = r("w", &["-h", "-i"], None, false).or_else(|_| r("w", &["-h"], None, false)).ok()?;
+    let o = r("w", &["-h", "-i"], None, false)
+        .or_else(|_| r("w", &["-h"], None, false))
+        .ok()?;
     from_w(&o)
 }
 
 /// Run `p a…`, feeding `i` on stdin; `soft` swallows a failure (link exists).
 fn r(p: &str, a: &[&str], i: Option<&str>, soft: bool) -> Result<String> {
     let mut c = X::new(p);
-    c.args(a).stdin(if i.is_some() { Z::piped() } else { Z::null() }).stdout(Z::piped()).stderr(Z::piped());
+    c.args(a)
+        .stdin(if i.is_some() { Z::piped() } else { Z::null() })
+        .stdout(Z::piped())
+        .stderr(Z::piped());
     let mut ch = c.spawn().map_err(|x| e(format!("{p}: {x}")))?;
-    if let (Some(s), Some(mut h)) = (i, ch.stdin.take()) { let _ = h.write_all(s.as_bytes()); }
+    if let (Some(s), Some(mut h)) = (i, ch.stdin.take()) {
+        let _ = h.write_all(s.as_bytes());
+    }
     let o = ch.wait_with_output()?;
-    if o.status.success() || soft { return Ok(String::from_utf8_lossy(&o.stdout).into()); }
-    Err(e(format!("{p} {}: {}", a.join(" "), String::from_utf8_lossy(&o.stderr).trim())))
+    if o.status.success() || soft {
+        return Ok(String::from_utf8_lossy(&o.stdout).into());
+    }
+    Err(e(format!(
+        "{p} {}: {}",
+        a.join(" "),
+        String::from_utf8_lossy(&o.stderr).trim()
+    )))
 }
 
 /// The pid of a running xdebbied, if there is one: a numeric entry under
@@ -98,7 +140,9 @@ fn daemon_pid(proc: &str) -> Option<u32> {
 }
 
 /// Does a link exist? (read-only, no root needed).
-fn have(dev: &str) -> bool { r("ip", &["link", "show", dev], None, false).is_ok() }
+fn have(dev: &str) -> bool {
+    r("ip", &["link", "show", dev], None, false).is_ok()
+}
 
 /// Ask on stderr, read one line from stdin. Empty allowed.
 fn ask(q: &str) -> String {
@@ -112,7 +156,9 @@ fn ask(q: &str) -> String {
 /// Give `path` back to the invoking user when we are root.
 fn mine(path: &str) {
     if rooted() {
-        if let Some(u) = env("XDJ_USER") { let _ = r("chown", &[&format!("{u}:"), path], None, true); }
+        if let Some(u) = env("XDJ_USER") {
+            let _ = r("chown", &[&format!("{u}:"), path], None, true);
+        }
     }
 }
 
@@ -149,7 +195,11 @@ fn conf_set(key: &str, val: &str) -> Result<()> {
     let mut hit = false;
     for l in old.lines() {
         let bare = l.split('#').next().unwrap_or("").trim();
-        if bare.split_once('=').map(|(k, _)| k.trim() == key).unwrap_or(false) {
+        if bare
+            .split_once('=')
+            .map(|(k, _)| k.trim() == key)
+            .unwrap_or(false)
+        {
             out.push_str(&format!("{key} = {val}\n"));
             hit = true;
         } else {
@@ -157,26 +207,52 @@ fn conf_set(key: &str, val: &str) -> Result<()> {
             out.push('\n');
         }
     }
-    if !hit { out.push_str(&format!("{key} = {val}\n")); }
+    if !hit {
+        out.push_str(&format!("{key} = {val}\n"));
+    }
     save(&p, &out, "644")
 }
 
 /// Drop one key from the conf, keeping the other lines. True if it was there.
 fn conf_del(key: &str) -> Result<bool> {
     let p = cpath();
-    let Ok(old) = std::fs::read_to_string(&p) else { return Ok(false) };
-    let is = |l: &str| l.split('#').next().unwrap_or("").split_once('=').map(|(k, _)| k.trim() == key).unwrap_or(false);
-    if !old.lines().any(is) { return Ok(false); }
-    let out: String = old.lines().filter(|l| !is(l)).map(|l| format!("{l}\n")).collect();
+    let Ok(old) = std::fs::read_to_string(&p) else {
+        return Ok(false);
+    };
+    let is = |l: &str| {
+        l.split('#')
+            .next()
+            .unwrap_or("")
+            .split_once('=')
+            .map(|(k, _)| k.trim() == key)
+            .unwrap_or(false)
+    };
+    if !old.lines().any(is) {
+        return Ok(false);
+    }
+    let out: String = old
+        .lines()
+        .filter(|l| !is(l))
+        .map(|l| format!("{l}\n"))
+        .collect();
     save(&p, &out, "644")?;
     Ok(true)
 }
 
 fn pubkey_of(priv_: &str) -> Result<String> {
-    Ok(r("wg", &["pubkey"], Some(&format!("{}\n", priv_.trim())), false)?.trim().into())
+    Ok(r(
+        "wg",
+        &["pubkey"],
+        Some(&format!("{}\n", priv_.trim())),
+        false,
+    )?
+    .trim()
+    .into())
 }
 
-fn dns_state() -> String { format!("{}/.config/xdj/dns.conn", home()) }
+fn dns_state() -> String {
+    format!("{}/.config/xdj/dns.conn", home())
+}
 
 /// Does `server` answer DNS? A real query, not ping: the mesh resolver is a
 /// LoadBalancer IP that never replies to ICMP but serves port 53 fine. Retries
@@ -207,21 +283,42 @@ fn dns_answers(server: &str) -> bool {
 fn default_iface() -> Option<String> {
     let o = r("ip", &["route", "show", "default"], None, true).ok()?;
     let t: Vec<&str> = o.lines().next().unwrap_or("").split_whitespace().collect();
-    t.iter().position(|&w| w == "dev").and_then(|i| t.get(i + 1)).map(|s| s.to_string())
+    t.iter()
+        .position(|&w| w == "dev")
+        .and_then(|i| t.get(i + 1))
+        .map(|s| s.to_string())
 }
 
 /// The active NetworkManager connection on `iface`.
 fn conn_for(iface: &str) -> Option<String> {
-    let o = r("nmcli", &["-t", "-f", "NAME,DEVICE", "connection", "show", "--active"], None, true).ok()?;
-    o.lines().find_map(|l| l.rsplit_once(':').filter(|(_, d)| *d == iface).map(|(n, _)| n.to_string()))
+    let o = r(
+        "nmcli",
+        &["-t", "-f", "NAME,DEVICE", "connection", "show", "--active"],
+        None,
+        true,
+    )
+    .ok()?;
+    o.lines().find_map(|l| {
+        l.rsplit_once(':')
+            .filter(|(_, d)| *d == iface)
+            .map(|(n, _)| n.to_string())
+    })
 }
 
 /// Point the uplink connection at the internal resolver and remember which
 /// one we changed, so `down` can put it back. Mirrors simple/bin/set-dns.sh.
 fn dns_set(server: &str) -> Result<()> {
-    let Some(iface) = default_iface() else { eprintln!("xdj: no default route; leaving DNS alone"); return Ok(()); };
-    let Some(conn) = conn_for(&iface) else { eprintln!("xdj: no NM connection on {iface}; leaving DNS alone"); return Ok(()); };
-    let m = |k: &str, v: &str, soft: bool| r("nmcli", &["connection", "modify", &conn, k, v], None, soft).map(|_| ());
+    let Some(iface) = default_iface() else {
+        eprintln!("xdj: no default route; leaving DNS alone");
+        return Ok(());
+    };
+    let Some(conn) = conn_for(&iface) else {
+        eprintln!("xdj: no NM connection on {iface}; leaving DNS alone");
+        return Ok(());
+    };
+    let m = |k: &str, v: &str, soft: bool| {
+        r("nmcli", &["connection", "modify", &conn, k, v], None, soft).map(|_| ())
+    };
     m("ipv4.dns", "", false)?;
     m("ipv4.dns", server, false)?;
     m("ipv6.dns", "", true)?;
@@ -235,10 +332,16 @@ fn dns_set(server: &str) -> Result<()> {
 
 /// Undo `dns_set`: hand the remembered connection its DHCP resolvers back.
 fn dns_revert() {
-    let Ok(c) = std::fs::read_to_string(dns_state()) else { return; };
+    let Ok(c) = std::fs::read_to_string(dns_state()) else {
+        return;
+    };
     let conn = c.trim();
-    if conn.is_empty() { return; }
-    let m = |k: &str, v: &str| { let _ = r("nmcli", &["connection", "modify", conn, k, v], None, true); };
+    if conn.is_empty() {
+        return;
+    }
+    let m = |k: &str, v: &str| {
+        let _ = r("nmcli", &["connection", "modify", conn, k, v], None, true);
+    };
     m("ipv4.dns", "");
     m("ipv4.ignore-auto-dns", "no");
     m("ipv6.ignore-auto-dns", "no");
@@ -248,9 +351,21 @@ fn dns_revert() {
 }
 
 struct C {
-    sb: u8, pb: u8, pk: String, ep: String,
-    br: String, ul: String, xk: String, oaddr: String, dns: String,
-    port: u16, vni: u32, dport: u16, wmtu: u16, mmtu: u16, ka: u16,
+    sb: u8,
+    pb: u8,
+    pk: String,
+    ep: String,
+    br: String,
+    ul: String,
+    xk: String,
+    oaddr: String,
+    dns: String,
+    port: u16,
+    vni: u32,
+    dport: u16,
+    wmtu: u16,
+    mmtu: u16,
+    ka: u16,
 }
 
 impl C {
@@ -282,10 +397,18 @@ impl C {
     }
 
     /// Is the mesh bridge here (a hypervisor), or do we ride the tunnel alone?
-    fn bridged(&self) -> bool { !self.br.is_empty() && have(&self.br) }
-    fn me(&self) -> String { format!("10.22.{}.1", self.sb) }
-    fn peer(&self) -> String { format!("10.22.{}.1", self.pb) }
-    fn tun(&self) -> String { format!("gnv-b{}", self.pb) }
+    fn bridged(&self) -> bool {
+        !self.br.is_empty() && have(&self.br)
+    }
+    fn me(&self) -> String {
+        format!("10.22.{}.1", self.sb)
+    }
+    fn peer(&self) -> String {
+        format!("10.22.{}.1", self.pb)
+    }
+    fn tun(&self) -> String {
+        format!("gnv-b{}", self.pb)
+    }
 
     /// Our private key, and a word on where it came from.
     ///   local    already saved beside the conf
@@ -297,12 +420,20 @@ impl C {
     fn identity(&self) -> Result<(String, &'static str)> {
         let kp = kpath();
         if let Ok(s) = std::fs::read_to_string(&kp) {
-            if !s.trim().is_empty() { return Ok((s.trim().into(), "local")); }
+            if !s.trim().is_empty() {
+                return Ok((s.trim().into(), "local"));
+            }
         }
         // Adopt this box's xdebbie underlay key if we can see it.
-        let cands = [self.xk.clone(), env("XDJ_XDEBBIE_KEY").unwrap_or_default(), "/var/lib/xdebbie/wg.key".into()];
+        let cands = [
+            self.xk.clone(),
+            env("XDJ_XDEBBIE_KEY").unwrap_or_default(),
+            "/var/lib/xdebbie/wg.key".into(),
+        ];
         for cand in cands {
-            if cand.is_empty() { continue; }
+            if cand.is_empty() {
+                continue;
+            }
             if let Ok(s) = std::fs::read_to_string(&cand) {
                 let k = s.trim();
                 if !k.is_empty() && pubkey_of(k).is_ok() {
@@ -314,7 +445,10 @@ impl C {
         // Otherwise: paste one, or Enter to mint.
         let typed = ask("WireGuard private key to use (Enter to generate one): ");
         let (k, tag) = if typed.is_empty() {
-            (r("wg", &["genkey"], None, false)?.trim().to_string(), "minted")
+            (
+                r("wg", &["genkey"], None, false)?.trim().to_string(),
+                "minted",
+            )
         } else {
             (typed, "pasted")
         };
@@ -328,7 +462,10 @@ impl C {
         if self.pk.is_empty() {
             loop {
                 let v = ask("Hub (master) WireGuard public key [`xdj key` on the hub]: ");
-                if !v.is_empty() { self.pk = v; break; }
+                if !v.is_empty() {
+                    self.pk = v;
+                    break;
+                }
                 eprintln!("  — required; paste the hub's public key.");
             }
             conf_set("peer_pubkey", &self.pk)?;
@@ -337,14 +474,20 @@ impl C {
             // A remote box is usually driven over ssh from behind the hub, so
             // the address `w` shows us logged in from is offered as the default.
             self.ep = match guess_endpoint() {
-                Some(g) => match ask(&format!("Hub endpoint host:port (Enter for {g}, seen in `w`; - for none / NAT'd hub): ")).as_str() {
+                Some(g) => match ask(&format!(
+                    "Hub endpoint host:port (Enter for {g}, seen in `w`; - for none / NAT'd hub): "
+                ))
+                .as_str()
+                {
                     "" => g,
                     "-" => String::new(),
                     v => v.to_string(),
                 },
                 None => ask("Hub endpoint host:port (Enter for none / NAT'd hub): "),
             };
-            if !self.ep.is_empty() { conf_set("peer_endpoint", &self.ep)?; }
+            if !self.ep.is_empty() {
+                conf_set("peer_endpoint", &self.ep)?;
+            }
         }
         Ok(())
     }
@@ -352,8 +495,27 @@ impl C {
     fn keyiface(&self, priv_: &str) -> Result<()> {
         let s = format!("{}\n", priv_.trim());
         let p = self.port.to_string();
-        if r("wg", &["set", &self.ul, "private-key", "/dev/stdin", "listen-port", &p], Some(&s), false).is_err() {
-            r("wg", &["set", &self.ul, "private-key", &kpath(), "listen-port", &p], None, false)?;
+        if r(
+            "wg",
+            &[
+                "set",
+                &self.ul,
+                "private-key",
+                "/dev/stdin",
+                "listen-port",
+                &p,
+            ],
+            Some(&s),
+            false,
+        )
+        .is_err()
+        {
+            r(
+                "wg",
+                &["set", &self.ul, "private-key", &kpath(), "listen-port", &p],
+                None,
+                false,
+            )?;
         }
         Ok(())
     }
@@ -365,7 +527,12 @@ impl C {
         r("ip", &["link", "add", &ul, "type", "wireguard"], None, true)?;
         r("ip", &["link", "set", &ul, "alias", A], None, false)?;
         self.keyiface(&priv_)?;
-        r("ip", &["addr", "replace", &format!("{}/16", self.me()), "dev", &ul], None, false)?;
+        r(
+            "ip",
+            &["addr", "replace", &format!("{}/16", self.me()), "dev", &ul],
+            None,
+            false,
+        )?;
         r("ip", &["link", "set", &ul, "mtu", &wmtu], None, false)?;
         r("ip", &["link", "set", &ul, "up"], None, false)?;
         let rem = self.peer();
@@ -373,12 +540,27 @@ impl C {
         let aip = format!("{rem}/32");
         let ep = ep_with_port(&self.ep, self.port);
         let mut pa = vec!["set", &ul, "peer", &self.pk];
-        if !ep.is_empty() { pa.extend(["endpoint", &ep]); }
+        if !ep.is_empty() {
+            pa.extend(["endpoint", &ep]);
+        }
         pa.extend(["allowed-ips", &aip, "persistent-keepalive", &ka]);
         r("wg", &pa, None, false)?;
 
-        let (d, vni, mmtu, dp) = (self.tun(), self.vni.to_string(), self.mmtu.to_string(), self.dport.to_string());
-        r("ip", &["link", "add", &d, "type", "geneve", "id", &vni, "remote", &rem, "dstport", &dp, "ttl", "64", "df", "set"], None, true)?;
+        let (d, vni, mmtu, dp) = (
+            self.tun(),
+            self.vni.to_string(),
+            self.mmtu.to_string(),
+            self.dport.to_string(),
+        );
+        r(
+            "ip",
+            &[
+                "link", "add", &d, "type", "geneve", "id", &vni, "remote", &rem, "dstport", &dp,
+                "ttl", "64", "df", "set",
+            ],
+            None,
+            true,
+        )?;
         r("ip", &["link", "set", &d, "alias", A], None, false)?;
         r("ip", &["link", "set", &d, "mtu", &mmtu], None, false)?;
         // A hypervisor enslaves the tunnel to the mesh bridge so its VMs share
@@ -390,32 +572,71 @@ impl C {
         let bridged = self.bridged();
         if bridged {
             r("ip", &["link", "set", &d, "master", &self.br], None, false)?;
-            r("bridge", &["link", "set", "dev", &d, "isolated", "on", "learning", "on", "flood",
-                "on", "mcast_flood", "on", "bcast_flood", "on", "neigh_suppress", "off"], None, false)?;
+            r(
+                "bridge",
+                &[
+                    "link",
+                    "set",
+                    "dev",
+                    &d,
+                    "isolated",
+                    "on",
+                    "learning",
+                    "on",
+                    "flood",
+                    "on",
+                    "mcast_flood",
+                    "on",
+                    "bcast_flood",
+                    "on",
+                    "neigh_suppress",
+                    "off",
+                ],
+                None,
+                false,
+            )?;
         } else {
             // The other direction is not learned: the hub (fdb = derived, tunnel
             // ports not learning) only forwards to the MACs its plan gives this
             // box, so the tunnel answers as the bridge the plan expects here.
             // Under its random MAC every reply from the hub is dropped there.
-            r("ip", &["link", "set", &d, "address", &bridge_mac(self.sb)], None, false)?;
+            r(
+                "ip",
+                &["link", "set", &d, "address", &bridge_mac(self.sb)],
+                None,
+                false,
+            )?;
         }
         r("ip", &["link", "set", &d, "up"], None, false)?;
 
         // Our place on the overlay — on the bridge when bridged, else on the
         // tunnel — then the internal resolver on top of it.
         if !self.oaddr.is_empty() {
-            let dev = if bridged { self.br.as_str() } else { d.as_str() };
-            r("ip", &["addr", "replace", &self.oaddr, "dev", dev], None, false)?;
+            let dev = if bridged {
+                self.br.as_str()
+            } else {
+                d.as_str()
+            };
+            r(
+                "ip",
+                &["addr", "replace", &self.oaddr, "dev", dev],
+                None,
+                false,
+            )?;
         }
         if !self.dns.is_empty() {
             // Only hand the resolver over once it actually answers over the
             // mesh — otherwise a half-up tunnel would cost you all DNS.
             let host = self.dns.split('/').next().unwrap_or(&self.dns);
             if dns_answers(host) {
-                if let Err(e) = dns_set(host) { eprintln!("xdj: dns setup failed ({e}); mesh is still up"); }
+                if let Err(e) = dns_set(host) {
+                    eprintln!("xdj: dns setup failed ({e}); mesh is still up");
+                }
             } else {
                 eprintln!("xdj: {host} unreachable over the mesh — leaving DNS alone");
-                eprintln!("      (is this box registered on the hub, and the tunnel passing traffic?)");
+                eprintln!(
+                    "      (is this box registered on the hub, and the tunnel passing traffic?)"
+                );
             }
         }
 
@@ -436,7 +657,14 @@ impl C {
         dns_revert();
         // Bridged, the overlay address is on the bridge, which outlives us;
         // bridgeless it is on the tunnel and goes with it.
-        if !self.oaddr.is_empty() && self.bridged() { r("ip", &["addr", "del", &self.oaddr, "dev", &self.br], None, true)?; }
+        if !self.oaddr.is_empty() && self.bridged() {
+            r(
+                "ip",
+                &["addr", "del", &self.oaddr, "dev", &self.br],
+                None,
+                true,
+            )?;
+        }
         r("ip", &["link", "del", &self.tun()], None, true)?;
         r("ip", &["link", "del", &self.ul], None, true)?;
         eprintln!("xdj: down — left the mesh");
@@ -450,7 +678,9 @@ impl C {
         let kp = kpath();
         match std::fs::remove_file(&kp) {
             Ok(()) => eprintln!("xdj: removed {kp}"),
-            Err(x) if x.kind() == std::io::ErrorKind::NotFound => eprintln!("xdj: no saved key at {kp}"),
+            Err(x) if x.kind() == std::io::ErrorKind::NotFound => {
+                eprintln!("xdj: no saved key at {kp}")
+            }
             Err(x) => return Err(e(format!("{kp}: {x}"))),
         }
         if conf_del("peer_pubkey")? {
@@ -459,7 +689,10 @@ impl C {
             eprintln!("xdj: no hub public key in {}", cpath());
         }
         if have(&self.ul) {
-            eprintln!("xdj: {} is still up on the old keys — `xdj down`, then `xdj up`", self.ul);
+            eprintln!(
+                "xdj: {} is still up on the old keys — `xdj down`, then `xdj up`",
+                self.ul
+            );
         } else {
             eprintln!("xdj: `xdj up` will adopt or ask for a key, and ask for the hub's");
         }
@@ -468,28 +701,68 @@ impl C {
 
     fn status(&self) {
         let s = |d: &str| if have(d) { "up" } else { "down" };
-        println!("underlay {} {}\ntunnel   {} {}", self.ul, s(&self.ul), self.tun(), s(&self.tun()));
+        println!(
+            "underlay {} {}\ntunnel   {} {}",
+            self.ul,
+            s(&self.ul),
+            self.tun(),
+            s(&self.tun())
+        );
     }
 
     fn show(&self) {
-        let pk = if self.pk.is_empty() { "<hub_pubkey>" } else { &self.pk };
+        let pk = if self.pk.is_empty() {
+            "<hub_pubkey>"
+        } else {
+            &self.pk
+        };
         let (m, p) = (self.me(), self.peer());
-        let ep = if self.ep.is_empty() { String::new() } else { format!("endpoint {} ", ep_with_port(&self.ep, self.port)) };
-        println!("ip link add {0} type wireguard; ip link set {0} alias {A}", self.ul);
-        println!("wg set {} private-key {} listen-port {}", self.ul, kpath(), self.port);
-        println!("ip addr replace {m}/16 dev {0}; ip link set {0} mtu {1} up", self.ul, self.wmtu);
-        println!("wg set {} peer {pk} {ep}allowed-ips {p}/32 persistent-keepalive {}", self.ul, self.ka);
+        let ep = if self.ep.is_empty() {
+            String::new()
+        } else {
+            format!("endpoint {} ", ep_with_port(&self.ep, self.port))
+        };
+        println!(
+            "ip link add {0} type wireguard; ip link set {0} alias {A}",
+            self.ul
+        );
+        println!(
+            "wg set {} private-key {} listen-port {}",
+            self.ul,
+            kpath(),
+            self.port
+        );
+        println!(
+            "ip addr replace {m}/16 dev {0}; ip link set {0} mtu {1} up",
+            self.ul, self.wmtu
+        );
+        println!(
+            "wg set {} peer {pk} {ep}allowed-ips {p}/32 persistent-keepalive {}",
+            self.ul, self.ka
+        );
         let d = self.tun();
-        println!("ip link add {d} type geneve id {} remote {p} dstport {} ttl 64 df set", self.vni, self.dport);
+        println!(
+            "ip link add {d} type geneve id {} remote {p} dstport {} ttl 64 df set",
+            self.vni, self.dport
+        );
         let odev = if self.bridged() {
-            println!("ip link set {d} alias {A} mtu {} master {} up", self.mmtu, self.br);
+            println!(
+                "ip link set {d} alias {A} mtu {} master {} up",
+                self.mmtu, self.br
+            );
             println!("bridge link set dev {d} isolated on learning on flood on mcast_flood on bcast_flood on neigh_suppress off");
             self.br.clone()
         } else {
-            println!("ip link set {d} alias {A} mtu {} address {} up", self.mmtu, bridge_mac(self.sb));
+            println!(
+                "ip link set {d} alias {A} mtu {} address {} up",
+                self.mmtu,
+                bridge_mac(self.sb)
+            );
             d.clone()
         };
-        if !self.oaddr.is_empty() { println!("ip addr replace {} dev {odev}", self.oaddr); }
+        if !self.oaddr.is_empty() {
+            println!("ip addr replace {} dev {odev}", self.oaddr);
+        }
         if !self.dns.is_empty() {
             println!("nmcli connection modify <uplink> ipv4.dns {} ipv4.ignore-auto-dns yes; nmcli connection up <uplink>", self.dns);
         }
@@ -502,20 +775,29 @@ fn reexec(mode: &str) -> Result<i32> {
     let exe = std::env::current_exe()?;
     let (h, u) = (env("HOME").unwrap_or_default(), whoami());
     let mut x = X::new("sudo");
-    x.arg("env").arg("XDJ_ROOT=1").arg(format!("XDJ_HOME={h}")).arg(format!("XDJ_USER={u}"));
+    x.arg("env")
+        .arg("XDJ_ROOT=1")
+        .arg(format!("XDJ_HOME={h}"))
+        .arg(format!("XDJ_USER={u}"));
     x.arg(exe).arg(mode);
     Ok(x.status()?.code().unwrap_or(1))
 }
 
 fn whoami() -> String {
-    env("USER").or_else(|| env("LOGNAME"))
-        .unwrap_or_else(|| r("id", &["-un"], None, true).map(|s| s.trim().into()).unwrap_or_default())
+    env("USER").or_else(|| env("LOGNAME")).unwrap_or_else(|| {
+        r("id", &["-un"], None, true)
+            .map(|s| s.trim().into())
+            .unwrap_or_default()
+    })
 }
 
 fn main() {
     std::process::exit(match go() {
         Ok(n) => n,
-        Err(x) => { eprintln!("xdj: {x}"); 1 }
+        Err(x) => {
+            eprintln!("xdj: {x}");
+            1
+        }
     });
 }
 
@@ -523,8 +805,14 @@ fn go() -> Result<i32> {
     let a = std::env::args().nth(1).unwrap_or_default();
     // No verb: toggle on the underlay's presence.
     let mode = if a.is_empty() {
-        if have(&C::load().ul) { "down".into() } else { "up".into() }
-    } else { a };
+        if have(&C::load().ul) {
+            "down".into()
+        } else {
+            "up".into()
+        }
+    } else {
+        a
+    };
 
     if !matches!(mode.as_str(), "-h" | "--help" | "help") {
         if let Some(pid) = daemon_pid("/proc") {
@@ -533,29 +821,50 @@ fn go() -> Result<i32> {
     }
 
     match mode.as_str() {
-        "show" => { C::load().show(); Ok(0) }
-        "status" => { C::load().status(); Ok(0) }
+        "show" => {
+            C::load().show();
+            Ok(0)
+        }
+        "status" => {
+            C::load().status();
+            Ok(0)
+        }
         "key" => {
             // Print from a local key without root; else let root resolve it.
-            if std::fs::read_to_string(kpath()).map(|s| !s.trim().is_empty()).unwrap_or(false) || rooted() {
+            if std::fs::read_to_string(kpath())
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false)
+                || rooted()
+            {
                 println!("{}", pubkey_of(&C::load().identity()?.0)?);
                 Ok(0)
             } else {
                 reexec("key")
             }
         }
-        "clear" => { C::load().clear()?; Ok(0) }
+        "clear" => {
+            C::load().clear()?;
+            Ok(0)
+        }
         "up" | "down" => {
-            if !rooted() { return reexec(&mode); }
+            if !rooted() {
+                return reexec(&mode);
+            }
             let mut c = C::load();
-            if mode == "up" { c.up()? } else { c.down()? }
+            if mode == "up" {
+                c.up()?
+            } else {
+                c.down()?
+            }
             Ok(0)
         }
         "-h" | "--help" | "help" => {
             eprintln!("usage: xdj [up|down|key|clear|show|status]   (no arg = toggle; conf ~/.config/xdj/xdj.conf)");
             Ok(0)
         }
-        o => Err(e(format!("unknown move {o:?}; try up|down|key|clear|show|status"))),
+        o => Err(e(format!(
+            "unknown move {o:?}; try up|down|key|clear|show|status"
+        ))),
     }
 }
 
@@ -573,9 +882,16 @@ mod tests {
     fn conf_del_drops_only_that_key() {
         let p = std::env::temp_dir().join(format!("xdj-test-{}.conf", std::process::id()));
         std::env::set_var("XDJ_CONF", &p);
-        std::fs::write(&p, "self_box = 3\npeer_pubkey = abc=  # hub\n# note\npeer_endpoint = h:51820\n").unwrap();
+        std::fs::write(
+            &p,
+            "self_box = 3\npeer_pubkey = abc=  # hub\n# note\npeer_endpoint = h:51820\n",
+        )
+        .unwrap();
         assert!(conf_del("peer_pubkey").unwrap());
-        assert_eq!(std::fs::read_to_string(&p).unwrap(), "self_box = 3\n# note\npeer_endpoint = h:51820\n");
+        assert_eq!(
+            std::fs::read_to_string(&p).unwrap(),
+            "self_box = 3\n# note\npeer_endpoint = h:51820\n"
+        );
         assert!(!conf_del("peer_pubkey").unwrap());
         let _ = std::fs::remove_file(&p);
     }
@@ -583,7 +899,11 @@ mod tests {
     #[test]
     fn daemon_is_found_by_comm() {
         let d = std::env::temp_dir().join(format!("xdj-proc-{}", std::process::id()));
-        for (pid, comm) in [("41", "sshd"), ("self", "xdebbied"), ("77", "xdebbied-helper")] {
+        for (pid, comm) in [
+            ("41", "sshd"),
+            ("self", "xdebbied"),
+            ("77", "xdebbied-helper"),
+        ] {
             std::fs::create_dir_all(d.join(pid)).unwrap();
             std::fs::write(d.join(pid).join("comm"), format!("{comm}\n")).unwrap();
         }
