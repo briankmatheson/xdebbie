@@ -120,6 +120,51 @@ pub struct Virsh {
     pub nvme: abe::Nvme,
     /// One base volume per `(abe url, image)` is filled at a time.
     pub base_locks: Arc<KeyedLock<(String, String)>>,
+    /// `[network]`, for the storage NIC's address (`storage_cidr`).
+    pub network: Option<crate::dhcp::NetworkConfig>,
+}
+
+/// A VM's second NIC, on the host's storage bridge (`virbr-abe`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StorageNic {
+    pub bridge: String,
+    pub mac: String,
+    pub ip: std::net::Ipv4Addr,
+    pub prefix: u8,
+    /// The host's own address on the storage bridge (10.24.<box>.1).
+    pub via: std::net::Ipv4Addr,
+    /// The host's abe, routed over the storage NIC (`/32` via `via`). abe
+    /// keeps its own address (the underlay's, 10.22.<box>.1): the host
+    /// accepts it on any interface, so nothing about abe changes.
+    pub abe: Option<std::net::Ipv4Addr>,
+}
+
+/// The storage NIC `vm` gets on `host`: only when the host names a storage
+/// bridge, `[network] storage_cidr` is set and the VM has an overlay
+/// address to derive its storage address from.
+pub fn storage_nic(
+    net: Option<&crate::dhcp::NetworkConfig>,
+    host: &Host,
+    vm: &Vm,
+) -> Option<StorageNic> {
+    let net = net?;
+    let bridge = host.storage_bridge.clone()?;
+    let ip = net.storage_ip(vm.ip?)?;
+    // Box blocks are /24s (bootstrap/addr.rs): the host is the block's .1.
+    let via = std::net::Ipv4Addr::from((u32::from(ip) & 0xffff_ff00) | 1);
+    let abe = host
+        .abe
+        .as_deref()
+        .and_then(|u| reqwest::Url::parse(u).ok())
+        .and_then(|u| u.host_str().and_then(|h| h.parse().ok()));
+    Some(StorageNic {
+        bridge,
+        mac: vm.storage_mac(),
+        ip,
+        prefix: net.storage_cidr?.prefix,
+        via,
+        abe,
+    })
 }
 
 impl Virsh {
@@ -313,7 +358,12 @@ impl Virsh {
         )
         .await?;
         tokio::fs::write(&meta, meta_data(vm)).await?;
-        tokio::fs::write(&net, network_config(vm, self.overlay.mtu_for(&host.bridge))).await?;
+        let storage = storage_nic(self.network.as_ref(), host, vm);
+        tokio::fs::write(
+            &net,
+            network_config(vm, self.overlay.mtu_for(&host.bridge), storage.as_ref()),
+        )
+        .await?;
         tokio::fs::write(&vendor, vendor_data()).await?;
         let sub = |s: &str| {
             s.replace("{out}", p(&out))
@@ -559,12 +609,29 @@ systemctl enable --now fstrim.timer 2>/dev/null || true
 
 /// DHCP on whichever NIC carries our MAC. `mtu` is set when the NIC sits
 /// on a mesh-managed overlay bridge (section 2.5 of the mesh spec).
-pub fn network_config(vm: &Vm, mtu: Option<u16>) -> String {
+/// `storage`: the second NIC on the storage bridge, with its static
+/// address, no default gateway and no DNS, and one route: the host's abe
+/// (`/32`) via the host's storage address. So abe traffic takes the
+/// storage bridge and nothing else does.
+pub fn network_config(vm: &Vm, mtu: Option<u16>, storage: Option<&StorageNic>) -> String {
     let mtu_line = mtu.map(|m| format!("    mtu: {m}\n")).unwrap_or_default();
-    format!(
+    let mut s = format!(
         "version: 2\nethernets:\n  primary:\n    match:\n      macaddress: \"{}\"\n{mtu_line}    dhcp4: true\n    dhcp6: false\n",
         vm.mac()
-    )
+    );
+    if let Some(n) = storage {
+        s.push_str(&format!(
+            "  storage:\n    match:\n      macaddress: \"{}\"\n    dhcp4: false\n    dhcp6: false\n    addresses: [\"{}/{}\"]\n",
+            n.mac, n.ip, n.prefix
+        ));
+        if let Some(abe) = n.abe {
+            s.push_str(&format!(
+                "    routes:\n      - to: \"{abe}/32\"\n        via: \"{}\"\n",
+                n.via
+            ));
+        }
+    }
+    s
 }
 
 /// `overlay_mtu`: when set, `<mtu size=.../>` goes on the interface so
@@ -594,6 +661,7 @@ pub fn domain_xml(
     vm: &Vm,
     volume_group: Option<&str>,
     overlay_mtu: Option<u16>,
+    storage: Option<&StorageNic>,
 ) -> String {
     let esc = |s: &str| {
         s.replace('&', "&amp;")
@@ -704,7 +772,7 @@ pub fn domain_xml(
       <source bridge='{bridge}'/>
       <model type='virtio'/>{mtu_xml}
     </interface>
-    <channel type='unix'><target type='virtio' name='org.qemu.guest_agent.0'/></channel>
+{storage_xml}    <channel type='unix'><target type='virtio' name='org.qemu.guest_agent.0'/></channel>
     <serial type='pty'><target port='0'/></serial>
     <console type='pty'><target type='serial' port='0'/></console>
     <graphics type='vnc' port='-1' autoport='yes' listen='127.0.0.1'/>
@@ -728,6 +796,13 @@ pub fn domain_xml(
         bridge = esc(&host.bridge),
         mtu_xml = overlay_mtu
             .map(|m| format!("\n      <mtu size='{m}'/>"))
+            .unwrap_or_default(),
+        storage_xml = storage
+            .map(|n| format!(
+                "    <interface type='bridge'>\n      <mac address='{}'/>\n      <source bridge='{}'/>\n      <model type='virtio'/>\n    </interface>\n",
+                n.mac,
+                esc(&n.bridge)
+            ))
             .unwrap_or_default()
     )
 }
@@ -1048,7 +1123,8 @@ impl Hypervisor for Virsh {
             let f = tempfile::Builder::new().suffix(".xml").tempfile()?;
             let vg = self.lvm.as_ref().map(|l| l.vg_name());
             let mtu = self.overlay.mtu_for(&host.bridge);
-            tokio::fs::write(f.path(), domain_xml(host, vm, vg, mtu)).await?;
+            let storage = storage_nic(self.network.as_ref(), host, vm);
+            tokio::fs::write(f.path(), domain_xml(host, vm, vg, mtu, storage.as_ref())).await?;
             self.run(&host.uri, &["define", p(f.path())]).await?;
             self.run(&host.uri, &["autostart", &vm.domain_name()])
                 .await?;
@@ -1368,7 +1444,7 @@ mod tests {
             mk(DiskRole::Root, "0123456789abcdef0123456789abcdef"),
             mk(DiskRole::Data, "fedcba9876543210fedcba9876543210"),
         ];
-        let xml = domain_xml(&host, &vm, Some("vg-that-must-be-ignored"), None);
+        let xml = domain_xml(&host, &vm, Some("vg-that-must-be-ignored"), None, None);
         assert_eq!(
             xml.matches("model='pcie-root-port'").count(),
             HOTPLUG_ROOT_PORTS
@@ -1382,5 +1458,67 @@ mod tests {
         assert!(xml.contains("<target dev='vda'"));
         assert!(xml.contains("<target dev='vdb'"));
         assert!(!xml.contains("vg-that-must-be-ignored"));
+    }
+
+    /// A host with `storage_bridge` and `[network] storage_cidr` gives its
+    /// VMs a second NIC there with a static address and no route; without
+    /// either, nothing changes.
+    #[test]
+    fn storage_bridge_adds_a_second_nic() {
+        let mut host: Host = serde_json::from_value(
+            serde_json::json!({"name": "a", "uri": "test:///", "abe": "https://10.22.0.1:2"}),
+        )
+        .unwrap();
+        let mut vm: Vm = serde_json::from_value(serde_json::json!({
+            "id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+            "spec": {"name": "x", "vcpus": 1, "memoryMib": 512, "diskGib": 8, "image": "img"},
+            "phase": "Pending", "power": "On",
+            "created": "2026-01-01T00:00:00Z", "updated": "2026-01-01T00:00:00Z"
+        }))
+        .unwrap();
+        vm.ip = Some("10.23.0.21".parse().unwrap());
+        let mut net: crate::dhcp::NetworkConfig =
+            toml::from_str("cidr = \"10.23.0.0/16\"").unwrap();
+
+        assert_eq!(storage_nic(Some(&net), &host, &vm), None, "no storage_cidr");
+        net.storage_cidr = Some("10.24.0.0/16".parse().unwrap());
+        assert_eq!(
+            storage_nic(Some(&net), &host, &vm),
+            None,
+            "host has no storage bridge"
+        );
+        host.storage_bridge = Some("virbr-abe".into());
+        let nic = storage_nic(Some(&net), &host, &vm).unwrap();
+        assert_eq!(nic.ip, "10.24.0.21".parse::<std::net::Ipv4Addr>().unwrap());
+        assert_eq!(nic.mac, "52:54:24:6b:a7:b8");
+        assert_ne!(nic.mac, vm.mac());
+
+        let xml = domain_xml(&host, &vm, None, None, Some(&nic));
+        assert_eq!(xml.matches("<interface type='bridge'>").count(), 2);
+        assert!(xml.contains("<source bridge='virbr-abe'/>"));
+        assert!(xml.contains("<mac address='52:54:24:6b:a7:b8'/>"));
+        assert_eq!(
+            domain_xml(&host, &vm, None, None, None)
+                .matches("<interface type='bridge'>")
+                .count(),
+            1
+        );
+
+        let nc = network_config(&vm, None, Some(&nic));
+        let st = &nc[nc.find("  storage:").expect(&nc)..];
+        assert!(st.contains("macaddress: \"52:54:24:6b:a7:b8\""), "{nc}");
+        assert!(st.contains("addresses: [\"10.24.0.21/16\"]"), "{nc}");
+        assert!(st.contains("dhcp4: false"), "{nc}");
+        // one route only: abe's own address via the host's storage address
+        assert!(
+            st.contains("routes:\n      - to: \"10.22.0.1/32\"\n        via: \"10.24.0.1\"\n"),
+            "{nc}"
+        );
+        assert_eq!(st.matches("- to:").count(), 1, "{nc}");
+        assert!(
+            !st.contains("default") && !st.contains("gateway") && !st.contains("nameservers"),
+            "{nc}"
+        );
+        assert!(!network_config(&vm, None, None).contains("storage"));
     }
 }

@@ -312,6 +312,42 @@ sudo ufw allow in on wg-flock proto tcp from 10.22.0.0/16 to any port 443 commen
 Guests on the bridge arrive on `virbr-xdebbie`, not `wg-flock`, so they
 cannot reach ABE even though 10.22.0.1 is routable from them.
 
+### Storage bridge
+
+Optional: a second, isolated bridge (`virbr-abe`) on which VMs reach the
+host's abe directly, without the overlay. Turned on by two settings:
+
+```toml
+[network]
+cidr = "10.23.0.0/16"
+storage_cidr = "10.24.0.0/16"     # same prefix length as cidr
+
+[[hosts]]
+name = "timesink"
+storage_bridge = "virbr-abe"      # libvirt network "abe"
+```
+
+- Bootstrap (every service start) creates libvirt network `abe` if it is
+  missing: bridge `virbr-abe`, this box at its block's first address
+  (`10.24.<box>.1`), no `<forward>` (isolated: libvirt rejects anything
+  routed in or out), no DHCP.
+- A VM defined on that host gets a second virtio NIC on the bridge, MAC
+  `52:54:24:` + the same id bytes as its first NIC, and in its
+  network-config a static `10.24.X.Y/16`: the host bits of its overlay
+  address. No gateway and no DNS on it, so only storage traffic uses it.
+  VMs defined before the setting keep one NIC until they are re-created.
+- The firewall accepts abe's API port (from the hosts' `abe` URLs) and
+  `23000:23999` on `virbr-abe` from the storage network, nothing else, and
+  the `xdebbie_host` forward chain drops anything in or out of it.
+
+abe itself does not change: it keeps listening on the underlay address
+(`10.22.<box>.1`). The storage NIC's network-config carries one route, the
+host's abe address (`/32`, from the host's `abe` URL) via the host's storage
+address (`10.24.<box>.1`); the host accepts packets for any of its own
+addresses on any interface, so guests reach the very same abe over
+`virbr-abe`, and abe's port fence and TLS work as before. Only that host's
+abe is routed this way: another box's abe is not on this bridge.
+
 ## Configuration reference
 
 ```toml

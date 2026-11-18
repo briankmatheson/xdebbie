@@ -433,6 +433,7 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
             "",
             "",
             &want_mac,
+            true,
         )?;
         Some(opts.network_subnet.clone())
     } else {
@@ -657,6 +658,13 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
             generated
         };
         config_gen::write_config(&opts.config_path, &content)?;
+    }
+
+    // Step 6b: the storage bridge (`[network] storage_cidr` and a host
+    // with `storage_bridge`): an isolated libvirt network VMs get a second
+    // NIC on, to reach abe without the overlay. Created once, then left.
+    if let Ok(cfg) = crate::config::Config::load(&opts.config_path) {
+        ensure_storage_networks(&cfg, &opts.libvirt_uri, box_id);
     }
 
     // Step 7: libvirt TLS from the cluster CA and this box's certificate.
@@ -962,5 +970,43 @@ mod tests {
         let r = reach_host("192.0.2.7", "239.0.0.42:23442");
         assert!(r.by_name);
         assert_eq!(r.host, "192.0.2.7");
+    }
+}
+
+/// The storage network on this box: libvirt network `<name>` (bridge
+/// `virbr-<name>`, so `storage_bridge = "virbr-abe"` is network `abe`) on
+/// `[network] storage_cidr`, at this box's block (10.24.<box>.1), isolated.
+/// Failures are logged: the daemon still starts, and VMs on a host whose
+/// storage bridge is missing fail to define until it exists.
+fn ensure_storage_networks(cfg: &crate::config::Config, uri: &str, box_id: u8) {
+    let Some(subnet) = cfg.network.as_ref().and_then(|n| n.storage_cidr) else {
+        return;
+    };
+    let mut done: Vec<String> = vec![];
+    for b in cfg.hosts.iter().filter_map(|h| h.storage_bridge.clone()) {
+        if done.contains(&b) {
+            continue;
+        }
+        done.push(b.clone());
+        let Some(name) = b.strip_prefix("virbr-") else {
+            warn!(
+                "storage_bridge {b:?}: not virbr-<name>, so not one bootstrap makes; create it by hand"
+            );
+            continue;
+        };
+        let mac = format!("52:54:00:24:{box_id:02x}:fe");
+        match libvirt_setup::ensure_network(
+            uri,
+            name,
+            &subnet.to_string(),
+            box_id,
+            "",
+            "",
+            &mac,
+            false,
+        ) {
+            Ok(br) => info!("storage network '{name}' ready (bridge {br}, {subnet})"),
+            Err(e) => warn!("storage network '{name}' on {subnet}: {e:#}"),
+        }
     }
 }

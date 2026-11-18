@@ -299,6 +299,7 @@ mod tests {
             labels: Default::default(),
             storage_pool: "default".into(),
             bridge: "br0".into(),
+            storage_bridge: None,
             cpu_overcommit: 1.0,
             abe: None,
             agent: None,
