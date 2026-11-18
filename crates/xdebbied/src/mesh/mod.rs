@@ -86,6 +86,8 @@ struct PeerTrack {
     reason: Option<String>,
     route_dev: Option<String>,
     failures: u64,
+    /// The WireGuard endpoint last seen for it, to log when it moves.
+    endpoint: Option<String>,
 }
 
 impl PeerTrack {
@@ -97,6 +99,7 @@ impl PeerTrack {
             reason: None,
             route_dev: None,
             failures: 0,
+            endpoint: None,
         }
     }
     fn transition(&mut self, changed: Option<PeerState>) {
@@ -396,16 +399,31 @@ impl MeshManager {
             t.transition(c);
             c
         };
-        if let Some(state) = changed {
-            info!(
-                peer = ev.box_id,
-                state = state.as_str(),
-                "mesh peer state changed"
-            );
-        }
         // Refresh the peer rows and Ready/Degraded without touching the kernel.
         let mut st = self.status.write().await;
         self.refresh_peer_rows(&mut st, None);
+        if let Some(state) = changed {
+            // Where it is and how it is doing, from the WireGuard view.
+            let wg = st
+                .wireguard
+                .as_ref()
+                .and_then(|w| w.peers.iter().find(|p| p.box_id == ev.box_id));
+            let endpoint = wg.and_then(|p| p.endpoint.clone()).unwrap_or_default();
+            let handshake_age_s = wg.and_then(|p| p.handshake_age_s);
+            let msg = match state {
+                PeerState::Up => "mesh peer came up",
+                PeerState::Down => "mesh peer went away",
+                _ => "mesh peer state changed",
+            };
+            info!(
+                peer = ev.box_id,
+                state = state.as_str(),
+                endpoint = %endpoint,
+                rtt_ms = ev.rtt_ms.map(|r| (r * 10.0).round() / 10.0),
+                handshake_age_s,
+                "{msg}"
+            );
+        }
     }
 
     // ---------- reconcile ----------
@@ -630,7 +648,7 @@ impl MeshManager {
         };
         let now = self.ops.now_unix();
         let iface = observed.wg.clone().unwrap_or_default();
-        let peers = spec
+        let peers: Vec<WgPeerStatus> = spec
             .peers
             .iter()
             .filter_map(|p| {
@@ -650,6 +668,26 @@ impl MeshManager {
                 })
             })
             .collect();
+        // A peer that roamed (new network, new NAT mapping): say so once.
+        {
+            let mut tracks = self.tracks.lock().unwrap();
+            for p in &peers {
+                let Some(t) = tracks.get_mut(&p.box_id) else {
+                    continue;
+                };
+                if p.endpoint.is_some() && p.endpoint != t.endpoint {
+                    if let Some(old) = t.endpoint.as_deref() {
+                        info!(
+                            peer = p.box_id,
+                            from = old,
+                            to = p.endpoint.as_deref().unwrap_or(""),
+                            "mesh peer moved"
+                        );
+                    }
+                    t.endpoint = p.endpoint.clone();
+                }
+            }
+        }
         st.wireguard = Some(WireguardStatus {
             device: dev.to_owned(),
             pubkey,

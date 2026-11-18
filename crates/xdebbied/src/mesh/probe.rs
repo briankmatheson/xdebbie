@@ -109,6 +109,21 @@ impl IcmpClient {
     }
 }
 
+/// How long to wait for one echo: about 15 round trips of the peer's
+/// smoothed latency, never under `ADAPT_FLOOR` (scheduling jitter) and never
+/// over the configured timeout. Before any reply, the configured timeout.
+pub const ADAPT_RTTS: f64 = 15.0;
+pub const ADAPT_FLOOR: Duration = Duration::from_millis(250);
+
+pub fn adaptive_timeout(srtt_ms: Option<f64>, cap: Duration) -> Duration {
+    match srtt_ms {
+        Some(ms) => Duration::from_secs_f64(ms * ADAPT_RTTS / 1000.0)
+            .max(ADAPT_FLOOR)
+            .min(cap),
+        None => cap,
+    }
+}
+
 /// Run one peer's prober until the returned handle is aborted. Identifier
 /// = 0x2300 | box, so replies are matched per peer; sequence wraps at u16.
 pub fn spawn_prober(
@@ -123,19 +138,25 @@ pub fn spawn_prober(
             .0
             .pinger(IpAddr::V4(target), PingIdentifier(0x2300 | box_id as u16))
             .await;
-        pinger.timeout(params.timeout);
+        let mut srtt: Option<f64> = None;
         let mut tick = tokio::time::interval(params.interval);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let payload = [0u8; 32];
         let mut seq: u16 = 0;
         loop {
             tick.tick().await;
+            pinger.timeout(adaptive_timeout(srtt, params.timeout));
             let ev = match pinger.ping(PingSequence(seq), &payload).await {
-                Ok((_pkt, rtt)) => ProbeEvent {
-                    box_id,
-                    ok: true,
-                    rtt_ms: Some(rtt.as_secs_f64() * 1000.0),
-                },
+                Ok((_pkt, rtt)) => {
+                    let ms = rtt.as_secs_f64() * 1000.0;
+                    // RFC 6298's 1/8 gain: steady, but follows a peer that roams.
+                    srtt = Some(srtt.map_or(ms, |s| s + (ms - s) / 8.0));
+                    ProbeEvent {
+                        box_id,
+                        ok: true,
+                        rtt_ms: Some(ms),
+                    }
+                }
                 Err(_) => ProbeEvent {
                     box_id,
                     ok: false,
@@ -153,6 +174,18 @@ pub fn spawn_prober(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timeout_follows_the_latency() {
+        let cap = Duration::from_millis(2000);
+        assert_eq!(adaptive_timeout(None, cap), cap);
+        assert_eq!(adaptive_timeout(Some(0.4), cap), ADAPT_FLOOR);
+        assert_eq!(
+            adaptive_timeout(Some(40.0), cap),
+            Duration::from_millis(600)
+        );
+        assert_eq!(adaptive_timeout(Some(500.0), cap), cap);
+    }
 
     fn feed(h: &mut Hysteresis, results: &[bool]) -> Vec<PeerState> {
         results.iter().filter_map(|r| h.observe(*r)).collect()
