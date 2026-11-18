@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `GET /v1/qos`: every host's abe IOPS arbiter report (abe 0.7.0
+  `GET /qos`) merged into `{"volumes": {"<id>": {"ceiling_iops", ...}},
+  "hosts": {...}}`, cached 2 s. abe-csi applies the ceilings; it cannot ask
+  abe itself (abe wants a cluster certificate). An abe that is down, older
+  or has its arbiter off adds nothing, so its volumes stay unlimited.
+
 ## [0.18.2] - 2026-11-18
 
 ### Added
