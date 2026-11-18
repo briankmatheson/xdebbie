@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `xdj` moved to its own repository,
+  [briankmatheson/xdj](https://github.com/briankmatheson/xdj) (history
+  kept; it continues at 0.19.0). xdebbie releases no longer carry the xdj
+  binaries; the workspace is xdebbie-core, xdebbied, xdctl and capx.
+
 ## [0.18.1] - 2026-11-17
 
 ### Added

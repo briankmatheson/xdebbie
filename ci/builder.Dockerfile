@@ -5,7 +5,7 @@
 # Also carries apt-publish (ci/apt-publish), which other repos' pipelines
 # (abe) use to publish to the same apt repository.
 FROM rust:1-bookworm
-# cmake: aws-lc-sys (rustls's crypto). musl-tools: the static xdj.
+# cmake: aws-lc-sys (rustls's crypto). musl-tools: the static xdj (github.com/briankmatheson/xdj, which builds here too).
 # apt-utils, gnupg, rclone: apt-publish.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends cmake musl-tools apt-utils gnupg rclone \

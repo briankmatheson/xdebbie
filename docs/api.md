@@ -43,7 +43,7 @@ PUT /v1/settings   {"discovery": true}   -> the whole object, as now applied
 
 | key | effect | default |
 |---|---|---|
-| `mesh_routed` | routed mesh peers (xdj) may open connections to this box's VMs: one tagged nft accept in `xdebbie_host` and one ufw route rule, added or removed alone | off |
+| `mesh_routed` | routed mesh peers ([xdj](https://github.com/briankmatheson/xdj)) may open connections to this box's VMs: one tagged nft accept in `xdebbie_host` and one ufw route rule, added or removed alone | off |
 | `discovery` | LAN discovery and election; off pauses the engine (this box leads alone) and closes the discovery port in ufw | off |
 
 A `PUT` that cannot be applied answers `409` with the reason (for
