@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   abe itself (abe wants a cluster certificate). An abe that is down, older
   or has its arbiter off adds nothing, so its volumes stay unlimited.
 
+### Fixed
+- A mesh peer's first probe waits a second, so one that is still
+  handshaking when xdebbied starts is not reported Down; and a peer that
+  has not answered since it was configured logs "mesh peer not answering",
+  not "went away".
+
 ## [0.18.2] - 2026-11-18
 
 ### Added

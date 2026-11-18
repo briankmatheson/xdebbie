@@ -395,14 +395,15 @@ impl MeshManager {
             } else {
                 t.failures += 1;
             }
+            let before = t.hyst.state;
             let c = t.hyst.observe(ev.ok);
             t.transition(c);
-            c
+            c.map(|s| (before, s))
         };
         // Refresh the peer rows and Ready/Degraded without touching the kernel.
         let mut st = self.status.write().await;
         self.refresh_peer_rows(&mut st, None);
-        if let Some(state) = changed {
+        if let Some((before, state)) = changed {
             // Where it is and how it is doing, from the WireGuard view.
             let wg = st
                 .wireguard
@@ -410,9 +411,11 @@ impl MeshManager {
                 .and_then(|w| w.peers.iter().find(|p| p.box_id == ev.box_id));
             let endpoint = wg.and_then(|p| p.endpoint.clone()).unwrap_or_default();
             let handshake_age_s = wg.and_then(|p| p.handshake_age_s);
-            let msg = match state {
-                PeerState::Up => "mesh peer came up",
-                PeerState::Down => "mesh peer went away",
+            let msg = match (before, state) {
+                (_, PeerState::Up) => "mesh peer came up",
+                // never answered since it was configured: it did not "go"
+                (PeerState::Pending, PeerState::Down) => "mesh peer not answering",
+                (_, PeerState::Down) => "mesh peer went away",
                 _ => "mesh peer state changed",
             };
             info!(
