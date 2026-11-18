@@ -322,7 +322,13 @@ impl Os {
     pub fn win_conf(l: &Link, private_key: &str) -> String {
         let mut s = format!(
             "{MARK}: written by `xdj up`, removed by `xdj down`\n[Interface]\nPrivateKey = {}\nListenPort = {}\nAddress = {}/16\nMTU = {}\nTable = off\n\n[Peer]\nPublicKey = {}\nAllowedIPs = {}\nPersistentKeepalive = {}\n",
-            private_key.trim(), l.port, l.me, l.mtu, l.hub_pubkey, l.allowed_ips().join(", "), l.keepalive
+            private_key.trim(),
+            l.port,
+            l.me,
+            l.mtu,
+            l.hub_pubkey,
+            l.allowed_ips().join(", "),
+            l.keepalive
         );
         if !l.endpoint.is_empty() {
             s.push_str(&format!("Endpoint = {}\n", l.endpoint));
@@ -384,9 +390,19 @@ impl Os {
 
     pub fn win_down(l: &Link) -> Vec<Cmd> {
         vec![
-            soft("powershell", &["-NoProfile", "-NonInteractive", "-Command",
-                "Get-DnsClientNrptRule | Where-Object Comment -eq 'xdj' | Remove-DnsClientNrptRule -Force"]),
-            soft(&format!(r"{PROGRAM_FILES_WG}\wireguard.exe"), &["/uninstalltunnelservice", &l.name]),
+            soft(
+                "powershell",
+                &[
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "Get-DnsClientNrptRule | Where-Object Comment -eq 'xdj' | Remove-DnsClientNrptRule -Force",
+                ],
+            ),
+            soft(
+                &format!(r"{PROGRAM_FILES_WG}\wireguard.exe"),
+                &["/uninstalltunnelservice", &l.name],
+            ),
         ]
     }
 
@@ -527,12 +543,16 @@ mod tests {
     fn no_endpoint_no_endpoint_arg() {
         let mut l = link();
         l.endpoint.clear();
-        assert!(!lines(&Os::linux_up(&l))
-            .iter()
-            .any(|c| c.contains("endpoint")));
-        assert!(!lines(&Os::mac_up(&l, "utun4"))
-            .iter()
-            .any(|c| c.contains("endpoint")));
+        assert!(
+            !lines(&Os::linux_up(&l))
+                .iter()
+                .any(|c| c.contains("endpoint"))
+        );
+        assert!(
+            !lines(&Os::mac_up(&l, "utun4"))
+                .iter()
+                .any(|c| c.contains("endpoint"))
+        );
         assert!(!Os::win_conf(&l, "k").contains("Endpoint"));
     }
 
@@ -600,9 +620,11 @@ mod tests {
             "{v:#?}"
         );
         assert!(v[1].ends_with("< <private key>"));
-        assert!(!lines(&Os::freebsd_up(&link(), ""))
-            .iter()
-            .any(|c| c.contains(" name ")));
+        assert!(
+            !lines(&Os::freebsd_up(&link(), ""))
+                .iter()
+                .any(|c| c.contains(" name "))
+        );
         let (p, body, reload) = Os::freebsd_dns(&link());
         assert_eq!(p, "/var/unbound/conf.d/xdj.conf");
         assert!(
@@ -626,10 +648,12 @@ mod tests {
                 .expect("nothing is installed");
             assert!(m.contains("does not install"), "{m}");
         }
-        assert!(Os::Mac
-            .missing_wireguard(|p| p == "wg", none)
-            .unwrap()
-            .contains("wireguard-go"));
+        assert!(
+            Os::Mac
+                .missing_wireguard(|p| p == "wg", none)
+                .unwrap()
+                .contains("wireguard-go")
+        );
         assert!(Os::Linux.missing_wireguard(|_| true, none).is_none());
         assert!(Os::Win.missing_wireguard(none, |_| true).is_none());
     }

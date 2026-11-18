@@ -7,7 +7,7 @@ strip = true   # drop symbols from shipped binaries (workspace-wide)
 
 [workspace.package]
 version = "0.18.1"
-edition = "2021"
+edition = "2024"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/briankmatheson/xdebbie"
 authors = ["Brian Matheson <bmath@brianmatheson.com>"]

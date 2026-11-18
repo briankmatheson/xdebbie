@@ -108,10 +108,9 @@ fn from_w(out: &str) -> Option<String> {
             .skip(1)
             .take(2)
             .find_map(|t| t.parse::<Ipv4Addr>().ok())
+            && !(ip.is_loopback() || ip.is_unspecified() || ip.is_link_local())
         {
-            if !(ip.is_loopback() || ip.is_unspecified() || ip.is_link_local()) {
-                *seen.entry(ip).or_default() += 1;
-            }
+            *seen.entry(ip).or_default() += 1;
         }
     }
     seen.into_iter()
@@ -170,10 +169,10 @@ fn ask(q: &str) -> String {
 
 /// Give `path` back to the invoking user when we are root.
 fn mine(path: &str) {
-    if rooted() {
-        if let Some(u) = env("XDJ_USER") {
-            let _ = r("chown", &[&format!("{u}:"), path], None, true);
-        }
+    if rooted()
+        && let Some(u) = env("XDJ_USER")
+    {
+        let _ = r("chown", &[&format!("{u}:"), path], None, true);
     }
 }
 
@@ -399,10 +398,10 @@ impl C {
     /// callers short of a local key must be root (the re-exec sees to it).
     fn identity(&self) -> Result<(String, &'static str)> {
         let kp = kpath();
-        if let Ok(s) = std::fs::read_to_string(&kp) {
-            if !s.trim().is_empty() {
-                return Ok((s.trim().into(), "local"));
-            }
+        if let Ok(s) = std::fs::read_to_string(&kp)
+            && !s.trim().is_empty()
+        {
+            return Ok((s.trim().into(), "local"));
         }
         // Adopt this box's xdebbie underlay key if we can see it.
         let cands = [
@@ -576,7 +575,11 @@ impl C {
             return;
         }
         if l.domain.is_empty() {
-            eprintln!("xdj: set dns_domain = <the mesh zone> in {} to resolve it through {}; DNS left alone", cpath(), l.dns);
+            eprintln!(
+                "xdj: set dns_domain = <the mesh zone> in {} to resolve it through {}; DNS left alone",
+                cpath(),
+                l.dns
+            );
             return;
         }
         let done = match os::Os::here() {
@@ -615,7 +618,10 @@ impl C {
             Ok(()) => {
                 eprintln!("xdj: dns — {} via {}", l.domain, l.dns);
                 if !dns_answers(&l.dns) {
-                    eprintln!("xdj: {} does not answer yet (is the hub routing for us: mesh_routed, and this box registered?)", l.dns);
+                    eprintln!(
+                        "xdj: {} does not answer yet (is the hub routing for us: mesh_routed, and this box registered?)",
+                        l.dns
+                    );
                 }
             }
             Err(x) => eprintln!("xdj: {x}"),
@@ -852,10 +858,13 @@ fn go() -> Result<i32> {
         a
     };
 
-    if !matches!(mode.as_str(), "-h" | "--help" | "help") && os::Os::here() == os::Os::Linux {
-        if let Some(pid) = daemon_pid("/proc") {
-            return Err(e(format!("xdebbied is running here (pid {pid}) and owns the mesh on this box — use xdctl mesh, or stop the daemon first")));
-        }
+    if !matches!(mode.as_str(), "-h" | "--help" | "help")
+        && os::Os::here() == os::Os::Linux
+        && let Some(pid) = daemon_pid("/proc")
+    {
+        return Err(e(format!(
+            "xdebbied is running here (pid {pid}) and owns the mesh on this box — use xdctl mesh, or stop the daemon first"
+        )));
     }
 
     match mode.as_str() {
@@ -902,7 +911,9 @@ fn go() -> Result<i32> {
             Ok(0)
         }
         "-h" | "--help" | "help" => {
-            eprintln!("usage: xdj [up|down|key|clear|show|status]   (no arg = toggle; conf ~/.config/xdj/xdj.conf)");
+            eprintln!(
+                "usage: xdj [up|down|key|clear|show|status]   (no arg = toggle; conf ~/.config/xdj/xdj.conf)"
+            );
             Ok(0)
         }
         o => Err(e(format!(
@@ -918,7 +929,9 @@ mod tests {
     #[test]
     fn conf_del_drops_only_that_key() {
         let p = std::env::temp_dir().join(format!("xdj-test-{}.conf", std::process::id()));
-        std::env::set_var("XDJ_CONF", &p);
+        // SAFETY: the only test that touches the environment, and nothing
+        // else in this binary's tests reads XDJ_CONF.
+        unsafe { std::env::set_var("XDJ_CONF", &p) };
         std::fs::write(
             &p,
             "self_box = 3\npeer_pubkey = abc=  # hub\n# note\npeer_endpoint = h:51820\n",

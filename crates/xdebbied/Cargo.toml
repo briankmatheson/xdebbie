@@ -4,7 +4,7 @@ version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-edition = "2024"
+edition.workspace = true
 description = "Self-bootstrapping VM orchestrator for libvirt with cluster support"
 
 [package.metadata.deb]
