@@ -15,7 +15,8 @@
 # of the same pipeline take turns.
 #
 # w10's workers are small (2 vCPU / 4 GiB): two rustc jobs per build and a
-# memory limit each; the runner gives build pods real requests
+# memory limit each (1536MiB: two 2.5 GiB steps OOMed a 4 GiB worker
+# twice on 2026-11-18); the runner gives build pods real requests
 # (DRONE_RESOURCE_REQUEST_*), so the scheduler places them where there is
 # room instead of stacking them on one node.
 kind: pipeline
@@ -59,7 +60,7 @@ steps:
         path: /cache
     resources:
       limits:
-        memory: 2560MiB
+        memory: 1536MiB
     commands:
       - cargo fmt --check
       - cargo clippy -p xdebbie-core -p xdebbied --all-targets -- -D warnings
@@ -76,7 +77,7 @@ steps:
         path: /secrets/apt-signing
     resources:
       limits:
-        memory: 2560MiB
+        memory: 1536MiB
     commands:
       - cargo deb -p xdebbied
       - apt-publish "$CARGO_TARGET_DIR"/debian/xdebbied_*.deb
@@ -120,7 +121,7 @@ steps:
         path: /cache
     resources:
       limits:
-        memory: 2560MiB
+        memory: 1536MiB
     commands:
       - cargo clippy -p capx --all-targets -- -D warnings
       - cargo test -p capx
@@ -162,7 +163,7 @@ steps:
         path: /cache
     resources:
       limits:
-        memory: 2048MiB
+        memory: 1536MiB
     commands:
       - cargo clippy -p xdctl --all-targets -- -D warnings
       - cargo test -p xdctl
