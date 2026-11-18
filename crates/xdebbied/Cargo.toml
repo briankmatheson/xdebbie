@@ -9,7 +9,7 @@ description = "Self-bootstrapping VM orchestrator for libvirt with cluster suppo
 
 [package.metadata.deb]
 # Debian revision: bump when the same crate version is rebuilt and installed.
-revision = "2"
+revision = "1"
 maintainer = "xdebbie Team"
 copyright = "2026, xdebbie Team"
 license-file = ["../../LICENSE", "0"]

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.4] - 2026-11-18
+
 ### Changed
 - Hot-plugged volumes go on a virtio-scsi controller (`sdb`, `sdc`, ...
   `sdiv`): up to 255 per VM instead of one PCIe root port each (about ten).
