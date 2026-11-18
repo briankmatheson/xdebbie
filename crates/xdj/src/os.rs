@@ -89,7 +89,8 @@ pub struct Link {
     pub port: u16,
     pub mtu: u16,
     pub keepalive: u16,
-    /// Networks routed into the tunnel besides the underlay (`routes`).
+    /// Networks routed into the tunnel besides the underlay (`routes`),
+    /// each with the hub (`hub`) as its next hop.
     pub routes: Vec<String>,
     /// The mesh resolver, or empty.
     pub dns: String,
@@ -213,7 +214,7 @@ impl Os {
         // `add`, not `replace`: a box whose own bridge already carries one of
         // these networks keeps it, and the failure says so.
         for r in &l.routes {
-            v.push(cmd("ip", &["route", "add", r, "dev", n]));
+            v.push(cmd("ip", &["route", "add", r, "via", &l.hub, "dev", n]));
         }
         v
     }
@@ -292,10 +293,7 @@ impl Os {
             ),
         ];
         for r in &l.routes {
-            v.push(cmd(
-                "route",
-                &["-q", "-n", "add", "-inet", r, "-interface", utun],
-            ));
+            v.push(cmd("route", &["-q", "-n", "add", "-inet", r, &l.hub]));
         }
         v
     }
@@ -364,6 +362,7 @@ impl Os {
                     "route",
                     r,
                     &l.name,
+                    &format!("nexthop={}", l.hub),
                     "store=active",
                 ],
             ));
@@ -441,10 +440,7 @@ impl Os {
         peer.extend(["allowed-ips", &aips, "persistent-keepalive", &ka]);
         v.push(cmd("wg", &peer));
         for r in &l.routes {
-            v.push(cmd(
-                "route",
-                &["-q", "-n", "add", "-net", r, "-interface", n],
-            ));
+            v.push(cmd("route", &["-q", "-n", "add", "-net", r, &l.hub]));
         }
         v
     }
@@ -529,7 +525,10 @@ mod tests {
             "{v:#?}"
         );
         assert!(v.contains(&"wg set wg-flock peer HUBKEY= endpoint 203.0.113.9:51820 allowed-ips 10.22.0.1/32,10.23.0.0/16 persistent-keepalive 25".into()), "{v:#?}");
-        assert_eq!(v.last().unwrap(), "ip route add 10.23.0.0/16 dev wg-flock");
+        assert_eq!(
+            v.last().unwrap(),
+            "ip route add 10.23.0.0/16 via 10.22.0.1 dev wg-flock"
+        );
         assert_eq!(
             lines(&Os::linux_dns(&link())),
             [
@@ -570,7 +569,7 @@ mod tests {
             "{v:#?}"
         );
         assert!(v.contains(&"route -q -n add -inet 10.22.0.0/16 -interface utun4".into()));
-        assert!(v.contains(&"route -q -n add -inet 10.23.0.0/16 -interface utun4".into()));
+        assert!(v.contains(&"route -q -n add -inet 10.23.0.0/16 10.22.0.1".into()));
         let (p, body) = Os::mac_dns(&link());
         assert_eq!(p, "/etc/resolver/mesh.example");
         assert!(body.starts_with(MARK) && body.ends_with("nameserver 10.23.0.11\n"));
@@ -601,7 +600,7 @@ mod tests {
         );
         assert_eq!(
             v[2],
-            "netsh interface ipv4 add route 10.23.0.0/16 wg-flock store=active"
+            "netsh interface ipv4 add route 10.23.0.0/16 wg-flock nexthop=10.22.0.1 store=active"
         );
         assert!(Os::win_dns(&link()).to_string().contains("Add-DnsClientNrptRule -Namespace '.mesh.example' -NameServers '10.23.0.11' -Comment 'xdj'"));
         assert_eq!(Os::win_service("wg-flock"), "WireGuardTunnel$wg-flock");
@@ -616,7 +615,7 @@ mod tests {
             "{v:#?}"
         );
         assert!(
-            v.contains(&"route -q -n add -net 10.23.0.0/16 -interface wg-flock".into()),
+            v.contains(&"route -q -n add -net 10.23.0.0/16 10.22.0.1".into()),
             "{v:#?}"
         );
         assert!(v[1].ends_with("< <private key>"));
