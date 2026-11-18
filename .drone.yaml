@@ -7,7 +7,6 @@
 #             .deb, published to https://apt.xdebbie.org (ci/apt-publish)
 #   capx      the Cluster API provider; the CRD check
 #   xdctl     the CLI
-#   xdj       the mesh-join tool; static Linux binary on tags
 #
 # They build in registry.mesh.bmath.nyc/xdebbie-builder (ci/builder.Dockerfile)
 # with CARGO_HOME and CARGO_TARGET_DIR on a per-pipeline PVC in
@@ -167,59 +166,3 @@ steps:
     commands:
       - cargo clippy -p xdctl --all-targets -- -D warnings
       - cargo test -p xdctl
-
----
-kind: pipeline
-type: kubernetes
-name: xdj
-
-trigger:
-  event: [push, tag, pull_request, custom]
-
-# One build at a time per pipeline: the cargo cache is a ReadWriteOnce
-# disk, and two builds on different nodes fought over it.
-concurrency:
-  limit: 1
-
-clone:
-  skip_verify: true
-
-environment:
-  CARGO_BUILD_JOBS: "2"
-  CARGO_INCREMENTAL: "0"
-  CARGO_TERM_COLOR: never
-  CARGO_HOME: /cache/cargo
-  CARGO_TARGET_DIR: /cache/target
-
-volumes:
-  - name: cache
-    claim:
-      name: xdj-cargo-cache
-
-steps:
-  - name: check
-    image: registry.mesh.bmath.nyc/xdebbie-builder:2
-    volumes:
-      - name: cache
-        path: /cache
-    resources:
-      limits:
-        memory: 1024MiB
-    commands:
-      - cargo clippy -p xdj --all-targets -- -D warnings
-      - cargo test -p xdj
-
-  - name: package
-    image: registry.mesh.bmath.nyc/xdebbie-builder:2
-    volumes:
-      - name: cache
-        path: /cache
-    resources:
-      limits:
-        memory: 1024MiB
-    commands:
-      - cargo build --release -p xdj --target x86_64-unknown-linux-musl
-      - mkdir -p dist && cp "$CARGO_TARGET_DIR"/x86_64-unknown-linux-musl/release/xdj dist/xdj-linux-x86_64 && ls -l dist
-    when:
-      event: [tag]
-    depends_on: [check]
