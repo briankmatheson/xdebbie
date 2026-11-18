@@ -168,6 +168,7 @@ pub fn router(app: App) -> Router {
         .route("/volumes/{id}", get(get_volume).delete(delete_volume))
         .route("/volumes/{id}/attach", post(attach_volume))
         .route("/volumes/{id}/detach", post(detach_volume))
+        .route("/qos", get(qos))
         .route("/token/rotate", post(rotate_token))
         .layer(middleware::from_fn_with_state(
             app.clone(),
@@ -613,6 +614,61 @@ async fn cert_chain(State(a): State<App>) -> R<Json<Vec<CertInfo>>> {
 }
 
 // ---------- hosts ----------
+
+/// How long a merged `/qos` answer is reused: the CSI node plugins poll
+/// every few seconds, abe recomputes every five.
+const QOS_CACHE: std::time::Duration = std::time::Duration::from_secs(2);
+/// How long one abe may take to answer before its volumes are left out.
+const QOS_ABE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// `GET /v1/qos`: every host's abe IOPS arbiter report (abe >= 0.7.0
+/// `GET /qos`), merged into one `{"volumes": {"<id>": {...}}}`. The abe-csi
+/// node plugins apply the ceilings (they cannot ask abe themselves: its API
+/// wants a cluster certificate). An abe that is down, too old or has the
+/// arbiter off contributes nothing, and those volumes stay unlimited.
+async fn qos(State(a): State<App>) -> Json<serde_json::Value> {
+    static CACHE: std::sync::OnceLock<
+        tokio::sync::Mutex<Option<(std::time::Instant, serde_json::Value)>>,
+    > = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| tokio::sync::Mutex::new(None));
+    let mut c = cache.lock().await;
+    if let Some((at, v)) = c.as_ref()
+        && at.elapsed() < QOS_CACHE
+    {
+        return Json(v.clone());
+    }
+    let bases: Vec<(String, String)> = a
+        .store
+        .read()
+        .await
+        .hosts
+        .values()
+        .filter_map(|h| h.abe.clone().map(|b| (h.name.clone(), b)))
+        .collect();
+    let mut volumes = serde_json::Map::new();
+    let mut hosts = serde_json::Map::new();
+    for (name, base) in bases {
+        let r = tokio::time::timeout(QOS_ABE_TIMEOUT, a.abe.qos(&base)).await;
+        let state = match r {
+            Ok(Ok(v)) => {
+                if let Some(m) = v.get("volumes").and_then(|m| m.as_object()) {
+                    volumes.extend(m.clone());
+                }
+                serde_json::json!({
+                    "enabled": v.get("enabled").cloned().unwrap_or(false.into()),
+                    "contended": v.get("contended").cloned().unwrap_or(false.into()),
+                    "capacity_iops": v.get("capacity_iops").cloned().unwrap_or_default(),
+                })
+            }
+            Ok(Err(e)) => serde_json::json!({"error": format!("{e:#}")}),
+            Err(_) => serde_json::json!({"error": "timed out"}),
+        };
+        hosts.insert(name, state);
+    }
+    let v = serde_json::json!({"volumes": volumes, "hosts": hosts});
+    *c = Some((std::time::Instant::now(), v.clone()));
+    Json(v)
+}
 
 async fn list_hosts(State(a): State<App>) -> Json<Vec<Host>> {
     Json(a.store.read().await.hosts.into_values().collect())
@@ -1420,6 +1476,58 @@ mod tests {
             drop(dir);
         });
         url
+    }
+
+    /// `/v1/qos` merges every host's abe `/qos`; a host whose abe does not
+    /// answer is reported, and its volumes are simply absent.
+    #[tokio::test]
+    async fn qos_merges_every_abes_report() {
+        let fake = axum::Router::new().route(
+            "/qos",
+            get(|| async {
+                Json(serde_json::json!({
+                    "enabled": true, "contended": false, "capacity_iops": 32000,
+                    "volumes": {"fbe30945cb6e477db3307c8caa91a43f":
+                        {"ceiling_iops": 3520, "guarantee_iops": 352, "demand_iops": 10, "active": true}}
+                }))
+            }),
+        );
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let abe_url = format!("http://{}", l.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(l, fake).await.unwrap() });
+
+        let dir = tempfile::tempdir().unwrap();
+        let url = spawn(
+            Leadership::standalone("box", "http://box:23443"),
+            Store::open(dir.path().join("s.json")).unwrap(),
+        )
+        .await;
+        let c = reqwest::Client::new();
+        for (name, abe) in [("a", abe_url.as_str()), ("b", "http://127.0.0.1:9")] {
+            let r = c
+                .put(format!("{url}/v1/hosts/{name}"))
+                .bearer_auth("secret")
+                .json(&serde_json::json!({"name": name, "uri": "qemu:///system", "abe": abe}))
+                .send()
+                .await
+                .unwrap();
+            assert!(r.status().is_success(), "{}", r.text().await.unwrap());
+        }
+        let v: serde_json::Value = c
+            .get(format!("{url}/v1/qos"))
+            .bearer_auth("secret")
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(
+            v["volumes"]["fbe30945cb6e477db3307c8caa91a43f"]["ceiling_iops"],
+            3520
+        );
+        assert_eq!(v["hosts"]["a"]["enabled"], true);
+        assert!(v["hosts"]["b"]["error"].is_string(), "{v}");
     }
 
     #[tokio::test]

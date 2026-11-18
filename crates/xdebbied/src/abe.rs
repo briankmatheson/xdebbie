@@ -397,6 +397,12 @@ impl Client {
         Ok(e)
     }
 
+    /// `GET /qos` (abe >= 0.7.0): the IOPS arbiter's report, every export's
+    /// ceiling and guarantee. Passed on as it comes.
+    pub async fn qos(&self, base: &str) -> Result<serde_json::Value> {
+        self.get_json(base, "/qos", "qos").await
+    }
+
     /// Pool / VG usage.
     pub async fn utilization(&self, base: &str) -> Result<AbeUtilization> {
         self.get_json(base, "/utilization", "utilization").await
