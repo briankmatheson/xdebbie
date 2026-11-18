@@ -115,6 +115,9 @@ impl IcmpClient {
 pub const ADAPT_RTTS: f64 = 15.0;
 pub const ADAPT_FLOOR: Duration = Duration::from_millis(250);
 
+/// Wait before a new prober's first echo.
+pub const FIRST_PROBE_DELAY: Duration = Duration::from_secs(1);
+
 pub fn adaptive_timeout(srtt_ms: Option<f64>, cap: Duration) -> Duration {
     match srtt_ms {
         Some(ms) => Duration::from_secs_f64(ms * ADAPT_RTTS / 1000.0)
@@ -139,6 +142,9 @@ pub fn spawn_prober(
             .pinger(IpAddr::V4(target), PingIdentifier(0x2300 | box_id as u16))
             .await;
         let mut srtt: Option<f64> = None;
+        // A peer just (re)configured is often still handshaking: give it a
+        // second before the first echo, or it starts life reported Down.
+        tokio::time::sleep(FIRST_PROBE_DELAY).await;
         let mut tick = tokio::time::interval(params.interval);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let payload = [0u8; 32];
