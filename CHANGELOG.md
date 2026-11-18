@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-11-17
+
+### Added
+- `xdj` on FreeBSD (13.2+, kernel WireGuard): `ifconfig wg create`,
+  `route`, and a `local_unbound` forward zone for `dns_domain` when
+  local_unbound runs. Needs `wireguard-tools`; xdj never installs it.
+  Releases ship `xdj-freebsd-x86_64`.
+- Tags publish the xdebbied `.deb` to the apt repository at
+  apt.xdebbie.org.
+- Drone: one pipeline per binary, each building in a prepared image with
+  a cargo cache on a PVC.
+
+### Fixed
+- `xdj` feeds the private key to `wg` on stdin (`wg set … private-key
+  <file>` failed with "Permission denied" on some systems, even as root).
+- `sudo xdj` reads the invoking user's config (`SUDO_USER`), not root's.
+- A failed `xdj up` takes down what it had set up.
+
 ## [0.18.0] - 2026-11-17
 
 ### Changed
