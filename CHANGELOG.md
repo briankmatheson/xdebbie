@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.3] - 2026-11-18
+
 ### Added
 - `GET /v1/qos`: every host's abe IOPS arbiter report (abe 0.7.0
   `GET /qos`) merged into `{"volumes": {"<id>": {"ceiling_iops", ...}},
