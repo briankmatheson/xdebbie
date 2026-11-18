@@ -19,6 +19,13 @@
 //! | libvirt TLS (16514/tcp) | underlay, bridge (libvirtd listens on the bridge address) |
 //! | Geneve (`[mesh].dstport`) | underlay |
 //! | DHCP (67/udp) | bridge |
+//! | abe API and NVMe/TCP (23000-23999/tcp) | storage bridge, from the storage network |
+//!
+//! **Storage bridge** (`[network] storage_cidr`, `[[hosts]] storage_bridge`,
+//! e.g. `virbr-abe` on 10.24/16): VMs reach this host's abe there and
+//! nothing else. Only abe's ports are accepted on it, and nothing is
+//! forwarded in or out of it (the libvirt network is isolated, and the
+//! `xdebbie_host` forward chain drops it too).
 //!
 //! **VM egress** (`[network]` + `[mesh] box`). Box *N* owns `<cidr>.N.0/24`
 //! (bootstrap/addr.rs) and forwards for exactly that: ufw's FORWARD lets
@@ -76,7 +83,22 @@ pub struct FirewallSpec {
     pub discovery_port: Option<u16>,
     /// This box's VMs: what to NAT and forward for.
     pub egress: Option<Egress>,
+    /// The storage bridge, if any.
+    pub storage: Option<StorageFw>,
 }
+
+/// What the storage bridge lets in: abe, from the storage network.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StorageFw {
+    pub bridge: String,
+    /// `[network] storage_cidr`, e.g. `10.24.0.0/16`.
+    pub net: String,
+    /// abe's API port(s), from the hosts' `abe` URLs (443 when unset).
+    pub abe_api_ports: Vec<u16>,
+}
+
+/// abe's NVMe/TCP export range (abe >= 0.5.0).
+pub const ABE_EXPORT_PORTS: &str = "23000:23999";
 
 /// The VM side of one box.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,6 +150,30 @@ impl FirewallSpec {
                     .map(|m| (m.underlay.clone(), underlay_net.clone())),
             })
         });
+        let storage = cfg
+            .network
+            .as_ref()
+            .and_then(|n| n.storage_cidr)
+            .and_then(|net| {
+                let bridge = cfg.hosts.iter().find_map(|h| h.storage_bridge.clone())?;
+                let mut abe_api_ports: Vec<u16> = cfg
+                    .hosts
+                    .iter()
+                    .filter_map(|h| h.abe.as_deref())
+                    .filter_map(|u| reqwest::Url::parse(u).ok())
+                    .filter_map(|u| u.port_or_known_default())
+                    .collect();
+                abe_api_ports.sort();
+                abe_api_ports.dedup();
+                if abe_api_ports.is_empty() {
+                    abe_api_ports.push(443);
+                }
+                Some(StorageFw {
+                    bridge,
+                    net: net.to_string(),
+                    abe_api_ports,
+                })
+            });
         Self {
             api_port: cfg.effective_listen().port(),
             local_nets: local_ipv4_prefixes(),
@@ -146,6 +192,7 @@ impl FirewallSpec {
                 None
             },
             egress,
+            storage,
         }
     }
 
@@ -204,6 +251,17 @@ impl FirewallSpec {
                 )));
             }
         }
+        if let Some(s) = &self.storage {
+            let (br, net) = (&s.bridge, &s.net);
+            r.push(args(&format!(
+                "allow in on {br} proto tcp from {net} to any port {ABE_EXPORT_PORTS} comment 'xdebbie abe nvme/tcp on {br}'"
+            )));
+            for p in &s.abe_api_ports {
+                r.push(args(&format!(
+                    "allow in on {br} proto tcp from {net} to any port {p} comment 'xdebbie abe api {p} on {br}'"
+                )));
+            }
+        }
         r
     }
 
@@ -236,6 +294,14 @@ impl FirewallSpec {
         );
         if let Some(r) = routed_rule(self) {
             out.push_str(&format!("    {r}\n"));
+        }
+        // The storage bridge is a dead end: nothing in or out of it is
+        // forwarded, whatever routes a guest may set up.
+        if let Some(s) = &self.storage {
+            out.push_str(&format!(
+                "    iifname {br} counter drop\n    oifname {br} counter drop\n",
+                br = quote(&s.bridge)
+            ));
         }
         out.push_str(&format!(
             "    iifname != {br} oifname {br} ct state new counter drop\n  }}\n",
@@ -545,7 +611,27 @@ mod tests {
                 upstream_dns: vec!["192.168.1.1".parse().unwrap()],
                 routed_from: None,
             }),
+            storage: None,
         }
+    }
+
+    #[test]
+    fn storage_bridge_takes_abe_only_and_forwards_nothing() {
+        let mut s = full();
+        assert!(!s.render_nft().unwrap().contains("virbr-abe"));
+        s.storage = Some(StorageFw {
+            bridge: "virbr-abe".into(),
+            net: "10.24.0.0/16".into(),
+            abe_api_ports: vec![2],
+        });
+        let rules: Vec<String> = s.rules().iter().map(|r| r.join(" ")).collect();
+        assert!(rules.contains(&"allow in on virbr-abe proto tcp from 10.24.0.0/16 to any port 23000:23999 comment xdebbie abe nvme/tcp on virbr-abe".to_string()), "{rules:#?}");
+        assert!(rules.contains(&"allow in on virbr-abe proto tcp from 10.24.0.0/16 to any port 2 comment xdebbie abe api 2 on virbr-abe".to_string()), "{rules:#?}");
+        // nothing else is opened on it
+        assert_eq!(rules.iter().filter(|r| r.contains("virbr-abe")).count(), 2);
+        let nft = s.render_nft().unwrap();
+        assert!(nft.contains("iifname \"virbr-abe\" counter drop"), "{nft}");
+        assert!(nft.contains("oifname \"virbr-abe\" counter drop"), "{nft}");
     }
 
     #[test]

@@ -153,6 +153,10 @@ pub fn bridge_ip(subnet: &str, box_id: u8) -> Result<(String, String)> {
 /// `mac`: the bridge's MAC. The mesh's derived FDB scheme assumes
 /// `52:54:00:23:<box>:fe` (`mesh::bridge_mac`), so a network bootstrap
 /// creates gets exactly that instead of libvirt's random pick.
+/// `routed`: `<forward mode='route'/>` (the overlay). False makes an
+/// isolated network (the storage bridge): libvirt itself then rejects
+/// every packet forwarded in or out of it, and only the host is reachable.
+#[allow(clippy::too_many_arguments)]
 pub fn ensure_network(
     uri: &str,
     name: &str,
@@ -161,6 +165,7 @@ pub fn ensure_network(
     dhcp_start: &str,
     dhcp_end: &str,
     mac: &str,
+    routed: bool,
 ) -> Result<String> {
     // Check if network already exists
     let exists = Command::new("virsh")
@@ -223,11 +228,15 @@ pub fn ensure_network(
     // every forwarded packet in or out of the bridge and no rule of ours
     // can let VMs reach anything. The NAT itself is ours, per box
     // (bootstrap/firewall.rs), not libvirt's whole-subnet masquerade.
+    let forward = if routed {
+        "  <forward mode='route'/>\n"
+    } else {
+        ""
+    };
     let xml = format!(
         r#"<network>
   <name>{}</name>
-  <forward mode='route'/>
-  <bridge name='{}' stp='off' delay='0'/>
+{forward}  <bridge name='{}' stp='off' delay='0'/>
   <mac address='{}'/>
 {}  <ip address='{}' netmask='{}'>
 {}  </ip>

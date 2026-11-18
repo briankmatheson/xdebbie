@@ -204,6 +204,7 @@ mod tests {
                 reserved: vec![],
                 upstream_dns: vec![],
                 mesh_routed: false,
+                storage_cidr: None,
                 dhcp: true,
                 bridge: None,
                 lease_secs: DEFAULT_LEASE_SECS,

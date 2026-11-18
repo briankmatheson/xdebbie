@@ -1368,6 +1368,7 @@ fn main() -> Result<()> {
                     labels: labels.into_iter().collect(),
                     storage_pool: pool,
                     bridge,
+                    storage_bridge: None,
                     cpu_overcommit,
                     mem_overcommit: 1.0,
                     reserved_memory_mib,

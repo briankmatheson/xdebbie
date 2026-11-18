@@ -241,6 +241,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             sys_class: cfg.nvme_sys.clone(),
         },
         base_locks: Arc::default(),
+        network: cfg.network.clone(),
     });
 
     if let Some(Cmd::Check) = cli.cmd {

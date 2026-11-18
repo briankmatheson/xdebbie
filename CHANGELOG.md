@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Storage bridge: `[network] storage_cidr` (e.g. `10.24.0.0/16`) with
+  `[[hosts]] storage_bridge = "virbr-abe"`. Bootstrap creates the isolated
+  libvirt network `abe` (bridge `virbr-abe`, this box at `10.24.<box>.1`);
+  VMs defined on such a host get a second NIC there (MAC `52:54:24:…`)
+  with a static address keeping the host bits of their overlay address
+  (10.23.0.21 -> 10.24.0.21), no gateway, no DNS, and one route: the
+  host's abe address (`10.22.<box>.1/32`) via `10.24.<box>.1`, so guests
+  reach the unchanged abe over the storage bridge. The firewall accepts only
+  abe's API and NVMe/TCP ports on it and forwards nothing in or out.
+  Existing VMs get the NIC when they are next defined (re-created).
+
 ## [0.18.3] - 2026-11-18
 
 ### Added

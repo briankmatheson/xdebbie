@@ -123,6 +123,15 @@ pub struct NetworkConfig {
     /// (bootstrap/firewall.rs).
     #[serde(default)]
     pub mesh_routed: bool,
+    /// The storage network: a second, isolated bridge (`virbr-abe`) on
+    /// every host that names one (`[[hosts]] storage_bridge`), where VMs
+    /// reach abe directly instead of through the overlay. Same prefix
+    /// length as `cidr`: a VM's storage address keeps the host bits of its
+    /// overlay address (10.23.0.21 -> 10.24.0.21), so it needs no
+    /// allocator and no DHCP; it goes into the VM's network-config. The
+    /// host's own address there is its box block's first (10.24.<box>.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_cidr: Option<Cidr>,
     /// Run the DHCP responder on `bridge`. Off = allocate only.
     #[serde(default = "d_true")]
     pub dhcp: bool,
@@ -184,6 +193,17 @@ impl NetworkConfig {
         if u32::from(start) > u32::from(end) {
             bail!("network.pool_start {start} is after pool_end {end}");
         }
+        if let Some(s) = &self.storage_cidr {
+            if s.prefix != self.cidr.prefix {
+                bail!(
+                    "network.storage_cidr {s} must have the same prefix length as cidr {}",
+                    self.cidr
+                );
+            }
+            if s.network == self.cidr.network {
+                bail!("network.storage_cidr {s} is the overlay itself");
+            }
+        }
         if self.lease_secs < 60 {
             bail!("network.lease_secs must be >= 60");
         }
@@ -193,6 +213,18 @@ impl NetworkConfig {
             bail!("network.domain must be 1..=253 chars");
         }
         Ok(())
+    }
+
+    /// A VM's address on the storage network: `storage_cidr`'s network
+    /// bits, the host bits of `overlay_ip`. `None` without `storage_cidr`
+    /// or when `overlay_ip` is not in `cidr`.
+    pub fn storage_ip(&self, overlay_ip: Ipv4Addr) -> Option<Ipv4Addr> {
+        let s = self.storage_cidr?;
+        if !self.cidr.contains_host(overlay_ip) {
+            return None;
+        }
+        let host_bits = u32::from(overlay_ip) & !u32::from(self.cidr.mask());
+        Some(Ipv4Addr::from(u32::from(s.network) | host_bits))
     }
 
     /// Everything that may never be handed out, regardless of pool bounds.
@@ -294,12 +326,40 @@ mod tests {
             reserved: vec![],
             upstream_dns: vec![],
             mesh_routed: false,
+            storage_cidr: None,
             dhcp: true,
             bridge: None,
             lease_secs: DEFAULT_LEASE_SECS,
             domain: None,
             leader_only: false,
         }
+    }
+
+    #[test]
+    fn storage_ip_keeps_the_host_bits() {
+        let mut n = cfg("10.23.0.0/16");
+        assert_eq!(n.storage_ip(Ipv4Addr::new(10, 23, 0, 21)), None);
+        n.storage_cidr = Some("10.24.0.0/16".parse().unwrap());
+        n.validate().unwrap();
+        assert_eq!(
+            n.storage_ip(Ipv4Addr::new(10, 23, 0, 21)),
+            Some(Ipv4Addr::new(10, 24, 0, 21))
+        );
+        assert_eq!(
+            n.storage_ip(Ipv4Addr::new(10, 23, 1, 40)),
+            Some(Ipv4Addr::new(10, 24, 1, 40))
+        );
+        // not on the overlay: no storage address
+        assert_eq!(n.storage_ip(Ipv4Addr::new(192, 168, 1, 5)), None);
+    }
+
+    #[test]
+    fn storage_cidr_must_match_the_overlay_prefix() {
+        let mut n = cfg("10.23.0.0/16");
+        n.storage_cidr = Some("10.24.0.0/24".parse().unwrap());
+        assert!(n.validate().is_err());
+        n.storage_cidr = Some("10.23.0.0/16".parse().unwrap());
+        assert!(n.validate().is_err());
     }
 
     #[test]

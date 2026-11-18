@@ -33,6 +33,17 @@ pub struct Host {
     /// Linux bridge VMs attach to (must exist on the host).
     #[serde(default = "default_bridge")]
     pub bridge: String,
+    /// Second, isolated bridge for storage traffic (`virbr-abe`): VMs on
+    /// this host get a second NIC there, with a static address from
+    /// `[network] storage_cidr`, so they can reach the host's abe directly.
+    /// Absent: one NIC, as before. Set it only where the bridge exists
+    /// (bootstrap creates it from `[network] storage_cidr`).
+    #[serde(
+        alias = "storage_bridge",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub storage_bridge: Option<String>,
     /// CPU overcommit ratio (vCPU : pCPU). 1.0 = no overcommit.
     #[serde(alias = "cpu_overcommit", default = "default_cpu_ratio")]
     pub cpu_overcommit: f64,
@@ -580,6 +591,13 @@ impl Vm {
     pub fn mac(&self) -> String {
         let b = self.id.as_bytes();
         format!("52:54:00:{:02x}:{:02x}:{:02x}", b[0], b[1], b[2])
+    }
+    /// MAC of the storage NIC (`Host::storage_bridge`): the same three
+    /// id bytes as `mac()` under `52:54:24`, so the two are told apart at a
+    /// glance and never collide.
+    pub fn storage_mac(&self) -> String {
+        let b = self.id.as_bytes();
+        format!("52:54:24:{:02x}:{:02x}:{:02x}", b[0], b[1], b[2])
     }
     /// `mac()` as bytes, for comparing against DHCP `chaddr`.
     pub fn mac_bytes(&self) -> [u8; 6] {
