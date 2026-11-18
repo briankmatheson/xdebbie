@@ -7,7 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.2] - 2026-11-18
+
+### Added
+- The mesh logs its peers: "mesh peer came up" / "went away" with the
+  peer's WireGuard endpoint, round trip and handshake age, and "mesh peer
+  moved" (from/to) when a peer's endpoint changes, e.g. a laptop roaming.
+
 ### Changed
+- Mesh probes wait about 15 smoothed round trips of each peer (250 ms
+  floor, the configured timeout as the cap) instead of the fixed timeout,
+  so a lost peer is noticed sooner.
+- The whole workspace builds as edition 2024.
+- Drone runs one build at a time per pipeline (the cargo caches are
+  ReadWriteOnce disks).
 - `xdj` moved to its own repository,
   [briankmatheson/xdj](https://github.com/briankmatheson/xdj) (history
   kept; it continues at 0.19.0). xdebbie releases no longer carry the xdj
