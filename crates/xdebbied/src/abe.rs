@@ -479,6 +479,9 @@ impl Client {
     }
 }
 
+/// I/O queues per NVMe/TCP connect (see `Nvme::connect`).
+pub const NVME_IO_QUEUES: &str = "4";
+
 /// Host-side NVMe/TCP initiator operations. Paths are parameters so tests
 /// can point at a tempdir instead of /sys and /dev.
 #[derive(Clone)]
@@ -507,7 +510,9 @@ impl Nvme {
 
     /// Attach the volume; a no-op if already attached. `ctrl-loss-tmo -1`
     /// keeps retrying forever when the exporter is away, so the guest
-    /// stalls instead of taking I/O errors.
+    /// stalls instead of taking I/O errors. `NVME_IO_QUEUES` I/O queues
+    /// (one TCP connection each): the default, one per host CPU, meant 17
+    /// connections per volume, which does not scale to hundreds of volumes.
     pub async fn connect(&self, d: &Disk) -> Result<()> {
         if self.connected(d.nqn()) {
             return Ok(());
@@ -525,6 +530,8 @@ impl Nvme {
                 d.nqn(),
                 "--ctrl-loss-tmo",
                 "-1",
+                "--nr-io-queues",
+                NVME_IO_QUEUES,
             ])
             .output()
             .await
@@ -770,7 +777,7 @@ mod tests {
         let argv = std::fs::read_to_string(&log).unwrap();
         assert_eq!(
             argv.trim(),
-            "connect -t tcp -a 127.0.0.1 -s 44001 -n absent --ctrl-loss-tmo -1"
+            "connect -t tcp -a 127.0.0.1 -s 44001 -n absent --ctrl-loss-tmo -1 --nr-io-queues 4"
         );
         n.disconnect("absent").await.unwrap(); // not in sysfs → no call
         assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 1);
