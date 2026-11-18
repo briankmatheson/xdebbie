@@ -26,6 +26,11 @@ name: xdebbied
 trigger:
   event: [push, tag, pull_request, custom]
 
+# One build at a time per pipeline: the cargo cache is a ReadWriteOnce
+# disk, and two builds on different nodes fought over it.
+concurrency:
+  limit: 1
+
 clone:
   skip_verify: true
 
@@ -88,6 +93,11 @@ name: capx
 trigger:
   event: [push, tag, pull_request, custom]
 
+# One build at a time per pipeline: the cargo cache is a ReadWriteOnce
+# disk, and two builds on different nodes fought over it.
+concurrency:
+  limit: 1
+
 clone:
   skip_verify: true
 
@@ -125,6 +135,11 @@ name: xdctl
 trigger:
   event: [push, tag, pull_request, custom]
 
+# One build at a time per pipeline: the cargo cache is a ReadWriteOnce
+# disk, and two builds on different nodes fought over it.
+concurrency:
+  limit: 1
+
 clone:
   skip_verify: true
 
@@ -160,6 +175,11 @@ name: xdj
 
 trigger:
   event: [push, tag, pull_request, custom]
+
+# One build at a time per pipeline: the cargo cache is a ReadWriteOnce
+# disk, and two builds on different nodes fought over it.
+concurrency:
+  limit: 1
 
 clone:
   skip_verify: true
