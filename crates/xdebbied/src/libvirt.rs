@@ -168,6 +168,40 @@ pub fn storage_nic(
 }
 
 impl Virsh {
+    /// True when `dom` has the virtio-scsi controller, adding it first if it
+    /// is missing. False (and a warning) when it cannot be added, e.g. no PCI
+    /// slot is left: the caller then hot-plugs virtio-blk as before.
+    async fn ensure_scsi_controller(&self, host: &Host, dom: &str) -> bool {
+        match self.run(&host.uri, &["dumpxml", dom]).await {
+            Ok(x) if has_scsi_controller(&x) => return true,
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(%dom, "dumpxml: {e:#}; hot-plugging virtio-blk");
+                return false;
+            }
+        }
+        let r = async {
+            let f = tempfile::Builder::new().suffix(".xml").tempfile()?;
+            tokio::fs::write(f.path(), scsi_controller_xml().trim()).await?;
+            self.run(
+                &host.uri,
+                &["attach-device", dom, p(f.path()), "--live", "--config"],
+            )
+            .await
+        }
+        .await;
+        match r {
+            Ok(_) => {
+                tracing::info!(%dom, "added the virtio-scsi controller for hot-plugged volumes");
+                true
+            }
+            Err(e) => {
+                tracing::warn!(%dom, "could not add a virtio-scsi controller ({e:#}); hot-plugging virtio-blk");
+                false
+            }
+        }
+    }
+
     async fn run(&self, uri: &str, args: &[&str]) -> Result<String> {
         let out = Command::new(&self.bin)
             .arg("-q")
@@ -653,7 +687,52 @@ fn root_ports_xml() -> String {
             "    <controller type='pci' index='{i}' model='pcie-root-port'/>\n"
         ));
     }
+    s.push_str(&scsi_controller_xml());
     s
+}
+
+/// Hot-plugged volumes go on one virtio-scsi controller (one PCI slot) as
+/// SCSI disks, one per target: up to `SCSI_MAX_TARGET` of them per VM,
+/// instead of one PCIe root port each (which capped a VM at about ten).
+pub const SCSI_MAX_TARGET: usize = 255;
+/// Queues on the controller: requests from several vCPUs in parallel.
+const SCSI_QUEUES: u32 = 4;
+
+/// The virtio-scsi controller, in a domain definition or hot-added to a VM
+/// defined before it was part of the definition.
+pub fn scsi_controller_xml() -> String {
+    format!(
+        "    <controller type='scsi' index='0' model='virtio-scsi'>\n      <driver queues='{SCSI_QUEUES}'/>\n    </controller>\n"
+    )
+}
+
+/// Does this domain XML (`virsh dumpxml`) have the virtio-scsi controller?
+pub fn has_scsi_controller(domxml: &str) -> bool {
+    domxml.contains("model='virtio-scsi'") || domxml.contains("model=\"virtio-scsi\"")
+}
+
+/// The libvirt name of SCSI target `n` (1..): sdb, sdc, ... sdz, sdaa, ...
+/// (`sda` is the seed CD-ROM on SATA, and libvirt names both buses `sd*`).
+pub fn scsi_name(n: usize) -> String {
+    let mut i = n; // 0 = a
+    let mut letters = vec![];
+    loop {
+        letters.push((b'a' + (i % 26) as u8) as char);
+        if i < 26 {
+            break;
+        }
+        i = i / 26 - 1;
+    }
+    letters.reverse();
+    format!("sd{}", letters.into_iter().collect::<String>())
+}
+
+/// First free SCSI target, as (libvirt name, target number), given the
+/// targets the domain already uses.
+pub fn free_scsi_target(used: &[String]) -> Option<(String, usize)> {
+    (1..=SCSI_MAX_TARGET)
+        .map(|n| (scsi_name(n), n))
+        .find(|(name, _)| !used.contains(name))
 }
 
 pub fn domain_xml(
@@ -839,6 +918,24 @@ pub fn volume_disk_xml(vol: &Volume, target: &str) -> String {
 "#,
         dev = vol.disk().dev_path(),
         serial = vol.serial()
+    )
+}
+
+/// Hot-plug XML for a volume on the virtio-scsi controller: target `n`,
+/// unit 0. The serial is the whole volume id (SCSI carries 36 characters),
+/// so the guest finds it at `/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_<id>`.
+pub fn volume_scsi_xml(vol: &Volume, target: &str, n: usize) -> String {
+    format!(
+        r#"<disk type='block' device='disk'>
+  <driver name='qemu' type='raw' cache='none' io='native' discard='unmap'/>
+  <source dev='{dev}'/>
+  <target dev='{target}' bus='scsi'/>
+  <serial>{serial}</serial>
+  <address type='drive' controller='0' bus='0' target='{n}' unit='0'/>
+</disk>
+"#,
+        dev = vol.disk().dev_path(),
+        serial = vol.scsi_serial()
     )
 }
 
@@ -1210,9 +1307,22 @@ impl Hypervisor for Virsh {
             return Ok(t.clone());
         }
         let used: Vec<String> = blk.into_iter().map(|(t, _)| t).collect();
-        let target = free_target(&used).ok_or_else(|| anyhow!("no free virtio slot on {dom}"))?;
+        // On the virtio-scsi controller when the VM has one or can be given
+        // one (a VM defined before it was in the definition gets it hot-added,
+        // which takes its last PCI slot once); else as before, one virtio-blk
+        // disk per PCI slot.
+        let xml = if self.ensure_scsi_controller(host, &dom).await {
+            let (target, n) = free_scsi_target(&used)
+                .ok_or_else(|| anyhow!("all {SCSI_MAX_TARGET} SCSI targets on {dom} are in use"))?;
+            (target.clone(), volume_scsi_xml(vol, &target, n))
+        } else {
+            let target =
+                free_target(&used).ok_or_else(|| anyhow!("no free virtio slot on {dom}"))?;
+            (target.clone(), volume_disk_xml(vol, &target))
+        };
+        let (target, xml) = xml;
         let f = tempfile::Builder::new().suffix(".xml").tempfile()?;
-        tokio::fs::write(f.path(), volume_disk_xml(vol, &target)).await?;
+        tokio::fs::write(f.path(), xml).await?;
         self.run(
             &host.uri,
             &["attach-device", &dom, p(f.path()), "--persistent"],
@@ -1380,6 +1490,41 @@ mod tests {
         assert_eq!(free_target(&used).as_deref(), Some("vdd"));
         assert_eq!(free_target(&[]).as_deref(), Some("vdc"));
     }
+
+    #[test]
+    fn scsi_targets_go_past_z_and_skip_the_cdrom() {
+        assert_eq!(scsi_name(1), "sdb");
+        assert_eq!(scsi_name(25), "sdz");
+        assert_eq!(scsi_name(26), "sdaa");
+        assert_eq!(scsi_name(51), "sdaz");
+        assert_eq!(scsi_name(52), "sdba");
+        assert_eq!(scsi_name(SCSI_MAX_TARGET), "sdiv");
+        let names: std::collections::BTreeSet<String> =
+            (1..=SCSI_MAX_TARGET).map(scsi_name).collect();
+        assert_eq!(names.len(), SCSI_MAX_TARGET, "all distinct");
+        assert!(!names.contains("sda"), "sda is the seed CD-ROM");
+        let used = vec!["sda".to_string(), "sdb".to_string(), "vdc".to_string()];
+        assert_eq!(free_scsi_target(&used), Some(("sdc".to_string(), 2)));
+        let all: Vec<String> = (1..=SCSI_MAX_TARGET).map(scsi_name).collect();
+        assert_eq!(free_scsi_target(&all), None);
+    }
+
+    #[test]
+    fn new_domains_carry_the_scsi_controller() {
+        let host: Host =
+            serde_json::from_value(serde_json::json!({"name": "a", "uri": "test:///"})).unwrap();
+        let vm: Vm = serde_json::from_value(serde_json::json!({
+            "id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+            "spec": {"name": "x", "vcpus": 1, "memoryMib": 512, "diskGib": 8, "image": "img"},
+            "phase": "Pending", "power": "On",
+            "created": "2026-01-01T00:00:00Z", "updated": "2026-01-01T00:00:00Z"
+        }))
+        .unwrap();
+        let xml = domain_xml(&host, &vm, None, None, None);
+        assert!(has_scsi_controller(&xml), "{xml}");
+        assert_eq!(xml.matches("model='virtio-scsi'").count(), 1);
+        assert!(!has_scsi_controller("<domain><devices/></domain>"));
+    }
     #[test]
     fn volume_hotplug_xml_carries_the_serial() {
         let now = chrono::Utc::now();
@@ -1405,6 +1550,19 @@ mod tests {
         assert!(x.contains("<target dev='vdc' bus='virtio'/>"));
         assert!(x.contains("<serial>0123456789abcdef0123</serial>"));
         assert!(x.contains("discard='unmap'"));
+
+        let s = volume_scsi_xml(&v, "sdc", 2);
+        assert!(s.contains("<target dev='sdc' bus='scsi'/>"), "{s}");
+        assert!(
+            s.contains("<serial>0123456789abcdef0123456789abcdef</serial>"),
+            "{s}"
+        );
+        assert!(s.contains("<address type='drive' controller='0' bus='0' target='2' unit='0'/>"));
+        assert!(s.contains("discard='unmap'"));
+        assert_eq!(
+            v.scsi_guest_dev_path(),
+            "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_0123456789abcdef0123456789abcdef"
+        );
     }
     #[test]
     fn parses_ifaddr() {

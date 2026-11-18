@@ -396,6 +396,8 @@ impl Disk {
 
 /// Length of the virtio-blk serial a guest can see (`VIRTIO_BLK_ID_BYTES`).
 pub const VIRTIO_SERIAL_LEN: usize = 20;
+/// Longest serial QEMU's scsi-hd accepts (`MAX_SERIAL_LEN`).
+pub const SCSI_SERIAL_LEN: usize = 36;
 
 /// fio numbers ABE measured when it made the volume (`perf` in its reply,
 /// abe >= 0.3.5): random direct writes at `bs` with `iodepth` in flight
@@ -467,7 +469,9 @@ pub struct Volume {
 pub struct Attachment {
     pub vm: Uuid,
     pub host: String,
-    /// libvirt target (`vdc`, ...).
+    /// libvirt target: `sdb`, `sdc`, ... on the virtio-scsi controller, or
+    /// `vdc`, ... for a virtio-blk hot-plug (VMs that had no slot left for
+    /// the controller, and volumes attached before it existed).
     pub target: String,
 }
 
@@ -492,6 +496,18 @@ impl Volume {
     }
     pub fn guest_dev_path(&self) -> String {
         format!("/dev/disk/by-id/virtio-{}", self.serial())
+    }
+    /// The serial on the virtio-scsi bus: the whole id (QEMU's scsi-hd
+    /// takes up to 36 characters).
+    pub fn scsi_serial(&self) -> &str {
+        &self.id[..self.id.len().min(SCSI_SERIAL_LEN)]
+    }
+    /// Where the guest's udev links a SCSI-attached volume.
+    pub fn scsi_guest_dev_path(&self) -> String {
+        format!(
+            "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_{}",
+            self.scsi_serial()
+        )
     }
 }
 

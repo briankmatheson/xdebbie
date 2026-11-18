@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Hot-plugged volumes go on a virtio-scsi controller (`sdb`, `sdc`, ...
+  `sdiv`): up to 255 per VM instead of one PCIe root port each (about ten).
+  New VMs get the controller in their definition; an existing VM gets it
+  hot-added at its next volume attach (one PCI slot), and falls back to
+  virtio-blk when no slot is left. The guest sees a SCSI volume at
+  `/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_<volume id>` (the whole id), a
+  virtio-blk one at `virtio-<first 20>` as before (abe-csi looks for both).
+- NVMe/TCP connects use 4 I/O queues (`--nr-io-queues 4`): 5 connections
+  per volume on the abe host instead of one per host CPU plus one.
+
 ### Added
 - Storage bridge: `[network] storage_cidr` (e.g. `10.24.0.0/16`) with
   `[[hosts]] storage_bridge = "virbr-abe"`. Bootstrap creates the isolated
