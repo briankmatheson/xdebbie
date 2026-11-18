@@ -35,7 +35,9 @@ clone:
   skip_verify: true
 
 environment:
-  CARGO_BUILD_JOBS: "2"
+  # One rustc at a time: with two, the test build reached its 1536MiB
+  # limit (build #46, 2026-11-18). capx and xdctl are small enough for two.
+  CARGO_BUILD_JOBS: "1"
   CARGO_INCREMENTAL: "0"
   CARGO_TERM_COLOR: never
   CARGO_HOME: /cache/cargo
