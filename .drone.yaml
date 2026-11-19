@@ -22,6 +22,9 @@
 kind: pipeline
 type: kubernetes
 name: xdebbied
+# An experiment (2026-11-19): xdebbied's steps capped at 1024MiB, the size
+# of a build pod's reservation, to see whether they fit. Back to 2048MiB if
+# check or package is OOM-killed.
 
 trigger:
   event: [push, tag, pull_request, custom]
@@ -62,7 +65,7 @@ steps:
         path: /cache
     resources:
       limits:
-        memory: 2048MiB
+        memory: 1024MiB
     commands:
       - cargo fmt --check
       - cargo clippy -p xdebbie-core -p xdebbied --all-targets -- -D warnings
@@ -79,7 +82,7 @@ steps:
         path: /secrets/apt-signing
     resources:
       limits:
-        memory: 2048MiB
+        memory: 1024MiB
     commands:
       - cargo deb -p xdebbied
       - apt-publish "$CARGO_TARGET_DIR"/debian/xdebbied_*.deb
