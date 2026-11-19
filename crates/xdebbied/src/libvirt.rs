@@ -172,6 +172,11 @@ impl Virsh {
     /// is missing. False (and a warning) when it cannot be added, e.g. no PCI
     /// slot is left: the caller then hot-plugs virtio-blk as before.
     async fn ensure_scsi_controller(&self, host: &Host, dom: &str) -> bool {
+        // A VM with no PCI slot left cannot take the controller until it is
+        // redefined; do not ask libvirt (or log) again for a while.
+        if no_scsi_slot::recent(dom) {
+            return false;
+        }
         match self.run(&host.uri, &["dumpxml", dom]).await {
             Ok(x) if has_scsi_controller(&x) => return true,
             Ok(_) => {}
@@ -196,7 +201,8 @@ impl Virsh {
                 true
             }
             Err(e) => {
-                tracing::warn!(%dom, "could not add a virtio-scsi controller ({e:#}); hot-plugging virtio-blk");
+                tracing::warn!(%dom, "could not add a virtio-scsi controller ({e:#}); hot-plugging virtio-blk, not trying again for {} min", no_scsi_slot::FOR.as_secs() / 60);
+                no_scsi_slot::mark(dom);
                 false
             }
         }
@@ -919,6 +925,36 @@ pub fn volume_disk_xml(vol: &Volume, target: &str) -> String {
         dev = vol.disk().dev_path(),
         serial = vol.serial()
     )
+}
+
+/// VMs that could not take the virtio-scsi controller (no PCI slot left),
+/// and when: not asked again for `FOR`.
+mod no_scsi_slot {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+
+    pub const FOR: Duration = Duration::from_secs(600);
+
+    fn map() -> &'static Mutex<HashMap<String, Instant>> {
+        static M: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
+        M.get_or_init(Mutex::default)
+    }
+
+    pub fn mark(dom: &str) {
+        map()
+            .lock()
+            .unwrap()
+            .insert(dom.to_string(), Instant::now());
+    }
+
+    pub fn recent(dom: &str) -> bool {
+        map()
+            .lock()
+            .unwrap()
+            .get(dom)
+            .is_some_and(|at| at.elapsed() < FOR)
+    }
 }
 
 /// Hot-plug XML for a volume on the virtio-scsi controller: target `n`,

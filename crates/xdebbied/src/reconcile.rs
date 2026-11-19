@@ -330,7 +330,17 @@ impl<H: Hypervisor> Reconciler<H> {
             fresh.traddr = traddr.clone();
             fresh.port = port.clone();
         }
-        match self.hv.attach_volume(h, vm, &fresh).await {
+        // A hot-plug that keeps failing (no PCI slot left, say) is retried
+        // with a growing pause, not every tick: the message stays as it was.
+        if attach_backoff::waiting(&vol.id) {
+            return VolPatch {
+                endpoint,
+                ..Default::default()
+            };
+        }
+        let r = self.hv.attach_volume(h, vm, &fresh).await;
+        attach_backoff::record(&vol.id, r.is_ok());
+        match r {
             Ok(target) => VolPatch {
                 attached: Some(Some(Attachment {
                     vm: vm.id,
@@ -641,6 +651,71 @@ impl<H: Hypervisor> Reconciler<H> {
         }
         p.message = Some(None);
         p
+    }
+}
+
+/// Retry pauses for volume attaches that keep failing: 5 s after the first
+/// failure, doubling to 5 min, forgotten on success. In memory: a restart
+/// tries everything once more straight away.
+mod attach_backoff {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+
+    const FIRST: Duration = Duration::from_secs(5);
+    const MAX: Duration = Duration::from_secs(300);
+
+    fn map() -> &'static Mutex<HashMap<String, (u32, Instant)>> {
+        static M: OnceLock<Mutex<HashMap<String, (u32, Instant)>>> = OnceLock::new();
+        M.get_or_init(Mutex::default)
+    }
+
+    /// The pause after `n` failures in a row.
+    pub fn pause(n: u32) -> Duration {
+        FIRST
+            .saturating_mul(1u32 << n.saturating_sub(1).min(16))
+            .min(MAX)
+    }
+
+    /// True while `id` is still pausing after a failure.
+    pub fn waiting(id: &str) -> bool {
+        map()
+            .lock()
+            .unwrap()
+            .get(id)
+            .is_some_and(|(_, next)| Instant::now() < *next)
+    }
+
+    pub fn record(id: &str, ok: bool) {
+        let mut m = map().lock().unwrap();
+        if ok {
+            m.remove(id);
+        } else {
+            let n = m.get(id).map_or(1, |(n, _)| n + 1);
+            m.insert(id.to_string(), (n, Instant::now() + pause(n)));
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn pauses_double_to_five_minutes() {
+            assert_eq!(pause(1), Duration::from_secs(5));
+            assert_eq!(pause(2), Duration::from_secs(10));
+            assert_eq!(pause(4), Duration::from_secs(40));
+            assert_eq!(pause(7), Duration::from_secs(300));
+            assert_eq!(pause(40), Duration::from_secs(300));
+        }
+
+        #[test]
+        fn success_forgets_failures() {
+            record("vol-backoff-test", false);
+            assert!(waiting("vol-backoff-test"));
+            record("vol-backoff-test", true);
+            assert!(!waiting("vol-backoff-test"));
+        }
     }
 }
 

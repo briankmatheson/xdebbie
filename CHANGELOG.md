@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- A volume attach that keeps failing (no PCI slot left on the VM) is retried
+  with a pause of 5 s doubling to 5 min instead of every tick, and a VM that
+  cannot take the virtio-scsi controller is not asked again (or logged) for
+  10 minutes. On 2026-11-18 a full worker produced ~70 warnings a minute.
+
 ## [0.18.4] - 2026-11-18
 
 ### Changed
