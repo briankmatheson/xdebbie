@@ -252,6 +252,10 @@ enum MeshCmd {
     /// Add or remove a peer (read-modify-PUT with If-Match).
     #[command(subcommand)]
     Peer(MeshPeerCmd),
+    /// Add or remove an xdj client: a WireGuard-only peer (laptop, server)
+    /// with a box number picked here. No Geneve, never makes the mesh Degraded.
+    #[command(subcommand)]
+    Client(MeshClientCmd),
     /// DELETE /v1/mesh: tear down and forget the API document.
     Delete {
         /// Skip the confirmation prompt.
@@ -284,6 +288,38 @@ enum MeshPeerCmd {
     },
     Rm {
         r#box: u8,
+    },
+}
+
+#[derive(Subcommand)]
+enum MeshClientCmd {
+    /// Register an xdj client. Takes the lowest free box number unless
+    /// --box is given (never replaces anything), and prints the
+    /// `xdj join ...` line to run on the client. Adding a key that is
+    /// already a client just reports it.
+    Add {
+        /// The client's WireGuard public key (`xdj key` on the client).
+        #[arg(long)]
+        pubkey: String,
+        /// A label for `xdctl mesh ls` and `client rm` (letters, digits, . _ -).
+        #[arg(long)]
+        name: Option<String>,
+        /// The client's endpoint host:port, if this box can reach it (usually
+        /// not needed: clients connect to the hub).
+        #[arg(long)]
+        endpoint: Option<String>,
+        /// Use this box number (1-254) instead of the lowest free one.
+        #[arg(long = "box")]
+        r#box: Option<u8>,
+        /// How the client reaches this box, HOST or HOST:PORT (port defaults
+        /// to the WireGuard listen port). Only used in the printed join line.
+        #[arg(long, value_name = "HOST[:PORT]")]
+        hub_endpoint: Option<String>,
+    },
+    /// Remove a client by box number, name, or public key.
+    Rm {
+        /// BOX, NAME or PUBKEY
+        client: String,
     },
 }
 
@@ -611,13 +647,16 @@ fn api_error_text(v: &Value) -> String {
     v.to_string()
 }
 
-/// Read-modify-PUT with If-Match; one retry on 409.
-fn mesh_modify(api: &Api, f: impl Fn(&mut Value) -> Result<()>) -> Result<Value> {
+/// Read-modify-PUT with If-Match; one retry on 409. `f` returns false when
+/// there is nothing to change: no PUT, the document read is returned.
+fn mesh_modify(api: &Api, mut f: impl FnMut(&mut Value) -> Result<bool>) -> Result<Value> {
     for attempt in 0..2 {
         let doc = api.call(Method::GET, "/mesh", None)?;
         let generation = doc["status"]["generation"].as_u64().unwrap_or(0);
         let mut spec = doc["spec"].clone();
-        f(&mut spec)?;
+        if !f(&mut spec)? {
+            return Ok(doc);
+        }
         let (code, v) = api.call_raw(Method::PUT, "/mesh", Some(spec), Some(generation))?;
         if code == reqwest::StatusCode::CONFLICT && attempt == 0 {
             continue;
@@ -708,6 +747,235 @@ fn print_seen(v: &Value) {
     }
 }
 
+// ---------- mesh clients (xdj) ----------
+
+/// Box numbers taken in a mesh spec: this box, every peer, every client.
+fn mesh_used_boxes(spec: &Value) -> std::collections::BTreeSet<u64> {
+    let mut used = std::collections::BTreeSet::new();
+    used.insert(spec["box"].as_u64().unwrap_or(0));
+    for list in ["peers", "clients"] {
+        for e in spec[list].as_array().into_iter().flatten() {
+            if let Some(b) = e["box"].as_u64() {
+                used.insert(b);
+            }
+        }
+    }
+    used
+}
+
+/// Who holds `b` in the spec, for error messages.
+fn mesh_box_owner(spec: &Value, b: u64) -> Option<String> {
+    if spec["box"].as_u64().unwrap_or(0) == b {
+        return Some("this box".into());
+    }
+    if spec["peers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|p| p["box"].as_u64() == Some(b))
+    {
+        return Some(format!("peer {b} (a Geneve peer)"));
+    }
+    spec["clients"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|c| c["box"].as_u64() == Some(b))
+        .map(|c| match c["name"].as_str() {
+            Some(n) => format!("client {b} ({n})"),
+            None => format!("client {b}"),
+        })
+}
+
+/// What `client add` did to the spec.
+#[derive(Debug, PartialEq)]
+enum ClientAdd {
+    /// Appended at this box.
+    Added(u64),
+    /// A client with this pubkey was already there (spec unchanged).
+    Exists(u64),
+}
+
+/// Add an xdj client to `spec` (a `/v1/mesh` spec as JSON): lowest free box
+/// in 1..=254 unless `want` is given; never replaces an entry.
+fn mesh_add_client(
+    spec: &mut Value,
+    pubkey: &str,
+    name: Option<&str>,
+    endpoint: Option<&str>,
+    want: Option<u8>,
+) -> Result<ClientAdd> {
+    if spec["wireguard"].is_null() {
+        bail!(
+            "this mesh does not manage WireGuard (no spec.wireguard): it cannot have xdj clients"
+        );
+    }
+    if let Some(c) = spec["clients"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|c| c["pubkey"].as_str() == Some(pubkey))
+    {
+        return Ok(ClientAdd::Exists(c["box"].as_u64().unwrap_or(0)));
+    }
+    if let Some(p) = spec["peers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|p| p["pubkey"].as_str() == Some(pubkey))
+    {
+        let b = p["box"].as_u64().unwrap_or(0);
+        bail!(
+            "{pubkey} is the key of peer {b} (a Geneve peer). If that is an xdj box, move it: \
+             xdctl mesh peer rm {b} && xdctl mesh client add --box {b} --pubkey {pubkey}"
+        );
+    }
+    if let Some(n) = name
+        && spec["clients"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|c| c["name"].as_str() == Some(n))
+    {
+        bail!("there is already a client named {n:?}");
+    }
+    let used = mesh_used_boxes(spec);
+    let b = match want {
+        Some(b) => {
+            let b = b as u64;
+            if !(1..=254).contains(&b) {
+                bail!("--box must be 1-254, got {b}");
+            }
+            if let Some(owner) = mesh_box_owner(spec, b) {
+                bail!("box {b} is taken by {owner}; pick another or leave out --box");
+            }
+            b
+        }
+        None => (1..=254u64)
+            .find(|b| !used.contains(b))
+            .ok_or_else(|| anyhow::anyhow!("no free box number left (1-254)"))?,
+    };
+    let mut c = serde_json::json!({ "box": b, "pubkey": pubkey });
+    if let Some(n) = name {
+        c["name"] = n.into();
+    }
+    if let Some(e) = endpoint {
+        c["endpoint"] = e.into();
+    }
+    if !spec["clients"].is_array() {
+        spec["clients"] = Value::Array(vec![]);
+    }
+    spec["clients"].as_array_mut().unwrap().push(c);
+    Ok(ClientAdd::Added(b))
+}
+
+/// Remove the client matching BOX, NAME or PUBKEY; returns its box.
+fn mesh_rm_client(spec: &mut Value, which: &str) -> Result<u64> {
+    let Some(list) = spec["clients"].as_array_mut() else {
+        bail!("this mesh has no clients");
+    };
+    let by_box = which.parse::<u64>().ok();
+    let hits: Vec<usize> = list
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| {
+            by_box.is_some_and(|b| c["box"].as_u64() == Some(b))
+                || c["name"].as_str() == Some(which)
+                || c["pubkey"].as_str() == Some(which)
+        })
+        .map(|(i, _)| i)
+        .collect();
+    match hits.as_slice() {
+        [i] => {
+            let c = list.remove(*i);
+            Ok(c["box"].as_u64().unwrap_or(0))
+        }
+        [] => bail!("no client with box, name or key {which:?} (see xdctl mesh ls)"),
+        _ => bail!("{which:?} matches more than one client; use the box number"),
+    }
+}
+
+/// `HOST[:PORT]` for the join line; the port defaults to `port`.
+fn hub_endpoint(arg: &str, port: u64) -> String {
+    if arg.parse::<std::net::SocketAddr>().is_ok() {
+        return arg.into();
+    }
+    if let Ok(v6) = arg
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse::<std::net::Ipv6Addr>()
+    {
+        return format!("[{v6}]:{port}");
+    }
+    match arg.rsplit_once(':') {
+        Some((h, p)) if !h.is_empty() && p.parse::<u16>().is_ok() => arg.into(),
+        _ => format!("{arg}:{port}"),
+    }
+}
+
+/// The line to run on the client, and whether HUB_HOST is a placeholder.
+/// `xdj join BOX HUB_PUBKEY HUB_HOST:PORT`
+fn xdj_join_line(b: u64, doc: &Value, hub: Option<&str>) -> (String, bool, bool) {
+    let w = &doc["status"]["wireguard"];
+    let port = w["listen_port"]
+        .as_u64()
+        .or_else(|| doc["spec"]["wireguard"]["listen_port"].as_u64())
+        .unwrap_or(51820);
+    let pubkey = w["pubkey"].as_str();
+    let ep = match hub {
+        Some(h) => hub_endpoint(h, port),
+        None => format!("HUB_HOST:{port}"),
+    };
+    (
+        format!("xdj join {b} {} {ep}", pubkey.unwrap_or("HUB_PUBKEY")),
+        hub.is_none(),
+        pubkey.is_none(),
+    )
+}
+
+/// `CLIENTS` table for `mesh ls`: spec.clients joined with their WireGuard rows.
+fn print_mesh_clients(doc: &Value) {
+    let clients = doc["spec"]["clients"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    if clients.is_empty() {
+        return;
+    }
+    let wg = doc["status"]["wireguard"]["peers"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    println!();
+    println!(
+        "CLIENTS (xdj)\n{:<5} {:<20} {:<12} {:<24} {:>10}",
+        "BOX", "NAME", "PUBKEY", "ENDPOINT", "HANDSHAKE"
+    );
+    for c in &clients {
+        let key = c["pubkey"].as_str().unwrap_or("-");
+        let row = wg.iter().find(|p| p["pubkey"].as_str() == Some(key));
+        let hs = match row {
+            None => "-".to_string(),
+            Some(r) => r["handshake_age_s"]
+                .as_u64()
+                .map(|s| format!("{s}s ago"))
+                .unwrap_or_else(|| "never".into()),
+        };
+        let ep = row
+            .and_then(|r| r["endpoint"].as_str())
+            .or_else(|| c["endpoint"].as_str())
+            .unwrap_or("-");
+        println!(
+            "{:<5} {:<20} {:<12} {:<24} {:>10}",
+            c["box"].to_string(),
+            c["name"].as_str().unwrap_or("-"),
+            format!("{}…", key.chars().take(10).collect::<String>()),
+            ep,
+            hs
+        );
+    }
+}
+
 fn print_wg_peers(w: &Value) {
     let peers = w["peers"].as_array().cloned().unwrap_or_default();
     if peers.is_empty() {
@@ -723,9 +991,14 @@ fn print_wg_peers(w: &Value) {
             .as_u64()
             .map(|s| format!("{s}s ago"))
             .unwrap_or_else(|| "never".into());
+        let b = if p["client"].as_bool() == Some(true) {
+            format!("{}c", p["box"])
+        } else {
+            p["box"].to_string()
+        };
         println!(
             "{:<5} {:<46} {:<24} {:>10} {:>12} {:>12}",
-            p["box"].to_string(),
+            b,
             p["pubkey"].as_str().unwrap_or("-"),
             p["endpoint"].as_str().unwrap_or("-"),
             hs,
@@ -794,6 +1067,7 @@ fn print_mesh(doc: &Value) {
         );
         print_wg_peers(w);
     }
+    print_mesh_clients(doc);
     println!();
     println!("CONDITIONS");
     for c in st["conditions"].as_array().into_iter().flatten() {
@@ -1016,6 +1290,22 @@ fn main() -> Result<()> {
                             "REMOTE is required unless the mesh manages WireGuard (spec.wireguard)"
                         );
                     }
+                    if let Some(c) = spec["clients"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .find(|c| c["box"].as_u64() == Some(r#box as u64))
+                    {
+                        bail!(
+                            "box {} is an xdj client{} (spec.clients), not a peer; \
+                             xdj boxes are managed with `xdctl mesh client add|rm`",
+                            r#box,
+                            c["name"]
+                                .as_str()
+                                .map(|n| format!(" ({n})"))
+                                .unwrap_or_default()
+                        );
+                    }
                     let peers = spec["peers"]
                         .as_array_mut()
                         .ok_or_else(|| anyhow::anyhow!("spec has no peers array"))?;
@@ -1032,7 +1322,7 @@ fn main() -> Result<()> {
                         }
                     }
                     peers.push(p);
-                    Ok(())
+                    Ok(true)
                 })?;
                 if cli.json {
                     return out(v);
@@ -1049,12 +1339,86 @@ fn main() -> Result<()> {
                     if peers.len() == before {
                         bail!("no peer with box {}", r#box);
                     }
-                    Ok(())
+                    Ok(true)
                 })?;
                 if cli.json {
                     return out(v);
                 }
                 print_mesh(&v);
+            }
+            MeshCmd::Client(MeshClientCmd::Add {
+                pubkey,
+                name,
+                endpoint,
+                r#box,
+                hub_endpoint,
+            }) => {
+                let mut done = None;
+                let v = mesh_modify(&api, |spec| {
+                    let r = mesh_add_client(
+                        spec,
+                        &pubkey,
+                        name.as_deref(),
+                        endpoint.as_deref(),
+                        r#box,
+                    )?;
+                    let changed = matches!(r, ClientAdd::Added(_));
+                    done = Some(r);
+                    Ok(changed)
+                })?;
+                let done = done.expect("mesh_modify ran the closure");
+                if cli.json {
+                    return out(v);
+                }
+                let b = match done {
+                    ClientAdd::Added(b) => {
+                        println!("added xdj client box {b} (10.22.{b}.1)");
+                        b
+                    }
+                    ClientAdd::Exists(b) => {
+                        println!("already a client: box {b} (10.22.{b}.1); nothing changed");
+                        if r#box.is_some_and(|w| w as u64 != b) {
+                            println!(
+                                "  (--box ignored; to move it: xdctl mesh client rm {b}, then add again)"
+                            );
+                        }
+                        b
+                    }
+                };
+                let (line, host_placeholder, key_placeholder) =
+                    xdj_join_line(b, &v, hub_endpoint.as_deref());
+                println!();
+                println!("run on the client:");
+                println!("  {line}");
+                if host_placeholder {
+                    println!();
+                    println!(
+                        "HUB_HOST is a placeholder: put the address the client reaches this box at \
+                         (or pass --hub-endpoint HOST[:PORT])"
+                    );
+                }
+                if key_placeholder {
+                    println!(
+                        "HUB_PUBKEY: this box has no WireGuard status yet; take it from `xdctl mesh wg`"
+                    );
+                }
+            }
+            MeshCmd::Client(MeshClientCmd::Rm { client }) => {
+                let mut removed = 0;
+                let v = mesh_modify(&api, |spec| {
+                    removed = mesh_rm_client(spec, &client)?;
+                    if spec["clients"].as_array().is_some_and(|l| l.is_empty()) {
+                        // the daemon leaves an empty list out; keep the PUT tidy
+                        if let Some(o) = spec.as_object_mut() {
+                            o.remove("clients");
+                        }
+                    }
+                    Ok(true)
+                })?;
+                if cli.json {
+                    return out(v);
+                }
+                println!("removed xdj client box {removed}");
             }
             MeshCmd::Wg => {
                 let v = api.call(Method::GET, "/mesh", None)?;
@@ -1578,4 +1942,142 @@ fn main() -> Result<()> {
         Cmd::Completion { .. } => unreachable!("handled before contacting xdebbied"),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    const KA: &str = "EtEvrro2LlkElPgm+ge5ndqtzL2o9ehIWwyIFnKsBQU=";
+    const KB: &str = "2Mt9XkPn7iVObR5nCjQYhTe1rtVf6hVuvIG1cyL+zGM=";
+    const KC: &str = "4ZJxNbbSoUq4tgYKAa0Ow6EYwlANqldjfPGYdPZ9P2I=";
+
+    fn spec() -> Value {
+        json!({
+            "box": 0,
+            "wireguard": {"listen_port": 51820},
+            "peers": [{"box": 2, "pubkey": KA}],
+            "clients": [{"box": 1, "pubkey": KB, "name": "gram"}],
+        })
+    }
+
+    #[test]
+    fn client_add_takes_the_lowest_free_box() {
+        let mut s = spec();
+        assert_eq!(
+            mesh_add_client(&mut s, KC, Some("laptop"), None, None).unwrap(),
+            ClientAdd::Added(3),
+            "0 = self, 1 = client, 2 = peer"
+        );
+        assert_eq!(
+            s["clients"][1],
+            json!({"box": 3, "pubkey": KC, "name": "laptop"})
+        );
+
+        // a hole is reused
+        let mut s = spec();
+        s["box"] = json!(5);
+        s["clients"] = json!([]);
+        assert_eq!(
+            mesh_add_client(&mut s, KC, None, Some("h:1"), None).unwrap(),
+            ClientAdd::Added(1)
+        );
+        assert_eq!(s["clients"][0]["endpoint"], "h:1");
+
+        // no clients key at all (the daemon leaves an empty list out)
+        let mut s = json!({"box": 0, "wireguard": {}, "peers": []});
+        assert_eq!(
+            mesh_add_client(&mut s, KC, None, None, None).unwrap(),
+            ClientAdd::Added(1)
+        );
+    }
+
+    #[test]
+    fn client_add_is_idempotent_and_never_replaces() {
+        let mut s = spec();
+        let before = s.clone();
+        assert_eq!(
+            mesh_add_client(&mut s, KB, Some("other"), None, Some(9)).unwrap(),
+            ClientAdd::Exists(1)
+        );
+        assert_eq!(s, before, "spec untouched");
+
+        for taken in [1u8, 2] {
+            let e = mesh_add_client(&mut s, KC, None, None, Some(taken))
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains("taken"), "{e}");
+        }
+        for bad in [0u8, 255] {
+            let e = mesh_add_client(&mut s, KC, None, None, Some(bad)).unwrap_err();
+            assert!(e.to_string().contains("1-254"), "{e}");
+        }
+        assert_eq!(s, before);
+        let mut s7 = spec();
+        s7["box"] = json!(7);
+        let e = mesh_add_client(&mut s7, KC, None, None, Some(7)).unwrap_err();
+        assert!(e.to_string().contains("this box"), "{e}");
+        assert_eq!(
+            mesh_add_client(&mut s, KC, None, None, Some(254)).unwrap(),
+            ClientAdd::Added(254)
+        );
+
+        // a peer's key: says how to migrate
+        let mut s = spec();
+        let e = mesh_add_client(&mut s, KA, None, None, None)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("xdctl mesh peer rm 2"), "{e}");
+        // duplicate name
+        let e = mesh_add_client(&mut s, KC, Some("gram"), None, None)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("gram"), "{e}");
+        // no managed WireGuard
+        let mut s = json!({"box": 0, "peers": []});
+        assert!(mesh_add_client(&mut s, KC, None, None, None).is_err());
+    }
+
+    #[test]
+    fn client_rm_by_box_name_or_key() {
+        for which in ["1", "gram", KB] {
+            let mut s = spec();
+            assert_eq!(mesh_rm_client(&mut s, which).unwrap(), 1);
+            assert_eq!(s["clients"], json!([]));
+            assert_eq!(s["peers"].as_array().unwrap().len(), 1, "peers untouched");
+        }
+        let mut s = spec();
+        assert!(
+            mesh_rm_client(&mut s, "2").is_err(),
+            "box 2 is a peer, not a client"
+        );
+        assert!(mesh_rm_client(&mut s, "nobody").is_err());
+    }
+
+    #[test]
+    fn join_line() {
+        let doc = json!({
+            "spec": {"wireguard": {"listen_port": 23444}},
+            "status": {"wireguard": {"pubkey": KA, "listen_port": 23444}},
+        });
+        assert_eq!(
+            xdj_join_line(3, &doc, None),
+            (format!("xdj join 3 {KA} HUB_HOST:23444"), true, false)
+        );
+        assert_eq!(
+            xdj_join_line(3, &doc, Some("timesink.example")).0,
+            format!("xdj join 3 {KA} timesink.example:23444")
+        );
+        assert_eq!(
+            xdj_join_line(3, &doc, Some("timesink.example:51820")).0,
+            format!("xdj join 3 {KA} timesink.example:51820")
+        );
+        assert_eq!(hub_endpoint("192.0.2.1", 1), "192.0.2.1:1");
+        assert_eq!(hub_endpoint("2001:db8::1", 1), "[2001:db8::1]:1");
+        assert_eq!(hub_endpoint("[2001:db8::1]:7", 1), "[2001:db8::1]:7");
+        let nokey = json!({"spec": {"wireguard": {}}, "status": {}});
+        let (l, _, k) = xdj_join_line(4, &nokey, Some("h"));
+        assert_eq!((l.as_str(), k), ("xdj join 4 HUB_PUBKEY h:51820", true));
+    }
 }

@@ -11,7 +11,8 @@
 //! - `flockd` on each box calls its **local** `xdebbied`: `PUT /v1/mesh`
 //!   with `If-Match: <generation>`, sending the full peer list built from
 //!   the Ready `FlockBox` resources. Each peer is `remote = 10.22.<box>.1`
-//!   with `probe` left out (derived).
+//!   with `probe` left out (derived). `spec.clients` (xdj) is not Flock's:
+//!   carry it over from the `GET` unchanged, or the PUT drops them.
 //! - Enroll order: WireGuard peer up → `PUT` with the new peer.
 //! - Revoke order: `PUT` without the peer → wait until `GET` shows
 //!   `observed_generation == generation` → remove the WireGuard peer.
@@ -33,6 +34,11 @@
 //! `pubkey`. Geneve packets to `10.22.<peer>.1` are therefore always
 //! encrypted; `allow_plain_underlay` is moot. Flock's "WireGuard peer up →
 //! PUT" ordering collapses into a single PUT carrying `pubkey`/`endpoint`.
+//!
+//! Clients (`spec.clients`, xdj) are WireGuard peers and nothing more:
+//! `allowed-ips = 10.22.<box>.1/32`, no tunnel, no probe, no FDB, never in
+//! `status.peers` or Ready/Degraded. They show in `status.wireguard.peers`
+//! with `client: true`.
 
 pub mod firewall;
 pub mod kernel;
@@ -408,7 +414,7 @@ impl MeshManager {
             let wg = st
                 .wireguard
                 .as_ref()
-                .and_then(|w| w.peers.iter().find(|p| p.box_id == ev.box_id));
+                .and_then(|w| w.peers.iter().find(|p| !p.client && p.box_id == ev.box_id));
             let endpoint = wg.and_then(|p| p.endpoint.clone()).unwrap_or_default();
             let handshake_age_s = wg.and_then(|p| p.handshake_age_s);
             let msg = match (before, state) {
@@ -651,30 +657,42 @@ impl MeshManager {
         };
         let now = self.ops.now_unix();
         let iface = observed.wg.clone().unwrap_or_default();
-        let peers: Vec<WgPeerStatus> = spec
+        let wg_row = |box_id: u8, k: &str, endpoint: Option<&String>| {
+            let c = iface.peer(k);
+            WgPeerStatus {
+                box_id,
+                pubkey: k.to_owned(),
+                endpoint: c
+                    .and_then(|c| c.endpoint.clone())
+                    .or_else(|| endpoint.cloned()),
+                handshake_age_s: c
+                    .filter(|c| c.latest_handshake > 0)
+                    .map(|c| now.saturating_sub(c.latest_handshake)),
+                rx_bytes: c.map(|c| c.rx_bytes).unwrap_or(0),
+                tx_bytes: c.map(|c| c.tx_bytes).unwrap_or(0),
+                client: false,
+                name: None,
+            }
+        };
+        let mut peers: Vec<WgPeerStatus> = spec
             .peers
             .iter()
             .filter_map(|p| {
                 let k = p.pubkey.as_ref()?;
-                let c = iface.peer(k);
-                Some(WgPeerStatus {
-                    box_id: p.box_id,
-                    pubkey: k.clone(),
-                    endpoint: c
-                        .and_then(|c| c.endpoint.clone())
-                        .or_else(|| p.endpoint.clone()),
-                    handshake_age_s: c
-                        .filter(|c| c.latest_handshake > 0)
-                        .map(|c| now.saturating_sub(c.latest_handshake)),
-                    rx_bytes: c.map(|c| c.rx_bytes).unwrap_or(0),
-                    tx_bytes: c.map(|c| c.tx_bytes).unwrap_or(0),
-                })
+                Some(wg_row(p.box_id, k, p.endpoint.as_ref()))
             })
             .collect();
+        // Clients (xdj): WireGuard rows only, flagged; they have no Geneve
+        // row in `status.peers` and no say in Ready/Degraded.
+        peers.extend(spec.clients.iter().map(|c| WgPeerStatus {
+            client: true,
+            name: c.name.clone(),
+            ..wg_row(c.box_id, &c.pubkey, c.endpoint.as_ref())
+        }));
         // A peer that roamed (new network, new NAT mapping): say so once.
         {
             let mut tracks = self.tracks.lock().unwrap();
-            for p in &peers {
+            for p in peers.iter().filter(|p| !p.client) {
                 let Some(t) = tracks.get_mut(&p.box_id) else {
                     continue;
                 };
@@ -1741,6 +1759,83 @@ mod tests {
             dir.path().join(WG_KEY_FILE).exists(),
             "identity survives teardown"
         );
+    }
+
+    #[tokio::test]
+    async fn clients_are_wireguard_only_and_never_degrade() {
+        const KC: &str = "4ZJxNbbSoUq4tgYKAa0Ow6EYwlANqldjfPGYdPZ9P2I=";
+        let f = wg_fake();
+        let dir = tempfile::tempdir().unwrap();
+        let m = MeshManager::new_for_test(f.clone(), dir.path().into(), Some(&off())).unwrap();
+        let mut s = wg_spec();
+        s.clients = vec![ClientSpec {
+            box_id: 3,
+            pubkey: KC.into(),
+            name: Some("laptop".into()),
+            endpoint: None,
+        }];
+        let (spec, st) = m.put(s, None).await.ok().unwrap();
+        assert_eq!(spec.clients.len(), 1);
+        let snap = f.snapshot();
+        assert_eq!(
+            snap.wg["wg-flock"].peer(KC).unwrap().allowed_ips,
+            vec!["10.22.3.1/32"]
+        );
+        assert!(!snap.links.contains_key("gnv-b3"), "no Geneve for a client");
+        assert!(
+            snap.fdb.iter().all(|e| e.dev != "gnv-b3"),
+            "no FDB for a client"
+        );
+        assert_eq!(
+            st.peers.iter().map(|p| p.box_id).collect::<Vec<_>>(),
+            vec![1, 2],
+            "clients are not Geneve peers"
+        );
+        let w = st.wireguard.as_ref().unwrap();
+        let c = w.peers.iter().find(|p| p.box_id == 3).unwrap();
+        assert!(c.client && c.name.as_deref() == Some("laptop"));
+        assert_eq!(c.handshake_age_s, None);
+        assert!(w.peers.iter().filter(|p| p.box_id != 3).all(|p| !p.client));
+        let j = serde_json::to_value(c).unwrap();
+        assert_eq!(j["client"], true);
+        assert_eq!(j["name"], "laptop");
+        assert!(
+            serde_json::to_value(&w.peers[0])
+                .unwrap()
+                .get("client")
+                .is_none()
+        );
+
+        // peers up, client never handshook: Ready, not Degraded
+        for b in [1u8, 2] {
+            for _ in 0..3 {
+                m.on_probe(ProbeEvent {
+                    box_id: b,
+                    ok: true,
+                    rtt_ms: Some(1.0),
+                })
+                .await;
+            }
+        }
+        let (_, st) = m.get().await;
+        assert!(st.is(ConditionType::Ready), "{:?}", st.conditions);
+        assert!(!st.is(ConditionType::Degraded));
+        assert!(
+            st.metrics.peers.get("3").is_none(),
+            "no probe metrics for a client"
+        );
+
+        // removing the client removes its WireGuard peer and nothing else
+        f.clear_applied();
+        let (_, st) = m.put(wg_spec(), Some(st.generation)).await.ok().unwrap();
+        assert_eq!(
+            f.applied(),
+            vec![kernel::Action::WgPeerDel {
+                dev: "wg-flock".into(),
+                pubkey: KC.into()
+            }]
+        );
+        assert!(st.wireguard.unwrap().peers.iter().all(|p| !p.client));
     }
 
     #[tokio::test]

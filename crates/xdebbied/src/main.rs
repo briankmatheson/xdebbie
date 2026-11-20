@@ -469,6 +469,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
     let mesh_cfg = cfg.mesh_config();
     let reserved: Vec<u8> = std::iter::once(mesh_cfg.box_id)
         .chain(mesh_cfg.peers.iter().map(|p| p.box_id))
+        .chain(mesh_cfg.clients.iter().map(|c| c.box_id))
         .collect();
     let enroll = Arc::new(
         enroll::Enrollments::load(cfg.state_dir().join("enroll.json"), signer, reserved)

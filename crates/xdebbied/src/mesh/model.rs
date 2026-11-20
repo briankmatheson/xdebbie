@@ -150,6 +150,32 @@ pub struct PeerSpec {
     pub endpoint: Option<String>,
 }
 
+/// A mesh client (xdj): a laptop or server that joins with one WireGuard
+/// link to this box and routes the overlay through it. WireGuard peer only:
+/// `allowed-ips = 10.22.<box>.1/32`, no Geneve tunnel, no probe, no FDB, and
+/// never part of Ready/Degraded (a client being away is normal).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClientSpec {
+    #[serde(rename = "box")]
+    pub box_id: u8,
+    /// WireGuard public key (base64), from `xdj` on the client.
+    pub pubkey: String,
+    /// Free-form label (`laptop`, `gram`) for `xdctl mesh ls` / `client rm`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// WireGuard endpoint `host:port`. Usually absent: clients initiate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+}
+
+impl ClientSpec {
+    /// The client's address on the underlay: `10.22.<box>.1`.
+    pub fn addr(&self) -> Ipv4Addr {
+        underlay_addr(self.box_id)
+    }
+}
+
 fn unspecified() -> Ipv4Addr {
     Ipv4Addr::UNSPECIFIED
 }
@@ -234,6 +260,9 @@ pub struct MeshSpec {
     pub wireguard: Option<WireguardSpec>,
     #[serde(default)]
     pub peers: Vec<PeerSpec>,
+    /// xdj clients: WireGuard-only peers (needs `wireguard`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clients: Vec<ClientSpec>,
 }
 
 impl Default for MeshSpec {
@@ -254,6 +283,7 @@ impl Default for MeshSpec {
             probe: ProbeSpec::default(),
             wireguard: None,
             peers: vec![],
+            clients: vec![],
         }
     }
 }
@@ -471,6 +501,12 @@ pub struct WgPeerStatus {
     pub handshake_age_s: Option<u64>,
     pub rx_bytes: u64,
     pub tx_bytes: u64,
+    /// An xdj client (`spec.clients`), not a Geneve peer.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub client: bool,
+    /// The client's `name`, if it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -557,6 +593,9 @@ pub struct MeshConfig {
     pub wireguard: Option<WireguardSpec>,
     #[serde(default)]
     pub peers: Vec<PeerSpec>,
+    /// `[[mesh.clients]]`
+    #[serde(default)]
+    pub clients: Vec<ClientSpec>,
 }
 
 impl Default for MeshConfig {
@@ -578,6 +617,7 @@ impl Default for MeshConfig {
             probe_up_after: d_three(),
             wireguard: None,
             peers: vec![],
+            clients: vec![],
         }
     }
 }
@@ -614,6 +654,7 @@ impl MeshConfig {
                 .clone()
                 .or_else(|| (!self.allow_plain_underlay).then(WireguardSpec::default)),
             peers: self.peers.clone(),
+            clients: self.clients.clone(),
         }
         .normalize()
     }
@@ -740,5 +781,32 @@ probe = "10.23.1.1"
         let sp = t.to_spec();
         assert_eq!(sp.wireguard.unwrap().listen_port, 51821);
         assert_eq!(sp.peers[0].remote, Ipv4Addr::new(10, 22, 1, 1));
+    }
+
+    #[test]
+    fn clients_serde() {
+        // absent = empty, and an empty list is left out again
+        let s: MeshSpec = serde_json::from_str(r#"{"wireguard":{}}"#).unwrap();
+        assert!(s.clients.is_empty());
+        assert!(serde_json::to_value(&s).unwrap().get("clients").is_none());
+        let j = r#"{"wireguard":{},"clients":[{"box":3,"pubkey":"k","name":"laptop"}]}"#;
+        let s: MeshSpec = serde_json::from_str(j).unwrap();
+        assert_eq!(s.clients[0].addr(), Ipv4Addr::new(10, 22, 3, 1));
+        assert_eq!(
+            serde_json::to_value(&s).unwrap()["clients"],
+            serde_json::json!([{"box": 3, "pubkey": "k", "name": "laptop"}])
+        );
+        // unknown fields and a missing pubkey are rejected
+        assert!(
+            serde_json::from_str::<MeshSpec>(
+                r#"{"clients":[{"box":3,"pubkey":"k","probe":"1.2.3.4"}]}"#
+            )
+            .is_err()
+        );
+        assert!(serde_json::from_str::<MeshSpec>(r#"{"clients":[{"box":3}]}"#).is_err());
+        // TOML
+        let c: MeshConfig =
+            toml::from_str("[[clients]]\nbox = 4\npubkey = \"k\"\nname = \"gram\"\n").unwrap();
+        assert_eq!(c.to_spec().clients[0].box_id, 4);
     }
 }

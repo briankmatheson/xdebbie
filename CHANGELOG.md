@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Mesh clients (xdj): `spec.clients[]` (`{box, pubkey, name?, endpoint?}`,
+  also `[[mesh.clients]]`) for laptops and servers that join with xdj. A
+  client is a WireGuard peer only (`allowed-ips 10.22.BOX.1/32`, keepalive,
+  optional endpoint): no Geneve tunnel, probe or FDB entries, no row in
+  `status.peers`, and it never makes the mesh Degraded or not Ready. It
+  shows in `status.wireguard.peers` with `"client": true` and its `name`.
+  Validation keeps box numbers unique across this box, peers and clients
+  (clients 1-254), checks the key, and needs the managed WireGuard underlay.
+- `xdctl mesh client add --pubkey KEY [--name NAME] [--endpoint E] [--box B]
+  [--hub-endpoint HOST[:PORT]]`: takes the lowest free box number (or the
+  one asked for, never replacing anything; an existing key is just
+  reported) and prints the line to run on the client,
+  `xdj join BOX HUB_PUBKEY HUB_HOST:PORT`. `xdctl mesh client rm
+  BOX|NAME|PUBKEY` removes one. `xdctl mesh ls` lists clients in their own
+  table; `xdctl mesh wg` marks them `BOXc`.
+
+### Changed
+- `xdctl mesh peer add` refuses a box that belongs to a client: xdj boxes
+  added as peers got a Geneve tunnel they never answer (Down/Degraded
+  forever), and a hand-picked number replaced another client's entry. To
+  move one: `xdctl mesh peer rm BOX`, then
+  `xdctl mesh client add --box BOX --pubkey KEY`.
+
 ### Fixed
 - A volume attach that keeps failing (no PCI slot left on the VM) is retried
   with a pause of 5 s doubling to 5 min instead of every tick, and a VM that

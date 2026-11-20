@@ -8,6 +8,8 @@
 //! their `peers[].pubkey`. Every peer with a `pubkey` becomes a WireGuard
 //! peer with `allowed-ips = <remote>/32`, so the Geneve outer packets to
 //! `10.22.<box>.1` are routed into the tunnel by cryptokey routing.
+//! Clients (`spec.clients`, xdj) are WireGuard peers too, with
+//! `allowed-ips = 10.22.<box>.1/32`, but get nothing else.
 
 use std::{net::Ipv4Addr, path::Path};
 
@@ -115,16 +117,7 @@ pub fn diff(input: WgInput<'_>) -> Vec<Action> {
     }
 
     // Peers.
-    let mut desired: Vec<(String, Option<String>, String)> = spec
-        .peers
-        .iter()
-        .filter_map(|p| {
-            p.pubkey
-                .as_ref()
-                .map(|k| (k.clone(), p.endpoint.clone(), allowed_ips_for(p.remote)))
-        })
-        .collect();
-    desired.sort();
+    let desired = desired_peers(spec);
     for (pubkey, endpoint, allowed) in &desired {
         let cur = iface.and_then(|i| i.peer(pubkey));
         let same = cur
@@ -157,6 +150,37 @@ pub fn diff(input: WgInput<'_>) -> Vec<Action> {
         }
     }
     out
+}
+
+/// The WireGuard peer set: every Geneve peer with a pubkey, then every
+/// client (xdj) at `10.22.<box>.1/32`. Sorted by pubkey.
+///
+/// Validation keeps pubkeys and addresses unique; as a second line of
+/// defence a client whose key or allowed-ips is already taken by a peer
+/// (or an earlier client) is left out, because WireGuard would silently
+/// move the address from one peer to the other.
+fn desired_peers(spec: &MeshSpec) -> Vec<(String, Option<String>, String)> {
+    let mut desired: Vec<(String, Option<String>, String)> = spec
+        .peers
+        .iter()
+        .filter_map(|p| {
+            p.pubkey
+                .as_ref()
+                .map(|k| (k.clone(), p.endpoint.clone(), allowed_ips_for(p.remote)))
+        })
+        .collect();
+    for c in &spec.clients {
+        let allowed = allowed_ips_for(c.addr());
+        if desired
+            .iter()
+            .any(|(k, _, a)| *k == c.pubkey || *a == allowed)
+        {
+            continue;
+        }
+        desired.push((c.pubkey.clone(), c.endpoint.clone(), allowed));
+    }
+    desired.sort();
+    desired
 }
 
 /// Is the configured endpoint already in effect? `wg` reports the resolved
@@ -204,7 +228,7 @@ mod tests {
     use super::*;
     use crate::mesh::{
         kernel::{FakeNetOps, NetOps, fake_pubkey},
-        model::{PeerSpec, WireguardSpec},
+        model::{ClientSpec, PeerSpec, WireguardSpec},
     };
     use std::sync::Arc;
 
@@ -335,6 +359,102 @@ mod tests {
             acts.iter().map(|a| a.kind()).collect::<Vec<_>>(),
             ["wg_set_iface"]
         );
+    }
+
+    const KC: &str = "4ZJxNbbSoUq4tgYKAa0Ow6EYwlANqldjfPGYdPZ9P2I=";
+    const KC2: &str = "aG4yQ0VxS3F0T3J4bW9pN1h0Z2N2VnFhZ1N5Zk1wQkU=";
+
+    fn client(box_id: u8, key: &str) -> ClientSpec {
+        ClientSpec {
+            box_id,
+            pubkey: key.into(),
+            name: Some(format!("c{box_id}")),
+            endpoint: None,
+        }
+    }
+
+    #[test]
+    fn client_added_is_one_wg_peer_and_nothing_else() {
+        let ops = Arc::new(FakeNetOps::new());
+        let dir = tempfile::tempdir().unwrap();
+        let (key, pk) = keyfile(dir.path());
+        let mut s = spec();
+        run(&ops, &s, &key, &pk);
+
+        s.clients.push(client(3, KC));
+        let acts = run(&ops, &s, &key, &pk);
+        assert_eq!(acts.len(), 1, "{acts:?}");
+        assert!(matches!(
+            &acts[0],
+            Action::WgPeerSet { pubkey, endpoint: None, allowed_ips, keepalive: 25, .. }
+                if pubkey == KC && allowed_ips == "10.22.3.1/32"
+        ));
+        assert!(run(&ops, &s, &key, &pk).is_empty(), "converged");
+
+        // a client with an endpoint gets it
+        s.clients.push(ClientSpec {
+            endpoint: Some("198.51.100.7:51820".into()),
+            ..client(4, KC2)
+        });
+        let acts = run(&ops, &s, &key, &pk);
+        assert!(matches!(
+            &acts[..],
+            [Action::WgPeerSet { pubkey, endpoint: Some(e), allowed_ips, .. }]
+                if pubkey == KC2 && e == "198.51.100.7:51820" && allowed_ips == "10.22.4.1/32"
+        ));
+    }
+
+    #[test]
+    fn removing_a_client_removes_only_its_wg_peer() {
+        let ops = Arc::new(FakeNetOps::new());
+        let dir = tempfile::tempdir().unwrap();
+        let (key, pk) = keyfile(dir.path());
+        let mut s = spec();
+        s.clients = vec![client(3, KC), client(4, KC2)];
+        run(&ops, &s, &key, &pk);
+
+        s.clients.retain(|c| c.box_id != 3);
+        let acts = run(&ops, &s, &key, &pk);
+        assert_eq!(
+            acts,
+            vec![Action::WgPeerDel {
+                dev: "wg-flock".into(),
+                pubkey: KC.into()
+            }]
+        );
+        let obs = ops.observe("br-int", Some("wg-flock")).unwrap();
+        let w = obs.wg.unwrap();
+        let mut keys: Vec<&str> = w.peers.iter().map(|p| p.pubkey.as_str()).collect();
+        keys.sort();
+        let mut want = vec![K1, K2, KC2];
+        want.sort();
+        assert_eq!(keys, want);
+    }
+
+    #[test]
+    fn client_and_peer_never_share_allowed_ips() {
+        // Validation rejects both of these; the planner must still never
+        // hand one address to two WireGuard peers.
+        let mut s = spec();
+        s.clients = vec![
+            client(1, KC),  // box 1 is peer K1's: 10.22.1.1/32
+            client(5, K2),  // K2 is a peer's key
+            client(6, KC2), // fine
+        ];
+        let d = desired_peers(&s);
+        let mut ips: Vec<&str> = d.iter().map(|(_, _, a)| a.as_str()).collect();
+        let n = ips.len();
+        ips.sort();
+        ips.dedup();
+        assert_eq!(ips.len(), n, "{d:?}");
+        let mut keys: Vec<&str> = d.iter().map(|(k, _, _)| k.as_str()).collect();
+        keys.sort();
+        keys.dedup();
+        assert_eq!(keys.len(), n, "{d:?}");
+        assert_eq!(n, 3, "peers 1, 2 and client 6: {d:?}");
+        let k1 = d.iter().find(|(k, _, _)| k == K1).unwrap();
+        assert_eq!(k1.2, "10.22.1.1/32", "the peer keeps its address");
+        assert!(d.iter().any(|(k, _, a)| k == KC2 && a == "10.22.6.1/32"));
     }
 
     #[test]
