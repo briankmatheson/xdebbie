@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-11-20
+
 ### Added
 - Mesh clients (xdj): `spec.clients[]` (`{box, pubkey, name?, endpoint?}`,
   also `[[mesh.clients]]`) for laptops and servers that join with xdj. A
