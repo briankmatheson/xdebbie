@@ -223,13 +223,16 @@ pub enum Authn {
 }
 
 /// Routes a box may call before it has a token or a cert: ask to be
-/// enrolled, poll the answer, fetch the CA to pin.
+/// enrolled, poll the answer, fetch the CA to pin, ask the version.
 fn is_public(method: &axum::http::Method, path: &str) -> bool {
     let path = path.strip_prefix("/v1").unwrap_or(path);
     match (method, path) {
         (&axum::http::Method::POST, "/enroll") => true,
         (&axum::http::Method::GET, "/ca") => true,
         (&axum::http::Method::GET, "/cert") => true,
+        // what version a box runs (and its name and features): xdj version asks
+        // the hub over the link before it holds any certificate
+        (&axum::http::Method::GET, "/version") => true,
         (&axum::http::Method::GET, p) => p
             .strip_prefix("/enroll/")
             .is_some_and(|id| !id.is_empty() && id != "token" && !id.contains('/')),
