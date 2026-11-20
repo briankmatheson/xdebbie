@@ -31,10 +31,19 @@ use tower::Service;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClientCert(pub Option<PeerIdentity>);
 
+/// The address a TLS connection came from (as this box sees it), stamped
+/// on every request over it: an enrolment records it, so whoever approves
+/// can see where the request came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RemoteAddr(pub std::net::SocketAddr);
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PeerIdentity {
     /// Subject CN: the hostname the cert was issued for.
     pub hostname: String,
+    /// An xdj client's certificate (subject O = `xdebbie-client`), not a
+    /// box's: it opens only the client routes.
+    pub client: bool,
     /// `sha256:<hex>` of the certificate DER.
     pub fingerprint: String,
 }
@@ -50,8 +59,14 @@ impl PeerIdentity {
             .and_then(|cn| cn.as_str().ok())
             .unwrap_or("")
             .to_string();
+        let client = x
+            .subject()
+            .iter_organization()
+            .filter_map(|o| o.as_str().ok())
+            .any(|o| o == crate::bootstrap::api_tls::CLIENT_ORG);
         Some(Self {
             hostname,
+            client,
             fingerprint: format!("sha256:{}", hex::encode(sha2::Sha256::digest(der))),
         })
     }
@@ -146,6 +161,7 @@ where
             if !speaks_tls(&stream).await {
                 return Err(thumbs_up(stream).await);
             }
+            let addr = stream.peer_addr().ok().map(RemoteAddr);
             let (tls, service) = inner.accept(stream, service).await?;
             let peer = tls
                 .get_ref()
@@ -161,6 +177,7 @@ where
                 WithClientCert {
                     inner: service,
                     peer: ClientCert(peer),
+                    addr,
                 },
             ))
         })
@@ -197,6 +214,7 @@ async fn thumbs_up(mut stream: TcpStream) -> io::Error {
 pub struct WithClientCert<S> {
     inner: S,
     peer: ClientCert,
+    addr: Option<RemoteAddr>,
 }
 
 impl<S, B> Service<axum::http::Request<B>> for WithClientCert<S>
@@ -216,6 +234,9 @@ where
 
     fn call(&mut self, mut req: axum::http::Request<B>) -> Self::Future {
         req.extensions_mut().insert(self.peer.clone());
+        if let Some(a) = self.addr {
+            req.extensions_mut().insert(a);
+        }
         self.inner.call(req)
     }
 }

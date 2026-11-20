@@ -205,6 +205,7 @@ pub fn join(o: &JoinOptions<'_>) -> Result<Joined> {
             crate::token::write_private(&o.paths.server_key, &csr.key_pem)
                 .with_context(|| format!("writing {}", o.paths.server_key.display()))?;
             let req = EnrollRequest {
+                kind: xdebbie_core::EnrollKind::Box,
                 hostname: o.hostname.to_string(),
                 box_id: o.box_id,
                 api_url: o.api_url.to_string(),

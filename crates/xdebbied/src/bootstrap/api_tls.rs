@@ -36,6 +36,11 @@ pub const API_CA_KEY: &str = "/etc/xdebbie/api-ca-key.pem";
 /// CA validity: 10 years. Server cert: 2 years.
 const CA_DAYS: i64 = 3650;
 const SERVER_DAYS: i64 = 730;
+/// Organization on every xdj client certificate: what tells a client from a
+/// box (`tls::PeerIdentity::client`).
+pub const CLIENT_ORG: &str = "xdebbie-client";
+/// How long an xdj client certificate lasts; xdj renews it before then.
+pub const CLIENT_MINUTES: i64 = 60;
 
 /// Paths for the API TLS files.
 pub struct ApiTlsPaths {
@@ -209,6 +214,33 @@ impl CaSigner {
     /// Sign a member's CSR. The subject and SANs come from the request;
     /// usage is fixed here: a member cert serves its API (serverAuth) and
     /// identifies the daemon to other boxes (clientAuth), never signs.
+    /// Sign an xdj client's CSR: CN = its name, O = [`CLIENT_ORG`], clientAuth
+    /// only, no SANs, good for [`CLIENT_MINUTES`]. Returns the PEM and the CN.
+    pub fn sign_client_csr(&self, csr_pem: &str) -> Result<(String, String)> {
+        let csr =
+            rcgen::CertificateSigningRequestParams::from_pem(csr_pem).context("parsing CSR")?;
+        let name = csr_hostname(&csr).unwrap_or_default();
+        if name.is_empty() {
+            anyhow::bail!("the CSR names no client (empty CN)");
+        }
+        let now = time::OffsetDateTime::now_utc();
+        let mut p = CertificateParams::default();
+        p.is_ca = IsCa::NoCa;
+        p.use_authority_key_identifier_extension = true;
+        p.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        p.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
+        p.distinguished_name.push(DnType::CommonName, &name);
+        p.distinguished_name
+            .push(DnType::OrganizationName, CLIENT_ORG);
+        p.not_before = now - time::Duration::minutes(1);
+        p.not_after = now + time::Duration::minutes(CLIENT_MINUTES);
+        let pem = p
+            .signed_by(&csr.public_key, &self.issuer)
+            .context("signing client certificate")?
+            .pem();
+        Ok((pem, name))
+    }
+
     pub fn sign_csr(&self, csr_pem: &str) -> Result<String> {
         let csr =
             rcgen::CertificateSigningRequestParams::from_pem(csr_pem).context("parsing CSR")?;

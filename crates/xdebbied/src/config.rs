@@ -31,6 +31,10 @@ pub struct Config {
     /// caller that only flips the runtime settings (the aviary page).
     #[serde(default)]
     pub settings_token_file: Option<PathBuf>,
+    /// A token that lists and decides xdj client enrolments and nothing
+    /// else, for the aviary page, where admins approve them.
+    #[serde(default)]
+    pub enroll_token_file: Option<PathBuf>,
     /// PEM certificate chain and key. Both set = HTTPS; neither = plain HTTP.
     #[serde(default)]
     pub tls_cert: Option<PathBuf>,

@@ -512,17 +512,21 @@ fn fatal_config(e: anyhow::Error) -> ! {
 fn load_token(cfg: &config::Config) -> anyhow::Result<Option<Arc<token::Tokens>>> {
     Ok(match &cfg.token_file {
         Some(p) => {
-            let settings = match &cfg.settings_token_file {
-                Some(f) => Some(
-                    std::fs::read_to_string(f)
-                        .with_context(|| format!("reading {}", f.display()))?
-                        .trim()
-                        .to_owned(),
-                ),
-                None => None,
+            let read = |f: &Option<std::path::PathBuf>| -> anyhow::Result<Option<String>> {
+                Ok(match f {
+                    Some(f) => Some(
+                        std::fs::read_to_string(f)
+                            .with_context(|| format!("reading {}", f.display()))?
+                            .trim()
+                            .to_owned(),
+                    ),
+                    None => None,
+                })
             };
             Some(Arc::new(
-                token::Tokens::load(p)?.with_settings_token(settings),
+                token::Tokens::load(p)?
+                    .with_settings_token(read(&cfg.settings_token_file)?)
+                    .with_enroll_token(read(&cfg.enroll_token_file)?),
             ))
         }
         None => {
