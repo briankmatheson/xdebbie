@@ -178,6 +178,7 @@ pub fn router(app: App) -> Router {
     let enroll = Router::new()
         .route("/enroll", get(enroll_list).post(enroll_submit))
         .route("/enroll/{id}", get(enroll_get))
+        .route("/enroll/renew", post(enroll_renew))
         .route("/enroll/{id}/approve", post(enroll_approve))
         .route("/enroll/{id}/deny", post(enroll_deny))
         .layer(middleware::from_fn_with_state(app.clone(), forward_to_ca));
@@ -218,6 +219,11 @@ pub enum Authn {
     Cert(crate::tls::PeerIdentity),
     /// The settings-only token: `/v1/settings` and nothing else.
     Settings,
+    /// The enroll-only token (the aviary page): list and decide xdj client
+    /// enrolments, nothing else.
+    Enroll,
+    /// An xdj client's certificate: [`client_may`] routes only.
+    Client(crate::tls::PeerIdentity),
     /// Only allowed on the public enrolment routes.
     Anonymous,
 }
@@ -233,6 +239,33 @@ fn is_public(method: &axum::http::Method, path: &str) -> bool {
         (&axum::http::Method::GET, p) => p
             .strip_prefix("/enroll/")
             .is_some_and(|id| !id.is_empty() && id != "token" && !id.contains('/')),
+        _ => false,
+    }
+}
+
+/// What an xdj client's certificate opens (path without `/v1`).
+fn client_may(method: &axum::http::Method, path: &str) -> bool {
+    matches!(
+        (method, path.trim_end_matches('/')),
+        (&axum::http::Method::GET, "/mesh")
+            | (&axum::http::Method::GET, "/ca")
+            | (&axum::http::Method::POST, "/enroll/renew")
+    )
+}
+
+/// What the enroll-only token opens: the list, one enrolment, approve, deny.
+fn enroll_may(method: &axum::http::Method, path: &str) -> bool {
+    let p = path.trim_end_matches('/');
+    match *method {
+        axum::http::Method::GET => {
+            p == "/enroll"
+                || p.strip_prefix("/enroll/")
+                    .is_some_and(|id| !id.contains('/') && id != "token")
+        }
+        axum::http::Method::POST => p.strip_prefix("/enroll/").is_some_and(|rest| {
+            rest.split_once('/')
+                .is_some_and(|(id, verb)| !id.is_empty() && (verb == "approve" || verb == "deny"))
+        }),
         _ => false,
     }
 }
@@ -259,6 +292,8 @@ pub async fn authenticate(
         (None, _, _) => Authn::Token,
         (Some(t), Some(p), _) if t.accepts(&p).await => Authn::Token,
         (Some(t), Some(p), _) if t.accepts_settings(&p) => Authn::Settings,
+        (Some(t), Some(p), _) if t.accepts_enroll(&p) => Authn::Enroll,
+        (Some(_), _, Some(id)) if id.client => Authn::Client(id),
         (Some(_), _, Some(id)) => Authn::Cert(id),
         _ => Authn::Anonymous,
     };
@@ -269,6 +304,23 @@ pub async fn authenticate(
         return ApiErr(
             StatusCode::FORBIDDEN,
             "the settings token opens /v1/settings only".into(),
+        )
+        .into_response();
+    }
+    if authn == Authn::Enroll && !enroll_may(req.method(), path) {
+        return ApiErr(
+            StatusCode::FORBIDDEN,
+            "the enroll token lists and decides client enrolments only".into(),
+        )
+        .into_response();
+    }
+    if matches!(authn, Authn::Client(_))
+        && !client_may(req.method(), path)
+        && !is_public(req.method(), req.uri().path())
+    {
+        return ApiErr(
+            StatusCode::FORBIDDEN,
+            "a client certificate opens the mesh view, the CA and its own renewal only".into(),
         )
         .into_response();
     }
@@ -497,16 +549,31 @@ struct ListQuery {
     all: bool,
 }
 
-async fn enroll_list(State(a): State<App>, Query(q): Query<ListQuery>) -> Json<Vec<Enrollment>> {
-    Json(a.enroll.list(q.all).await)
+async fn enroll_list(
+    State(a): State<App>,
+    Query(q): Query<ListQuery>,
+    authn: Option<axum::Extension<Authn>>,
+) -> Json<Vec<Enrollment>> {
+    let all = a.enroll.list(q.all).await;
+    // the enroll-only token sees the clients' requests, not the boxes'
+    Json(match only_for(&authn) {
+        Some(k) => all.into_iter().filter(|e| e.kind == k).collect(),
+        None => all,
+    })
 }
 
 /// A joiner asks for its certificate: queued until an operator approves.
 async fn enroll_submit(
     State(a): State<App>,
+    from: Option<axum::Extension<crate::tls::RemoteAddr>>,
     Json(req): Json<EnrollRequest>,
 ) -> R<(StatusCode, Json<Enrollment>)> {
-    let e = a.enroll.submit(req).await.map_err(|e| bad(e.to_string()))?;
+    let from = from.map(|axum::Extension(crate::tls::RemoteAddr(sa))| sa.ip().to_string());
+    let e = a
+        .enroll
+        .submit_from(req, from)
+        .await
+        .map_err(|e| bad(e.to_string()))?;
     if e.status == EnrollStatus::Pending {
         tracing::info!(id = %e.id, host = %e.hostname, fp = %e.fingerprint, "enrolment pending: `xdctl approve {}`", e.hostname);
     }
@@ -521,20 +588,57 @@ async fn enroll_get(State(a): State<App>, Path(id): Path<String>) -> R<Json<Enro
         .ok_or_else(|| nf("enrolment"))
 }
 
-async fn enroll_approve(State(a): State<App>, Path(id): Path<String>) -> R<Json<Enrollment>> {
+/// An xdj client renews its certificate with the one it holds (still good):
+/// a new one for the same name, no approval. Client certificates only.
+async fn enroll_renew(
+    State(a): State<App>,
+    axum::Extension(authn): axum::Extension<Authn>,
+    Json(req): Json<xdebbie_core::RenewRequest>,
+) -> R<Json<xdebbie_core::Renewed>> {
+    let Authn::Client(peer) = authn else {
+        return Err(ApiErr(
+            StatusCode::FORBIDDEN,
+            "renewal is for an xdj client's certificate".into(),
+        ));
+    };
+    let (cert, ca) = a
+        .enroll
+        .renew_client(&peer.hostname, &req.csr)
+        .map_err(|e| bad(e.to_string()))?;
+    tracing::info!(client = %peer.hostname, "renewed a client certificate");
+    Ok(Json(xdebbie_core::Renewed { cert, ca }))
+}
+
+/// The enroll-only token decides client enrolments only.
+fn only_for(authn: &Option<axum::Extension<Authn>>) -> Option<xdebbie_core::EnrollKind> {
+    match authn {
+        Some(axum::Extension(Authn::Enroll)) => Some(xdebbie_core::EnrollKind::Client),
+        _ => None,
+    }
+}
+
+async fn enroll_approve(
+    State(a): State<App>,
+    Path(id): Path<String>,
+    authn: Option<axum::Extension<Authn>>,
+) -> R<Json<Enrollment>> {
     let e = a
         .enroll
-        .decide(&id, Decision::Approve)
+        .decide_kind(&id, Decision::Approve, only_for(&authn))
         .await
         .map_err(|e| ApiErr(StatusCode::NOT_FOUND, e.to_string()))?;
     tracing::info!(id = %e.id, host = %e.hostname, "enrolment approved");
     Ok(Json(e))
 }
 
-async fn enroll_deny(State(a): State<App>, Path(id): Path<String>) -> R<Json<Enrollment>> {
+async fn enroll_deny(
+    State(a): State<App>,
+    Path(id): Path<String>,
+    authn: Option<axum::Extension<Authn>>,
+) -> R<Json<Enrollment>> {
     let e = a
         .enroll
-        .decide(&id, Decision::Deny)
+        .decide_kind(&id, Decision::Deny, only_for(&authn))
         .await
         .map_err(|e| ApiErr(StatusCode::NOT_FOUND, e.to_string()))?;
     tracing::info!(id = %e.id, host = %e.hostname, "enrolment denied");
@@ -1664,6 +1768,7 @@ mod tests {
         // Joiner: key + CSR, submit, poll.
         let csr = crate::bootstrap::api_tls::make_csr("joiner.test").unwrap();
         let req = EnrollRequest {
+            kind: xdebbie_core::EnrollKind::Box,
             hostname: "joiner.test".into(),
             box_id: None,
             api_url: "https://joiner.test:23443".into(),

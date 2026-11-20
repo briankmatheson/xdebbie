@@ -721,10 +721,45 @@ pub struct TokenRotated {
     pub previous: String,
 }
 
-/// `POST /v1/enroll` body: a box asking the cluster CA to sign its API
-/// certificate. The private key never leaves the joiner.
+/// What is asking to be enrolled. A `box` joins the mesh (a member
+/// certificate: serves its API, acts as a box). A `client` is someone's
+/// xdj: its certificate is client-only, lasts an hour, names no box, and
+/// opens only the few routes a client needs.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum EnrollKind {
+    #[default]
+    Box,
+    Client,
+}
+
+impl EnrollKind {
+    pub fn is_box(&self) -> bool {
+        *self == EnrollKind::Box
+    }
+}
+
+/// `POST /v1/enroll/renew` body: a client with a certificate that is still
+/// good asking for the next one (same name, new key). No approval.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RenewRequest {
+    /// PEM certificate signing request; its CN must be the client's name.
+    pub csr: String,
+}
+
+/// `POST /v1/enroll/renew` answer.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Renewed {
+    pub cert: String,
+    pub ca: String,
+}
+
+/// `POST /v1/enroll` body: a box (or an xdj client) asking the cluster CA
+/// to sign its certificate. The private key never leaves the joiner.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EnrollRequest {
+    #[serde(default, skip_serializing_if = "EnrollKind::is_box")]
+    pub kind: EnrollKind,
     pub hostname: String,
     /// Mesh box id (0-253) the joiner would like; `None` = CA box picks
     /// the lowest free one. Either way the answer is in `Enrollment.box_id`.
@@ -764,6 +799,8 @@ impl std::fmt::Display for EnrollStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Enrollment {
     pub id: String,
+    #[serde(default, skip_serializing_if = "EnrollKind::is_box")]
+    pub kind: EnrollKind,
     pub hostname: String,
     /// Mesh box id assigned to this box (bridge MAC, underlay address).
     #[serde(rename = "box")]
@@ -778,6 +815,10 @@ pub struct Enrollment {
     pub decided_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wg_pubkey: Option<String>,
+    /// The address the request came from, as the box that took it saw it
+    /// (shown to whoever approves).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
     /// PEM certificate issued by the cluster CA (approved only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cert: Option<String>,

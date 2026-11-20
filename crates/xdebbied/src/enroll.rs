@@ -18,13 +18,42 @@ use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
-use xdebbie_core::{EnrollRequest, EnrollStatus, Enrollment};
+use xdebbie_core::{EnrollKind, EnrollRequest, EnrollStatus, Enrollment};
 
 use crate::bootstrap::api_tls::{CaSigner, csr_fingerprint};
 
 /// Pending requests kept at most; beyond that `submit` refuses, so a
 /// misbehaving LAN cannot fill the disk.
 const MAX_PENDING: usize = 64;
+
+/// An xdj client's request nobody decided within this long is denied
+/// (an admin approves it on the aviary page while the person waits).
+const CLIENT_PENDING_MINUTES: i64 = 15;
+
+/// A client name: what goes in its certificate's CN.
+fn client_name_ok(n: &str) -> bool {
+    !n.is_empty()
+        && n.len() <= 63
+        && n.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '_')
+}
+
+/// Deny client requests left pending too long. True when it changed any.
+fn expire(recs: &mut [Record]) -> bool {
+    let cutoff = Utc::now() - chrono::Duration::minutes(CLIENT_PENDING_MINUTES);
+    let mut changed = false;
+    for r in recs.iter_mut() {
+        if r.view.kind == EnrollKind::Client
+            && r.view.status == EnrollStatus::Pending
+            && r.view.requested_at < cutoff
+        {
+            r.view.status = EnrollStatus::Denied;
+            r.view.decided_at = Some(Utc::now());
+            changed = true;
+        }
+    }
+    changed
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Record {
@@ -123,12 +152,26 @@ impl Enrollments {
     /// Queue a request. Re-posting the same key returns the existing
     /// enrolment (so a restarted bootstrap resumes); a new key for a
     /// hostname with a pending request replaces that request.
+    #[allow(dead_code)] // the API submits with the caller's address (submit_from)
     pub async fn submit(&self, req: EnrollRequest) -> Result<Enrollment> {
+        self.submit_from(req, None).await
+    }
+
+    /// `submit`, noting the address the request came from.
+    pub async fn submit_from(
+        &self,
+        req: EnrollRequest,
+        from: Option<String>,
+    ) -> Result<Enrollment> {
         if req.hostname.trim().is_empty() {
             bail!("hostname must not be empty");
         }
+        if req.kind == EnrollKind::Client && !client_name_ok(&req.hostname) {
+            bail!("a client name is letters, digits, '-', '.' and '_' (at most 63)");
+        }
         let fingerprint = csr_fingerprint(&req.csr)?;
         let mut recs = self.recs.write().await;
+        expire(&mut recs);
         if let Some(r) = recs.iter().find(|r| r.view.fingerprint == fingerprint) {
             return Ok(r.view.clone());
         }
@@ -143,9 +186,14 @@ impl Enrollments {
         {
             bail!("too many pending enrolments ({MAX_PENDING}); deny some first");
         }
-        let box_id = self.allocate(&recs, &req.hostname, req.box_id)?;
+        // a client is no box: it takes no box id
+        let box_id = match req.kind {
+            EnrollKind::Box => self.allocate(&recs, &req.hostname, req.box_id)?,
+            EnrollKind::Client => 0,
+        };
         let view = Enrollment {
             id: uuid::Uuid::new_v4().to_string()[..8].to_string(),
+            kind: req.kind,
             hostname: req.hostname,
             box_id,
             api_url: req.api_url,
@@ -154,6 +202,7 @@ impl Enrollments {
             requested_at: Utc::now(),
             decided_at: None,
             wg_pubkey: req.wg_pubkey,
+            from,
             cert: None,
             ca: None,
         };
@@ -176,13 +225,28 @@ impl Enrollments {
 
     /// Approve or deny by id or hostname (pending ones first; an exact id
     /// always wins).
+    #[allow(dead_code)] // the API decides by kind (decide_kind); tests and callers by key
     pub async fn decide(&self, key: &str, d: Decision) -> Result<Enrollment> {
+        self.decide_kind(key, d, None).await
+    }
+
+    /// `decide`, limited to one kind when `only` is set (the enroll-only
+    /// token decides xdj clients and nothing else).
+    pub async fn decide_kind(
+        &self,
+        key: &str,
+        d: Decision,
+        only: Option<EnrollKind>,
+    ) -> Result<Enrollment> {
         let Some(signer) = &self.signer else {
             bail!(
                 "this box does not hold the cluster CA key; approve on the box that was bootstrapped first"
             );
         };
         let mut recs = self.recs.write().await;
+        if expire(&mut recs) {
+            self.persist(&recs)?;
+        }
         let idx = recs
             .iter()
             .position(|r| r.view.id == key)
@@ -193,12 +257,21 @@ impl Enrollments {
             .or_else(|| recs.iter().position(|r| r.view.hostname == key))
             .ok_or_else(|| anyhow::anyhow!("no enrolment {key:?}"))?;
         let r = &mut recs[idx];
+        if only.is_some_and(|k| k != r.view.kind) {
+            bail!("no enrolment {key:?} of that kind");
+        }
         match d {
             Decision::Approve => {
                 if r.view.status == EnrollStatus::Approved {
                     return Ok(r.view.clone());
                 }
-                let cert = signer.sign_csr(&r.csr)?;
+                if r.view.status == EnrollStatus::Denied {
+                    bail!("enrolment {key:?} was denied (or ran out of time): ask again");
+                }
+                let cert = match r.view.kind {
+                    EnrollKind::Box => signer.sign_csr(&r.csr)?,
+                    EnrollKind::Client => signer.sign_client_csr(&r.csr)?.0,
+                };
                 r.view.cert = Some(cert);
                 r.view.ca = Some(signer.ca_pem().to_string());
                 r.view.status = EnrollStatus::Approved;
@@ -213,6 +286,21 @@ impl Enrollments {
         let out = r.view.clone();
         self.persist(&recs)?;
         Ok(out)
+    }
+
+    /// The next certificate for a client whose current one is still good:
+    /// the CSR must name the same client (`cn`). No approval, no record.
+    pub fn renew_client(&self, cn: &str, csr: &str) -> Result<(String, String)> {
+        let Some(signer) = &self.signer else {
+            bail!(
+                "this box does not hold the cluster CA key; renew on the box that was bootstrapped first"
+            );
+        };
+        let (cert, name) = signer.sign_client_csr(csr)?;
+        if name != cn {
+            bail!("the CSR names {name:?}, not {cn:?}: a client renews only itself");
+        }
+        Ok((cert, signer.ca_pem().to_string()))
     }
 
     fn persist(&self, recs: &[Record]) -> Result<()> {
@@ -251,6 +339,7 @@ mod tests {
         let csr = api_tls::make_csr(host).unwrap();
         (
             EnrollRequest {
+                kind: xdebbie_core::EnrollKind::Box,
                 hostname: host.into(),
                 box_id: None,
                 api_url: format!("https://{host}:23443"),
@@ -259,6 +348,108 @@ mod tests {
             },
             csr.fingerprint,
         )
+    }
+
+    fn client_req(name: &str) -> EnrollRequest {
+        let csr = api_tls::make_csr(name).unwrap();
+        EnrollRequest {
+            kind: xdebbie_core::EnrollKind::Client,
+            hostname: name.into(),
+            box_id: None,
+            api_url: String::new(),
+            csr: csr.csr_pem,
+            wg_pubkey: None,
+        }
+    }
+
+    fn subject_and_life(pem: &str) -> (Vec<String>, i64, bool) {
+        use rustls::pki_types::pem::PemObject;
+        let der = rustls::pki_types::CertificateDer::from_pem_slice(pem.as_bytes()).unwrap();
+        let (_, x) = x509_parser::parse_x509_certificate(&der).unwrap();
+        let orgs = x
+            .subject()
+            .iter_organization()
+            .filter_map(|o| o.as_str().ok().map(str::to_string))
+            .collect();
+        let life = x.validity().not_after.timestamp() - x.validity().not_before.timestamp();
+        let server = x
+            .extended_key_usage()
+            .ok()
+            .flatten()
+            .is_some_and(|e| e.value.server_auth);
+        (orgs, life, server)
+    }
+
+    #[tokio::test]
+    async fn a_client_gets_an_hour_long_client_only_cert_and_no_box() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, signer) = ca_in(dir.path());
+        let e = Enrollments::load(dir.path().join("enroll.json"), Some(signer), vec![0]).unwrap();
+        let p = e
+            .submit_from(client_req("bmath-laptop"), Some("10.22.9.2".into()))
+            .await
+            .unwrap();
+        assert_eq!(p.kind, xdebbie_core::EnrollKind::Client);
+        assert_eq!(p.box_id, 0, "a client takes no box id");
+        assert_eq!(p.from.as_deref(), Some("10.22.9.2"));
+        // the enroll-only token cannot decide a box, nor a client as one
+        let (boxreq, _) = req("joiner");
+        let b = e.submit(boxreq).await.unwrap();
+        assert!(
+            e.decide_kind(
+                &b.id,
+                Decision::Approve,
+                Some(xdebbie_core::EnrollKind::Client)
+            )
+            .await
+            .is_err()
+        );
+        let ok = e
+            .decide_kind(
+                &p.id,
+                Decision::Approve,
+                Some(xdebbie_core::EnrollKind::Client),
+            )
+            .await
+            .unwrap();
+        let (orgs, life, server) = subject_and_life(ok.cert.as_deref().unwrap());
+        assert_eq!(orgs, vec![api_tls::CLIENT_ORG.to_string()]);
+        assert!(!server, "a client cert is client-only");
+        assert_eq!(
+            life,
+            (api_tls::CLIENT_MINUTES + 1) * 60,
+            "an hour (from a minute back)"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_client_renews_only_itself() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, signer) = ca_in(dir.path());
+        let e = Enrollments::load(dir.path().join("enroll.json"), Some(signer), vec![0]).unwrap();
+        let mine = api_tls::make_csr("bmath-laptop").unwrap().csr_pem;
+        let theirs = api_tls::make_csr("someone-else").unwrap().csr_pem;
+        assert!(e.renew_client("bmath-laptop", &mine).is_ok());
+        assert!(e.renew_client("bmath-laptop", &theirs).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_client_request_runs_out_after_fifteen_minutes() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, signer) = ca_in(dir.path());
+        let e = Enrollments::load(dir.path().join("enroll.json"), Some(signer), vec![0]).unwrap();
+        let p = e.submit(client_req("late")).await.unwrap();
+        {
+            let mut recs = e.recs.write().await;
+            recs[0].view.requested_at -= chrono::Duration::minutes(CLIENT_PENDING_MINUTES + 1);
+        }
+        let err = e
+            .decide(&p.id, Decision::Approve)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("ran out of time"), "{err}");
+        assert!(!client_name_ok("bad name"));
     }
 
     #[tokio::test]

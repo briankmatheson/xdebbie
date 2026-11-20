@@ -55,6 +55,8 @@ pub struct Tokens {
     nodes: RwLock<Vec<TokenNode>>,
     /// `settings_token_file`: opens `/v1/settings` only. Not rotated.
     settings: Option<String>,
+    /// `enroll_token_file`: lists and decides xdj client enrolments only.
+    enroll: Option<String>,
 }
 
 impl Tokens {
@@ -89,6 +91,7 @@ impl Tokens {
             current_used: AtomicBool::new(false),
             nodes: RwLock::new(vec![]),
             settings: None,
+            enroll: None,
         }
     }
 
@@ -96,6 +99,19 @@ impl Tokens {
     pub fn with_settings_token(mut self, token: Option<String>) -> Self {
         self.settings = token.filter(|t| !t.is_empty());
         self
+    }
+
+    /// Also accept `token` for deciding xdj client enrolments (and nothing else).
+    pub fn with_enroll_token(mut self, token: Option<String>) -> Self {
+        self.enroll = token.filter(|t| !t.is_empty());
+        self
+    }
+
+    /// Is `presented` the enroll-only token?
+    pub fn accepts_enroll(&self, presented: &str) -> bool {
+        self.enroll
+            .as_deref()
+            .is_some_and(|s| constant_time_eq(presented.as_bytes(), s.as_bytes()))
     }
 
     /// Is `presented` the settings-only token?
