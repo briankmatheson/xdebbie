@@ -74,6 +74,70 @@ carrier (it is UDP `listen_port`, accepted by default policy).
 Conditions `WireguardModuleMissing` and `WireguardConflict` (the underlay
 name exists but isn't a WireGuard link we own) are blocking.
 
+## Clients (xdj)
+
+A laptop or server that runs **xdj** is a mesh *client*, not a box of the
+mesh: one WireGuard link to this box (the hub), no Geneve tunnel, and it
+routes `10.23.0.0/16` through the hub. Register it in `spec.clients`, not
+`spec.peers`:
+
+```
+client$ xdj key                                             # prints KEY
+hub$    xdctl mesh client add --pubkey KEY --name laptop --hub-endpoint HUB_HOST
+added xdj client box 3 (10.22.3.1)
+
+run on the client:
+  xdj join 3 HUB_PUBKEY HUB_HOST:51820
+client$ xdj join 3 HUB_PUBKEY HUB_HOST:51820                # the line printed above, verbatim
+```
+
+`client add` picks the **lowest free box number** (1-254) that is not this
+box, a peer or another client; `--box B` asks for one and is refused if it
+is taken (nothing is ever replaced). Adding a key that is already a client
+just reports its box. The printed line carries this box's WireGuard public
+key (as `xdctl mesh wg` shows it) and `HOST:listen_port`; without
+`--hub-endpoint HOST[:PORT]` it prints the placeholder `HUB_HOST:PORT` for
+you to fill in (xdj ignores a literal `HUB_HOST...` and keeps the endpoint
+it has).
+
+A client is a WireGuard peer and nothing more:
+
+| | peer | client |
+|---|---|---|
+| WireGuard peer, `allowed-ips 10.22.BOX.1/32`, keepalive | yes | yes |
+| Geneve tunnel `gnv-bBOX`, FDB entries, probe | yes | no |
+| row in `status.peers`, counts for Ready/Degraded | yes | no: a client being away is normal |
+| row in `status.wireguard.peers` | yes | yes, with `"client": true` and its `name` |
+| `endpoint` | usually | optional; clients initiate |
+
+```json
+"spec":   {"clients": [{"box": 3, "pubkey": "KEY", "name": "laptop"}]}
+"status": {"wireguard": {"peers": [
+  {"box": 3, "pubkey": "KEY", "endpoint": "198.51.100.7:40312",
+   "handshake_age_s": 12, "rx_bytes": 1234, "tx_bytes": 5678,
+   "client": true, "name": "laptop"}]}}
+```
+
+Rules (checked on every PUT): clients need a managed WireGuard underlay;
+box 1-254 and unique across this box, the peers and the clients; `pubkey`
+required, a 44-character WireGuard key, unique across peers and clients;
+`name` optional, `[A-Za-z0-9._-]`, not all digits, unique. `xdctl mesh peer
+add` refuses a box that belongs to a client.
+
+`xdctl mesh ls` lists clients in their own table (box, name, key prefix,
+endpoint, last handshake); `xdctl mesh client rm BOX|NAME|PUBKEY` removes
+one (its WireGuard peer goes, nothing else is touched). The hub only
+routes for clients with `mesh_routed` on (`/v1/settings`).
+
+**Moving an xdj box that was added as a peer** (it shows Down/Degraded
+forever, since it never answers Geneve probes), keeping its number so the
+client needs no change:
+
+```
+xdctl mesh peer rm BOX
+xdctl mesh client add --box BOX --pubkey KEY
+```
+
 ## Configuration
 
 Two sources, API wins:
@@ -114,6 +178,12 @@ pubkey = "EtEvrro2LlkElPgm+ge5ndqtzL2o9ehIWwyIFnKsBQU="
 endpoint = "gram.example:51820"
 # remote = "10.22.1.1"       # derived when [mesh.wireguard] is set, required otherwise
 # probe = "10.23.1.1"        # default: 10.23.<box>.1 (derived) / remote (learn)
+
+[[mesh.clients]]             # xdj; needs the managed WireGuard underlay
+box = 3
+pubkey = "4ZJxNbbSoUq4tgYKAa0Ow6EYwlANqldjfPGYdPZ9P2I="
+name = "laptop"              # optional
+# endpoint = "host:51820"    # optional: clients initiate
 ```
 
 Validation errors are returned field-by-field, e.g.
@@ -128,6 +198,8 @@ xdctl mesh apply -f mesh.json         # PUT (bare spec or {spec,status} doc)
 xdctl mesh peer add 2 10.22.2.1       # read-modify-write with If-Match (plain underlay)
 xdctl mesh peer add 2 --pubkey K --endpoint h2:51820   # managed WireGuard: remote derived
 xdctl mesh peer rm 2
+xdctl mesh client add --pubkey KEY [--name NAME] [--box BOX] [--hub-endpoint HOST[:PORT]]
+xdctl mesh client rm BOX|NAME|PUBKEY  # xdj clients (see "Clients (xdj)")
 xdctl mesh wg                         # local WireGuard identity + per-peer handshakes
 xdctl mesh reconcile                  # nudge the loop
 xdctl mesh delete --yes               # tear down; falls back to [mesh] TOML
@@ -238,5 +310,6 @@ the full peer list. With the managed underlay each peer is just
 `{box, pubkey, endpoint}` (remote derived, no `probe`), and enrol/revoke is a
 single PUT — the daemon orders the WireGuard and Geneve changes itself.
 Wait for `observed_generation == generation` before treating a change as
-applied. See the
+applied. `spec.clients` (xdj) is not Flock's to manage: carry it over from
+the `GET` unchanged, or the PUT removes every client. See the
 module docs in `crates/xdebbied/src/mesh/mod.rs`.

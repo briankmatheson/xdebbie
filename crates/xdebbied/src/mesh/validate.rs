@@ -264,7 +264,109 @@ pub fn validate(spec: &MeshSpec, env: &Env) -> Vec<FieldError> {
             }
         }
     }
+
+    // Clients (xdj): WireGuard peers only. Their box numbers share one
+    // space with this box and the peers, since each one is `10.22.<box>.1`.
+    if !spec.clients.is_empty() && spec.wireguard.is_none() {
+        err(
+            &mut e,
+            "clients",
+            "clients need a managed WireGuard underlay (`wireguard`); this mesh has none",
+        );
+    }
+    let mut client_boxes = HashSet::new();
+    let mut names = HashSet::new();
+    for (i, c) in spec.clients.iter().enumerate() {
+        let f = |name: &str| format!("clients[{i}].{name}");
+        if !(1..=254).contains(&c.box_id) {
+            err(&mut e, f("box"), format!("must be 1–254, got {}", c.box_id));
+        } else if c.box_id == spec.box_id {
+            err(
+                &mut e,
+                f("box"),
+                format!("{} is the local box number", c.box_id),
+            );
+        } else if let Some(j) = spec.peers.iter().position(|p| p.box_id == c.box_id) {
+            err(
+                &mut e,
+                f("box"),
+                format!(
+                    "box {} is already used by peers[{j}] (a Geneve peer); pick another",
+                    c.box_id
+                ),
+            );
+        } else if !client_boxes.insert(c.box_id) {
+            err(
+                &mut e,
+                f("box"),
+                format!("box {} is already used by another client", c.box_id),
+            );
+        } else {
+            let a = c.addr();
+            if wg_addr == Some(a) {
+                err(
+                    &mut e,
+                    f("box"),
+                    format!("{a} is this box's own WireGuard address"),
+                );
+            } else if remotes.contains(&a) {
+                err(
+                    &mut e,
+                    f("box"),
+                    format!("{a} is already a peer's remote address"),
+                );
+            } else if local.contains(&a) {
+                err(
+                    &mut e,
+                    f("box"),
+                    format!("{a} is one of this host's own addresses"),
+                );
+            }
+        }
+        if !valid_wg_key(&c.pubkey) {
+            err(
+                &mut e,
+                f("pubkey"),
+                "must be a 32-byte base64 key (44 chars ending in '=')",
+            );
+        } else if !pubkeys.insert(c.pubkey.clone()) {
+            err(
+                &mut e,
+                f("pubkey"),
+                "duplicate public key (already a peer or another client)",
+            );
+        }
+        if let Some(n) = &c.name {
+            if !valid_client_name(n) {
+                err(
+                    &mut e,
+                    f("name"),
+                    "must be 1–63 chars of letters, digits, '.', '_' or '-', and not all digits",
+                );
+            } else if !names.insert(n.as_str()) {
+                err(&mut e, f("name"), format!("duplicate client name {n:?}"));
+            }
+        }
+        if let Some(ep) = &c.endpoint
+            && !valid_endpoint(ep)
+        {
+            err(
+                &mut e,
+                f("endpoint"),
+                "must be host:port or [v6]:port with a non-zero port",
+            );
+        }
+    }
     e
+}
+
+/// Client names: `[A-Za-z0-9._-]{1,63}`, not all digits (so a name never
+/// reads as a box number in `xdctl mesh client rm`).
+pub fn valid_client_name(n: &str) -> bool {
+    (1..=63).contains(&n.len())
+        && n.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        && !n.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// 44-char base64 of 32 bytes: `[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=`.
@@ -494,5 +596,113 @@ mod tests {
                 && !valid_endpoint("host:0")
                 && !valid_endpoint(":51820")
         );
+    }
+
+    const KA: &str = "EtEvrro2LlkElPgm+ge5ndqtzL2o9ehIWwyIFnKsBQU=";
+    const KB: &str = "2Mt9XkPn7iVObR5nCjQYhTe1rtVf6hVuvIG1cyL+zGM=";
+    const KC: &str = "4ZJxNbbSoUq4tgYKAa0Ow6EYwlANqldjfPGYdPZ9P2I=";
+
+    fn wg_base() -> MeshSpec {
+        let mut s = base();
+        s.wireguard = Some(WireguardSpec::default());
+        s.peers = vec![PeerSpec {
+            pubkey: Some(KA.into()),
+            ..PeerSpec::new(1, Ipv4Addr::new(10, 22, 1, 1))
+        }];
+        s.clients = vec![ClientSpec {
+            box_id: 2,
+            pubkey: KB.into(),
+            name: Some("laptop".into()),
+            endpoint: None,
+        }];
+        s
+    }
+
+    #[test]
+    fn clients_valid() {
+        assert!(validate(&wg_base(), &env()).is_empty());
+        let mut s = wg_base();
+        s.clients[0].box_id = 254;
+        s.clients[0].endpoint = Some("laptop.lan:51820".into());
+        assert!(validate(&s, &env()).is_empty());
+    }
+
+    #[test]
+    fn client_boxes_unique_across_self_peers_and_clients() {
+        let mut s = wg_base();
+        s.clients[0].box_id = 0;
+        let v = validate(&s, &env());
+        assert_eq!(fields(&v), vec!["clients[0].box"]);
+        assert!(v[0].message.contains("1–254"), "{v:?}");
+
+        let mut s = wg_base();
+        s.box_id = 5;
+        s.clients[0].box_id = 5;
+        let v = validate(&s, &env());
+        assert_eq!(fields(&v), vec!["clients[0].box"]);
+        assert!(v[0].message.contains("local box"), "{v:?}");
+
+        let mut s = wg_base();
+        s.clients[0].box_id = 1;
+        let v = validate(&s, &env());
+        assert_eq!(fields(&v), vec!["clients[0].box"]);
+        assert!(v[0].message.contains("peers[0]"), "{v:?}");
+
+        let mut s = wg_base();
+        s.clients.push(ClientSpec {
+            box_id: 2,
+            pubkey: KC.into(),
+            name: None,
+            endpoint: None,
+        });
+        let v = validate(&s, &env());
+        assert_eq!(fields(&v), vec!["clients[1].box"]);
+        assert!(v[0].message.contains("another client"), "{v:?}");
+
+        // a peer whose explicit remote is a client's address
+        let mut s = wg_base();
+        s.peers[0].remote = Ipv4Addr::new(10, 22, 2, 1);
+        let v = validate(&s, &env());
+        assert_eq!(fields(&v), vec!["clients[0].box"]);
+    }
+
+    #[test]
+    fn client_pubkey_name_endpoint() {
+        let mut s = wg_base();
+        s.clients[0].pubkey = "short".into();
+        assert_eq!(fields(&validate(&s, &env())), vec!["clients[0].pubkey"]);
+
+        let mut s = wg_base();
+        s.clients[0].pubkey = KA.into(); // the peer's key
+        let v = validate(&s, &env());
+        assert_eq!(fields(&v), vec!["clients[0].pubkey"]);
+        assert!(v[0].message.contains("duplicate"));
+
+        let mut s = wg_base();
+        s.clients[0].name = Some("12".into());
+        assert_eq!(fields(&validate(&s, &env())), vec!["clients[0].name"]);
+        s.clients[0].name = Some("has space".into());
+        assert_eq!(fields(&validate(&s, &env())), vec!["clients[0].name"]);
+        let mut s = wg_base();
+        s.clients.push(ClientSpec {
+            box_id: 3,
+            pubkey: KC.into(),
+            name: Some("laptop".into()),
+            endpoint: Some("nohost".into()),
+        });
+        assert_eq!(
+            fields(&validate(&s, &env())),
+            vec!["clients[1].name", "clients[1].endpoint"]
+        );
+    }
+
+    #[test]
+    fn clients_need_wireguard() {
+        let mut s = base();
+        s.clients = wg_base().clients;
+        s.clients[0].box_id = 3; // base() has peers 1 and 2
+        let v = validate(&s, &env());
+        assert_eq!(fields(&v), vec!["clients"]);
+        assert!(v[0].message.contains("WireGuard"));
     }
 }
