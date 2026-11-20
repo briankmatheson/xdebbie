@@ -1821,7 +1821,7 @@ mod tests {
         assert!(st.is(ConditionType::Ready), "{:?}", st.conditions);
         assert!(!st.is(ConditionType::Degraded));
         assert!(
-            st.metrics.peers.get("3").is_none(),
+            !st.metrics.peers.contains_key("3"),
             "no probe metrics for a client"
         );
 
