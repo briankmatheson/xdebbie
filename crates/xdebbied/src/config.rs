@@ -35,6 +35,11 @@ pub struct Config {
     /// else, for the aviary page, where admins approve them.
     #[serde(default)]
     pub enroll_token_file: Option<PathBuf>,
+    /// A token that opens the placement dry run (`POST /v1/schedule`) and
+    /// nothing else, for a caller that asks whether one more VM would fit
+    /// before it asks for one (the aviary page's Add node).
+    #[serde(default)]
+    pub schedule_token_file: Option<PathBuf>,
     /// PEM certificate chain and key. Both set = HTTPS; neither = plain HTTP.
     #[serde(default)]
     pub tls_cert: Option<PathBuf>,

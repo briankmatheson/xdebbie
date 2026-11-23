@@ -222,6 +222,9 @@ pub enum Authn {
     /// The enroll-only token (the aviary page): list and decide xdj client
     /// enrolments, nothing else.
     Enroll,
+    /// The dry-run-only token (the aviary page's Add node): `POST
+    /// /v1/schedule` and nothing else. It creates nothing.
+    Schedule,
     /// An xdj client's certificate: [`client_may`] routes only.
     Client(crate::tls::PeerIdentity),
     /// Only allowed on the public enrolment routes.
@@ -296,6 +299,7 @@ pub async fn authenticate(
         (Some(t), Some(p), _) if t.accepts(&p).await => Authn::Token,
         (Some(t), Some(p), _) if t.accepts_settings(&p) => Authn::Settings,
         (Some(t), Some(p), _) if t.accepts_enroll(&p) => Authn::Enroll,
+        (Some(t), Some(p), _) if t.accepts_schedule(&p) => Authn::Schedule,
         (Some(_), _, Some(id)) if id.client => Authn::Client(id),
         (Some(_), _, Some(id)) => Authn::Cert(id),
         _ => Authn::Anonymous,
@@ -307,6 +311,15 @@ pub async fn authenticate(
         return ApiErr(
             StatusCode::FORBIDDEN,
             "the settings token opens /v1/settings only".into(),
+        )
+        .into_response();
+    }
+    if authn == Authn::Schedule
+        && !(req.method() == axum::http::Method::POST && path.trim_end_matches('/') == "/schedule")
+    {
+        return ApiErr(
+            StatusCode::FORBIDDEN,
+            "the schedule token opens the POST /v1/schedule dry run only".into(),
         )
         .into_response();
     }
@@ -1675,6 +1688,64 @@ mod tests {
             501
         );
         assert_eq!(get("/v1/vms", Some("secret")).await.unwrap().status(), 200);
+    }
+
+    #[tokio::test]
+    async fn schedule_token_opens_the_dry_run_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let tokens = Arc::new(
+            Tokens::in_memory(TokenSet {
+                current: "secret".into(),
+                previous: None,
+            })
+            .with_schedule_token(Some("fit".into())),
+        );
+        let url = spawn_with(
+            Leadership::standalone("box", "http://box:23443"),
+            Store::open(dir.path().join("s.json")).unwrap(),
+            tokens,
+        )
+        .await;
+        let c = reqwest::Client::new();
+        let spec = serde_json::json!({
+            "name": "dry", "vcpus": 2, "memoryMib": 8192, "diskGib": 20, "image": "img"
+        });
+        let dry = |t: &str| {
+            c.post(format!("{url}/v1/schedule"))
+                .bearer_auth(t)
+                .json(&spec)
+                .send()
+        };
+        // Past auth: no hosts here, so the scheduler refuses with its reason.
+        let r = dry("fit").await.unwrap();
+        assert_eq!(r.status(), 422);
+        assert!(r.text().await.unwrap().contains("no host"));
+        assert_eq!(dry("secret").await.unwrap().status(), 422);
+        let get = |p: &str| c.get(format!("{url}{p}")).bearer_auth("fit").send();
+        for p in [
+            "/v1/vms",
+            "/v1/hosts",
+            "/v1/settings",
+            "/v1/token",
+            "/v1/schedule",
+        ] {
+            assert_eq!(get(p).await.unwrap().status(), 403, "{p}");
+        }
+        let del = c
+            .delete(format!("{url}/v1/vms/x"))
+            .bearer_auth("fit")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(del.status(), 403);
+        let put = c
+            .put(format!("{url}/v1/hosts/h"))
+            .bearer_auth("fit")
+            .json(&serde_json::json!({"name": "h", "uri": "qemu:///system"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(put.status(), 403);
     }
 
     /// The real thing: HTTPS with client certificates, this box holding the

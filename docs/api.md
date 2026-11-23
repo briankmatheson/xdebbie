@@ -53,6 +53,11 @@ token and cluster client certificates, the token in
 else: hand that one to a caller that only flips these switches (the
 aviary page).
 
+Likewise the token in `schedule_token_file` opens only the dry run,
+`POST /v1/schedule`, and answers `403` everywhere else (reads included).
+It creates nothing: hand it to a caller that asks whether one more VM
+would fit before it asks a cluster for one (the aviary page's Add node).
+
 ## Enrolment
 
 How a box joins (BOOTSTRAP.md, "Joining a cluster"). Decided by the box

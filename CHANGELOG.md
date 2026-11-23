@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `schedule_token_file`: a token that opens the placement dry run
+  (`POST /v1/schedule`) and nothing else, not even reads. For the aviary
+  page's Add node, which asks whether one more worker VM fits on the
+  hosts before it scales a MachineDeployment up.
+
 ## [0.19.0] - 2026-11-20
 
 ### Added
