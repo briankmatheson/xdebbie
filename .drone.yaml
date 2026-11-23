@@ -53,6 +53,11 @@ volumes:
   - name: apt-signing
     secret:
       name: apt-signing
+  # The public Garage's key, RW on the downloads bucket: the download server
+  # (downloads.<domain>) serves that bucket's apt/ as the apt repository.
+  - name: downloads-publish
+    secret:
+      name: downloads-publish
 
 steps:
   - name: check
@@ -86,6 +91,39 @@ steps:
     when:
       event: [tag]
     depends_on: [check]
+
+  # ...and the same in the public Garage's downloads bucket, under apt/, for
+  # the download server: the whole apt bucket (the repository, xdj). Copy,
+  # never sync. Both places for now.
+  - name: mirror-downloads
+    image: registry.mesh.bmath.nyc/xdebbie-builder:2
+    volumes:
+      - name: apt-publish
+        path: /secrets/apt
+      - name: downloads-publish
+        path: /secrets/downloads
+    resources:
+      limits:
+        memory: 256MiB
+    environment:
+      RCLONE_CONFIG_G_TYPE: s3
+      RCLONE_CONFIG_G_PROVIDER: Other
+      RCLONE_CONFIG_G_ENDPOINT: http://garage.aviary-garage.svc.cluster.local:3900
+      RCLONE_CONFIG_G_REGION: garage
+      RCLONE_CONFIG_G_FORCE_PATH_STYLE: "true"
+      RCLONE_CONFIG_D_TYPE: s3
+      RCLONE_CONFIG_D_PROVIDER: Other
+      RCLONE_CONFIG_D_ENDPOINT: http://garage.aviary-garage-public.svc.cluster.local:3900
+      RCLONE_CONFIG_D_REGION: garage
+      RCLONE_CONFIG_D_FORCE_PATH_STYLE: "true"
+    commands:
+      - export RCLONE_CONFIG_G_ACCESS_KEY_ID=$(cat /secrets/apt/access_key) RCLONE_CONFIG_G_SECRET_ACCESS_KEY=$(cat /secrets/apt/secret_key)
+      - export RCLONE_CONFIG_D_ACCESS_KEY_ID=$(cat /secrets/downloads/access_key) RCLONE_CONFIG_D_SECRET_ACCESS_KEY=$(cat /secrets/downloads/secret_key)
+      - rclone copy G:apt D:downloads/apt
+      - rclone ls D:downloads/apt/dists
+    when:
+      event: [tag]
+    depends_on: [package]
 
 ---
 kind: pipeline
