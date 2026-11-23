@@ -86,7 +86,11 @@ steps:
       limits:
         memory: 1024MiB
     commands:
-      - cargo deb -p xdebbied
+      # the package carries xdctl too (target/release/xdctl): build both here,
+      # or it ships whatever xdctl the shared cache last held (v0.20.0 did:
+      # an xdctl from before client-config)
+      - cargo build --release -p xdebbied -p xdctl
+      - cargo deb -p xdebbied --no-build
       - apt-publish "$CARGO_TARGET_DIR"/debian/xdebbied_*.deb
     when:
       event: [tag]
