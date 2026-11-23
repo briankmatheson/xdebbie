@@ -138,6 +138,50 @@ xdctl mesh peer rm BOX
 xdctl mesh client add --box BOX --pubkey KEY
 ```
 
+### What clients are told: `[clients]`
+
+A hub tells its xdj clients about the site: which resolver answers which
+DNS zone, the search domains to try short names in (in order of
+preference), and a welcome banner xdj prints once connected. xdj fetches it
+after each handshake from `GET /v1/client-config/xdj` and keeps a copy.
+
+```toml
+[clients]
+search = ["mesh.example.org", "int.example.org", "example.org"]
+welcome = """
+Welcome to the example mesh.
+  the page:  https://aviary.mesh.example.org/
+"""
+
+[[clients.dns]]
+zone = "mesh.example.org"
+server = "10.23.0.11"
+
+[[clients.dns]]
+zone = "int.example.org"
+server = "10.23.0.243"
+```
+
+Or while running (kept in `client-config.json` beside `state_file`, which
+overrides `[clients]` from then on):
+
+```sh
+xdctl mesh client-config                      # show it
+xdctl mesh client-config set --zone mesh.example.org=10.23.0.11 \
+    --zone int.example.org=10.23.0.243 \
+    --search mesh.example.org,int.example.org,example.org \
+    --welcome-file welcome.txt
+```
+
+Both `GET /v1/client-config` (JSON) and `GET /v1/client-config/xdj` (text)
+are public, like `/v1/version`: a client asks before it holds a
+certificate. Anyone who can reach the API can read them, so **nothing
+secret belongs here**. `PUT /v1/client-config` (the whole document) needs
+the cluster token or a cluster certificate. Each hub answers for itself;
+it is not forwarded to the leader. Checked: zones and search domains are DNS
+names, each zone once, servers are IP addresses, the banner is printable
+text (tabs and newlines allowed) of at most 4 KiB.
+
 ## Configuration
 
 Two sources, API wins:
@@ -200,6 +244,7 @@ xdctl mesh peer add 2 --pubkey K --endpoint h2:51820   # managed WireGuard: remo
 xdctl mesh peer rm 2
 xdctl mesh client add --pubkey KEY [--name NAME] [--box BOX] [--hub-endpoint HOST[:PORT]]
 xdctl mesh client rm BOX|NAME|PUBKEY  # xdj clients (see "Clients (xdj)")
+xdctl mesh client-config [set ...]    # what xdj clients are told (zones, search, welcome)
 xdctl mesh wg                         # local WireGuard identity + per-peer handshakes
 xdctl mesh reconcile                  # nudge the loop
 xdctl mesh delete --yes               # tear down; falls back to [mesh] TOML

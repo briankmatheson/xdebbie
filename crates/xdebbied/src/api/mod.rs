@@ -81,6 +81,8 @@ pub struct App {
     pub agent: Option<crate::agent::AgentApi>,
     /// `/v1/settings`; `None` in tests that do not need it.
     pub settings: Option<Arc<crate::settings::SettingsCtl>>,
+    /// `/v1/client-config`: what xdj clients are told; `None` in tests.
+    pub client_config: Option<Arc<crate::client_config::ClientConfigCtl>>,
 }
 
 /// A ledger entry that is taken back when dropped, however the create
@@ -202,6 +204,12 @@ pub fn router(app: App) -> Router {
             Some(a) => crate::agent::router(a.clone()),
             None => Router::new(),
         })
+        // What this hub tells its xdj clients (site DNS, search, welcome):
+        // this box, never forwarded.
+        .merge(match &app.client_config {
+            Some(c) => crate::client_config::router(c.clone()),
+            None => Router::new(),
+        })
         .layer(middleware::from_fn_with_state(
             app.token.clone(),
             authenticate,
@@ -242,6 +250,9 @@ fn is_public(method: &axum::http::Method, path: &str) -> bool {
         // what version a box runs (and its name and features): xdj version asks
         // the hub over the link before it holds any certificate
         (&axum::http::Method::GET, "/version") => true,
+        // what this hub tells xdj clients (zones, search, welcome): asked
+        // over the link before a client holds a certificate. Nothing secret.
+        (&axum::http::Method::GET, "/client-config" | "/client-config/xdj") => true,
         (&axum::http::Method::GET, p) => p
             .strip_prefix("/enroll/")
             .is_some_and(|id| !id.is_empty() && id != "token" && !id.contains('/')),
@@ -1588,6 +1599,7 @@ mod tests {
             abe_ledger: Arc::default(),
             agent: None,
             settings: None,
+            client_config: None,
         };
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", l.local_addr().unwrap());
@@ -1782,6 +1794,7 @@ mod tests {
             abe_ledger: Arc::default(),
             agent: None,
             settings: None,
+            client_config: None,
         };
         let roots = crate::tls::client_roots(&paths.ca_cert, &dir.path().join("nonexistent"));
         let sc = crate::tls::server_config(&paths.server_cert, &paths.server_key, roots).unwrap();
