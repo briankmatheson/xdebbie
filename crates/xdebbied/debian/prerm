@@ -1,17 +1,15 @@
 #!/bin/sh
+# xdebbied prerm. Stopping the service on remove is cargo-deb's generated
+# section at the DEBHELPER marker near the end. On upgrade the daemon keeps running while the new
+# files unpack, and postinst restarts it: no stop here.
 set -e
 
 case "$1" in
-    remove|upgrade|deconfigure)
-        echo "Stopping xdebbied service..."
-        systemctl stop xdebbied.service || true
+    remove|upgrade|deconfigure|failed-upgrade)
         ;;
-        
-    failed-upgrade)
-        ;;
-        
+
     *)
-        echo "prerm called with unknown argument \`$1'" >&2
+        echo "prerm called with unknown argument '$1'" >&2
         exit 1
         ;;
 esac

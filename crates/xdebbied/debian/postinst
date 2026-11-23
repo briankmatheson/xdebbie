@@ -1,100 +1,86 @@
 #!/bin/sh
+# xdebbied postinst. Enabling, starting and (on upgrade) restarting the
+# service is cargo-deb's generated section at the DEBHELPER marker near the end, which runs after
+# everything here: so the first-install bootstrap below happens before the
+# first start.
 set -e
 
 case "$1" in
     configure)
-        # Operators who may read the config/env (and so drive xdctl without
-        # sudo) are members of this group. bootstrap creates it too; doing it
-        # here means a config shipped by hand before first bootstrap is owned
-        # correctly.
+        # Operators who may read the config and env file (and so run xdctl
+        # without sudo) are members of this group. Bootstrap creates it too.
         getent group xdebbie >/dev/null || groupadd --system xdebbie
 
-        # Create directories
-        mkdir -p /etc/xdebbie /etc/xdebbie/peers
-        mkdir -p /var/lib/xdebbie
+        mkdir -p /etc/xdebbie/peers /var/lib/xdebbie
         chown root:xdebbie /etc/xdebbie /etc/xdebbie/peers
         chmod 0750 /etc/xdebbie /etc/xdebbie/peers
         chmod 0755 /var/lib/xdebbie
 
         # Secrets: root:root 0400. Operator-readable: root:xdebbie 0440.
         # (Older releases left xdebbie_env world-readable, or root-only.)
-        for f in /etc/xdebbie/token /etc/xdebbie/token.previous /etc/xdebbie/api-key.pem /etc/xdebbie/api-ca-key.pem; do
+        for f in /etc/xdebbie/token /etc/xdebbie/token.previous \
+                 /etc/xdebbie/api-key.pem /etc/xdebbie/api-ca-key.pem; do
             [ -e "$f" ] && chown root:root "$f" && chmod 0400 "$f" || true
         done
-        for f in /etc/xdebbie/xdebbied.toml /etc/xdebbie/xdebbie_env /etc/xdebbie/api-ca.pem /etc/xdebbie/api-cert.pem /etc/xdebbie/peers/*.pem; do
+        for f in /etc/xdebbie/xdebbied.toml /etc/xdebbie/xdebbie_env \
+                 /etc/xdebbie/api-ca.pem /etc/xdebbie/api-cert.pem /etc/xdebbie/peers/*.pem; do
             [ -e "$f" ] && chown root:xdebbie "$f" && chmod 0440 "$f" || true
         done
-        
-        # Geneve kernel module for the optional overlay mesh (also listed in
-        # /etc/modules-load.d/xdebbie-mesh.conf for boot). Harmless if unused.
+
+        # The overlay mesh: Geneve tunnels over a WireGuard underlay. Also
+        # loaded at boot by /etc/modules-load.d/xdebbie-mesh.conf.
         modprobe geneve 2>/dev/null || true
         modprobe wireguard 2>/dev/null || true
 
-        # Reload systemd
-        systemctl daemon-reload || true
-        
-        # Enable service (will start on boot)
-        systemctl enable xdebbied.service || true
-        
-        # Configure AppArmor for libvirt backing images
         if command -v apparmor_parser >/dev/null 2>&1; then
-            echo "Configuring AppArmor for libvirt..."
+            # libvirt's virt-aa-helper must be allowed to read the qcow2
+            # backing images VM disks are made from.
+            local_aa=/etc/apparmor.d/local/usr.lib.libvirt.virt-aa-helper
             mkdir -p /etc/apparmor.d/local
-            if [ ! -f /etc/apparmor.d/local/usr.lib.libvirt.virt-aa-helper ]; then
-                touch /etc/apparmor.d/local/usr.lib.libvirt.virt-aa-helper
-            fi
-            # Add rule if not already present
-            if ! grep -q "Allow xdebbie backing images" /etc/apparmor.d/local/usr.lib.libvirt.virt-aa-helper 2>/dev/null; then
-                cat >> /etc/apparmor.d/local/usr.lib.libvirt.virt-aa-helper << 'EOF'
-# Allow xdebbie backing images
-/var/lib/libvirt/images/*.qcow2 r,
-EOF
+            if ! grep -q "Allow xdebbie backing images" "$local_aa" 2>/dev/null; then
+                printf '%s\n' "# Allow xdebbie backing images" \
+                              "/var/lib/libvirt/images/*.qcow2 r," >> "$local_aa"
                 apparmor_parser -r /etc/apparmor.d/usr.lib.libvirt.virt-aa-helper 2>/dev/null || true
             fi
-            # wireguard-tools ships a profile for /usr/bin/wg that only allows
-            # keys under /etc/wireguard; our local/wg override (shipped as a
-            # conffile) also allows /var/lib/xdebbie/wg.key. Reload it.
+            # wireguard-tools' profile for /usr/bin/wg reads keys only under
+            # /etc/wireguard; our conffile local/wg adds /var/lib/xdebbie/wg.key.
             if [ -f /etc/apparmor.d/wg ]; then
                 apparmor_parser -r /etc/apparmor.d/wg 2>/dev/null || true
             fi
         fi
-        
-        # Run bootstrap on first install
+
+        # First install: bootstrap here, so what it prints (the cluster CA's
+        # fingerprint, or why it stopped) lands in this terminal rather than
+        # only in the journal. The service runs it again before every start.
         if [ ! -f /etc/xdebbie/xdebbied.toml ]; then
-            echo "Running initial bootstrap..."
+            echo "xdebbied: bootstrapping this box..."
             /usr/bin/xdebbied bootstrap || true
+            cat <<MSG
+
+xdebbied is installed and starts now.
+  Status:  systemctl status xdebbied
+  Log:     journalctl -u xdebbied -f
+
+To use xdctl, join the xdebbie group (then log in again) and load the env
+file, which holds the API URL, token and CA:
+  sudo usermod -aG xdebbie "\$USER"
+  source /etc/xdebbie/xdebbie_env
+  xdctl host ls
+
+To add another box, on that box run:
+  sudo xdebbied bootstrap --join https://$(hostname -f 2>/dev/null || hostname):23443
+then approve it here:  xdctl approve ITS_HOSTNAME
+(/usr/share/doc/xdebbied/BOOTSTRAP.md has the details.)
+
+MSG
         fi
-        
-        # Start service
-        echo "Starting xdebbied service..."
-        systemctl start xdebbied.service || true
-        
-        echo ""
-        echo "xdebbied installed successfully!"
-        echo ""
-        echo "Check status:"
-        echo "  systemctl status xdebbied"
-        echo ""
-        echo "View logs:"
-        echo "  journalctl -u xdebbied -f"
-        echo ""
-        echo "Configure client: add yourself to the xdebbie group (log in again),"
-        echo "then source the env file (URL, token and CA):"
-        echo "  sudo usermod -aG xdebbie \$USER"
-        echo "  source /etc/xdebbie/xdebbie_env"
-        echo "  xdctl host ls"
-        echo ""
-        echo "The API serves HTTPS with a cert from /etc/xdebbie/api-ca.pem."
-        echo "To add another box: on it, run 'sudo xdebbied bootstrap --join https://$(hostname -f):23443'"
-        echo "then approve it here with 'xdctl approve <its hostname>' (see BOOTSTRAP.md)."
-        echo ""
         ;;
-        
+
     abort-upgrade|abort-remove|abort-deconfigure)
         ;;
-        
+
     *)
-        echo "postinst called with unknown argument \`$1'" >&2
+        echo "postinst called with unknown argument '$1'" >&2
         exit 1
         ;;
 esac

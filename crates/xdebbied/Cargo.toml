@@ -5,25 +5,27 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 edition.workspace = true
-description = "Self-bootstrapping VM orchestrator for libvirt with cluster support"
+description = "Small self-hosted cloud: VMs across a few libvirt hosts, with a WireGuard mesh"
 
 [package.metadata.deb]
 # Debian revision: bump when the same crate version is rebuilt and installed.
 revision = "1"
-maintainer = "xdebbie Team"
-copyright = "2026, xdebbie Team"
+# Maintainer: the workspace's first author (cargo-deb's default).
+copyright = "2026 Brian Matheson and XDebbie contributors"
 license-file = ["../../LICENSE", "0"]
 extended-description = """\
-XDebbie is a self-bootstrapping VM orchestrator that provides:
-- Automatic bootstrapping with dependency installation
-- Self-discovery via multicast on 239.0.0.42:23442
-- Leader election for high availability using Bully algorithm
-- Cluster API provider (CAPX) integration
-- Simple HTTP API for VM management
-- CLI tool (xdctl) for easy management
-- Optional Geneve overlay mesh between hosts over a managed WireGuard underlay (xdctl mesh)
+XDebbie turns a few Debian servers running QEMU/KVM and libvirt into one \
+small cloud that places, runs, moves and heals VMs, and serves them to \
+Kubernetes through Cluster API.
 .
-Includes both xdebbied (daemon) and xdctl (CLI tool).
+The first box bootstraps itself on install: libvirt network and storage \
+pool, config, cluster CA, API certificate and token. Other boxes join with \
+`xdebbied bootstrap --join` and an operator's `xdctl approve`. Between \
+boxes it builds an encrypted WireGuard mesh carrying a Geneve overlay, so \
+VMs on every host share one network, with addresses handed out by its own \
+DHCP responder.
+.
+This package contains the xdebbied daemon and the xdctl command-line tool.
 """
 depends = "libvirt-daemon-system, libvirt-clients, qemu-kvm, qemu-utils, cloud-image-utils, lvm2, thin-provisioning-tools, iproute2, nftables, wireguard-tools, ufw, systemd"
 section = "admin"
@@ -31,10 +33,11 @@ priority = "optional"
 assets = [
     ["target/release/xdebbied", "usr/bin/", "755"],
     ["target/release/xdctl", "usr/bin/", "755"],
-    ["../../README.md", "usr/share/doc/xdebbie/", "644"],
-    ["../../BOOTSTRAP.md", "usr/share/doc/xdebbie/", "644"],
-    ["../../docs/mesh.md", "usr/share/doc/xdebbie/", "644"],
-    ["../../docs/network.md", "usr/share/doc/xdebbie/", "644"],
+    # docs live with the copyright file, in /usr/share/doc/xdebbied
+    ["../../README.md", "usr/share/doc/xdebbied/", "644"],
+    ["../../BOOTSTRAP.md", "usr/share/doc/xdebbied/", "644"],
+    ["../../docs/mesh.md", "usr/share/doc/xdebbied/", "644"],
+    ["../../docs/network.md", "usr/share/doc/xdebbied/", "644"],
     ["assets/modules-load.d/xdebbie-mesh.conf", "etc/modules-load.d/", "644"],
     ["assets/apparmor.d/local/wg", "etc/apparmor.d/local/", "644"],
 ]
