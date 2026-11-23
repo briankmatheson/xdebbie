@@ -1,32 +1,24 @@
-# xdebbie Documentation
+# XDebbie documentation
 
-## Quick Start
+Start with the [README](../README.md) (install, join, use) and
+[BOOTSTRAP.md](../BOOTSTRAP.md) (what bootstrap does, the files it writes,
+joining a cluster).
 
-- [Quickstart Guide](quickstart.md) - Get up and running quickly
-- [Bootstrap Guide](../BOOTSTRAP.md) - Self-bootstrapping functionality
+## Running it
 
-## Features
+- [Operations](operations.md): drain, upgrades, backup, security, limits
+- [Discovery, election and the leader](autodiscovery.md)
+- [Geneve mesh over WireGuard](mesh.md): `xdctl mesh`
+- [Overlay addressing and DHCP](network.md): `xdctl net`
+- [VM storage](storage.md): local disks or ABE NVMe/TCP volumes
+- [Aviary-in-a-Box](aviary-in-a-box.md): XDebbie under Aviary
 
-- [Bootstrap](bootstrap-implementation.md) - Automatic setup and configuration
-- [Autodiscovery](autodiscovery.md) - Multicast discovery and leader election
-- [Geneve mesh](mesh.md) - Optional L2 overlay between hosts
-- [Storage](storage.md) - Local disks vs ABE NVMe/TCP volumes (`storage = abe`)
-- [Migration Guide](migration.md) - Upgrading from older versions
+## Reference
 
-## Design Documents
+- [REST API](api.md)
+- [Architecture](architecture.md): state, reconcile loop, scheduler
+- [Cluster API contract](capi-contract.md): what Cluster API asks, how capx answers
+- [The Debian package](debian-package.md): build, contents, maintainer scripts
 
-- [Bootstrap Design](design/bootstrap.md) - Bootstrap implementation design
-- [Autodiscovery Design](design/autodiscovery.md) - Cluster formation design
-- [Bootstrap Flow](diagrams/bootstrap-flow.md) - Visual flow diagrams
-
-## Development
-
-- [Autodiscovery Roadmap](autodiscovery-roadmap.md) - Implementation phases
-
-## Scripts
-
-See [scripts/](../scripts/) directory for:
-- `build.sh` - Build xdebbied
-- `run-bootstrap.sh` - Run bootstrap helper
-- `test-bootstrap.sh` - Test bootstrap functionality
-- `start.sh` - Start server helper
+Design records live in [../specs](../specs) and [../milestones](../milestones);
+every release is in [CHANGELOG.md](../CHANGELOG.md).

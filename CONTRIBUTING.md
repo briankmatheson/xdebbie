@@ -1,6 +1,6 @@
-# Contributing to Qfodufk8s
+# Contributing to XDebbie
 
-Thanks for helping. Qfodufk8s is GPL-3.0-or-later; by contributing you agree your
+Thanks for helping. XDebbie is GPL-3.0-or-later; by contributing you agree your
 work is released under that license.
 
 ## Ground rules
