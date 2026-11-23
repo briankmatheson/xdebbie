@@ -189,6 +189,7 @@ seed_command = ["cloud-localds", "--network-config={{net}}", "--vendor-data={{ve
 # predate signing (only while upgrading).
 enable_discovery = false  # PUT /v1/settings switches it at runtime
 # settings_token_file = "/etc/xdebbie/settings-token"   # a token for /v1/settings only
+# schedule_token_file = "/etc/xdebbie/schedule-token"   # a token for the POST /v1/schedule dry run only
 multicast_addr = "239.0.0.42:23442"
 # URL peers and xdctl use to reach this box. Auto-detected from the hostname,
 # or from this box's address when the hostname does not resolve.

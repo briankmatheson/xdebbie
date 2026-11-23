@@ -526,7 +526,8 @@ fn load_token(cfg: &config::Config) -> anyhow::Result<Option<Arc<token::Tokens>>
             Some(Arc::new(
                 token::Tokens::load(p)?
                     .with_settings_token(read(&cfg.settings_token_file)?)
-                    .with_enroll_token(read(&cfg.enroll_token_file)?),
+                    .with_enroll_token(read(&cfg.enroll_token_file)?)
+                    .with_schedule_token(read(&cfg.schedule_token_file)?),
             ))
         }
         None => {

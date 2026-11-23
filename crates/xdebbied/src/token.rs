@@ -57,6 +57,8 @@ pub struct Tokens {
     settings: Option<String>,
     /// `enroll_token_file`: lists and decides xdj client enrolments only.
     enroll: Option<String>,
+    /// `schedule_token_file`: the placement dry run (`POST /v1/schedule`) only.
+    schedule: Option<String>,
 }
 
 impl Tokens {
@@ -92,6 +94,7 @@ impl Tokens {
             nodes: RwLock::new(vec![]),
             settings: None,
             enroll: None,
+            schedule: None,
         }
     }
 
@@ -105,6 +108,19 @@ impl Tokens {
     pub fn with_enroll_token(mut self, token: Option<String>) -> Self {
         self.enroll = token.filter(|t| !t.is_empty());
         self
+    }
+
+    /// Also accept `token` for the placement dry run (and nothing else).
+    pub fn with_schedule_token(mut self, token: Option<String>) -> Self {
+        self.schedule = token.filter(|t| !t.is_empty());
+        self
+    }
+
+    /// Is `presented` the dry-run-only token?
+    pub fn accepts_schedule(&self, presented: &str) -> bool {
+        self.schedule
+            .as_deref()
+            .is_some_and(|s| constant_time_eq(presented.as_bytes(), s.as_bytes()))
     }
 
     /// Is `presented` the enroll-only token?
