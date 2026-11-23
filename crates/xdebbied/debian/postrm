@@ -1,29 +1,32 @@
 #!/bin/sh
+# xdebbied postrm. daemon-reload and the unit's enable/mask state are
+# cargo-deb's generated section at the DEBHELPER marker near the end.
 set -e
 
 case "$1" in
     purge)
-        echo "Purging xdebbied configuration and state..."
-        
-        # Remove configuration
-        rm -rf /etc/xdebbie
-        
-        # Remove state
-        rm -rf /var/lib/xdebbie
-        
-        # Reload systemd
-        systemctl daemon-reload || true
-        
-        echo "xdebbied completely removed."
+        # Purge removes this box's cluster identity for good: config, token,
+        # certificates and keys (/etc/xdebbie), state and the WireGuard key
+        # (/var/lib/xdebbie). VM disks in libvirt's pool are left alone, and
+        # so is the xdebbie group.
+        echo "xdebbied: removing /etc/xdebbie and /var/lib/xdebbie"
+        rm -rf /etc/xdebbie /var/lib/xdebbie
+
+        # The two lines postinst added for libvirt's virt-aa-helper.
+        local_aa=/etc/apparmor.d/local/usr.lib.libvirt.virt-aa-helper
+        if [ -f "$local_aa" ] && grep -q "^# Allow xdebbie backing images$" "$local_aa"; then
+            sed -i '/^# Allow xdebbie backing images$/{N;d;}' "$local_aa"
+            if command -v apparmor_parser >/dev/null 2>&1; then
+                apparmor_parser -r /etc/apparmor.d/usr.lib.libvirt.virt-aa-helper 2>/dev/null || true
+            fi
+        fi
         ;;
-        
+
     remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
-        # Reload systemd
-        systemctl daemon-reload || true
         ;;
-        
+
     *)
-        echo "postrm called with unknown argument \`$1'" >&2
+        echo "postrm called with unknown argument '$1'" >&2
         exit 1
         ;;
 esac

@@ -1,5 +1,6 @@
 [Unit]
-Description=xdebbie VM Orchestrator
+Description=XDebbie VM orchestrator
+Documentation=file:///usr/share/doc/xdebbied/README.md file:///usr/share/doc/xdebbied/BOOTSTRAP.md
 Documentation=https://github.com/briankmatheson/xdebbie
 After=network-online.target local-fs.target lvm2-monitor.service
 After=libvirtd.service virtqemud.service
@@ -7,28 +8,25 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+# Bootstrap is safe to repeat: it creates only what is missing (libvirt
+# network and pool, config, token, certificates) and leaves the rest alone.
 ExecStartPre=/usr/bin/xdebbied bootstrap
 ExecStart=/usr/bin/xdebbied serve
 Restart=on-failure
 RestartSec=5s
 # 78 = EX_CONFIG: a config/state/token file is wrong; a restart cannot help.
 RestartPreventExitStatus=78
-StandardOutput=journal
-StandardError=journal
 SyslogIdentifier=xdebbied
-
-# Run as root to access libvirt
-User=root
-Group=root
-
-# Working directory
 WorkingDirectory=/var/lib/xdebbie
 
-# Security hardening. ProtectSystem=full keeps /usr, /boot and /etc
-# read-only; the paths below are what bootstrap and serve write:
-#   /etc/xdebbie              config, token, env file
+# Runs as root: it drives libvirt, LVM, nftables, WireGuard and ufw.
+# ProtectSystem=full keeps /usr, /boot and /etc read-only; these are what
+# bootstrap and serve write:
+#   /etc/xdebbie              config, token, certificates, env file
 #   /etc/lvm                  lvm archive/backup on lvcreate
 #   /etc/ufw /etc/default/ufw bootstrap's firewall rules and `ufw enable`
+#   /var/lib/xdebbie          state, WireGuard key, enrolment records
+#   /var/lib/libvirt /run/libvirt  VM disks, seeds, libvirt's socket
 #   /dev                      device-mapper nodes
 NoNewPrivileges=true
 PrivateTmp=true
@@ -36,7 +34,6 @@ ProtectSystem=full
 ProtectHome=true
 ReadWritePaths=/etc/xdebbie /etc/lvm /etc/ufw /etc/default/ufw /var/lib/xdebbie /var/lib/libvirt /run/libvirt /dev
 
-# Resource limits
 LimitNOFILE=65536
 
 [Install]
