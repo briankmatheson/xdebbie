@@ -267,6 +267,40 @@ enum MeshCmd {
     /// This box's WireGuard identity (pubkey, port, address) for enrolment
     /// on other boxes, plus per-peer handshake state.
     Wg,
+    /// What this hub tells its xdj clients: DNS zones (each with its
+    /// resolver), search domains in order, and a welcome banner. With no
+    /// subcommand, show it. Public to read: put nothing secret here.
+    #[command(name = "client-config")]
+    ClientConfig {
+        #[command(subcommand)]
+        cmd: Option<ClientConfigCmd>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ClientConfigCmd {
+    /// Show it (the default).
+    Show,
+    /// Change it. Each option given replaces that part; the rest stay.
+    Set {
+        /// ZONE=SERVER, repeatable: names under ZONE are resolved by SERVER.
+        /// Replaces every zone. `--zone none` clears them.
+        #[arg(long = "zone", value_name = "ZONE=SERVER")]
+        zones: Vec<String>,
+        /// Search domains in order of preference, comma separated (short
+        /// names try these first). `none` clears them.
+        #[arg(long, value_name = "A,B,C")]
+        search: Option<String>,
+        /// The welcome banner, from a file (`-` for stdin).
+        #[arg(long, value_name = "FILE", conflicts_with_all = ["welcome", "clear_welcome"])]
+        welcome_file: Option<String>,
+        /// The welcome banner, as text.
+        #[arg(long, value_name = "TEXT", conflicts_with = "clear_welcome")]
+        welcome: Option<String>,
+        /// Remove the welcome banner.
+        #[arg(long)]
+        clear_welcome: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1420,6 +1454,31 @@ fn main() -> Result<()> {
                 }
                 println!("removed xdj client box {removed}");
             }
+            MeshCmd::ClientConfig { cmd } => {
+                let mut v = api.call(Method::GET, "/client-config", None)?;
+                if let Some(ClientConfigCmd::Set {
+                    zones,
+                    search,
+                    welcome_file,
+                    welcome,
+                    clear_welcome,
+                }) = cmd
+                {
+                    client_config_apply(
+                        &mut v,
+                        &zones,
+                        search.as_deref(),
+                        welcome_file.as_deref(),
+                        welcome.as_deref(),
+                        clear_welcome,
+                    )?;
+                    v = api.call(Method::PUT, "/client-config", Some(v))?;
+                }
+                if cli.json {
+                    return out(v);
+                }
+                print_client_config(&v);
+            }
             MeshCmd::Wg => {
                 let v = api.call(Method::GET, "/mesh", None)?;
                 if cli.json {
@@ -2079,5 +2138,140 @@ mod tests {
         let nokey = json!({"spec": {"wireguard": {}}, "status": {}});
         let (l, _, k) = xdj_join_line(4, &nokey, Some("h"));
         assert_eq!((l.as_str(), k), ("xdj join 4 HUB_PUBKEY h:51820", true));
+    }
+}
+
+/// Lay `xdctl mesh client-config set`'s options over the current document.
+fn client_config_apply(
+    v: &mut Value,
+    zones: &[String],
+    search: Option<&str>,
+    welcome_file: Option<&str>,
+    welcome: Option<&str>,
+    clear_welcome: bool,
+) -> Result<()> {
+    if !v.is_object() {
+        *v = serde_json::json!({});
+    }
+    if !zones.is_empty() {
+        let mut z = vec![];
+        if !(zones.len() == 1 && zones[0] == "none") {
+            for one in zones {
+                let (zone, server) = one
+                    .split_once('=')
+                    .with_context(|| format!("--zone {one:?}: want ZONE=SERVER"))?;
+                z.push(serde_json::json!({"zone": zone.trim(), "server": server.trim()}));
+            }
+        }
+        v["dns"] = Value::Array(z);
+    }
+    if let Some(s) = search {
+        v["search"] = if s.trim() == "none" {
+            Value::Array(vec![])
+        } else {
+            s.split([',', ' '])
+                .map(str::trim)
+                .filter(|x| !x.is_empty())
+                .map(|x| Value::String(x.into()))
+                .collect()
+        };
+    }
+    if let Some(f) = welcome_file {
+        let text = if f == "-" {
+            let mut s = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut s)?;
+            s
+        } else {
+            std::fs::read_to_string(f).with_context(|| format!("reading {f}"))?
+        };
+        v["welcome"] = Value::String(text);
+    }
+    if let Some(t) = welcome {
+        v["welcome"] = Value::String(t.replace("\\n", "\n"));
+    }
+    if clear_welcome {
+        v["welcome"] = Value::String(String::new());
+    }
+    Ok(())
+}
+
+fn print_client_config(v: &Value) {
+    let zones = v["dns"].as_array().cloned().unwrap_or_default();
+    if zones.is_empty() {
+        println!("zones    (none)");
+    }
+    for z in zones {
+        println!(
+            "zone     {:<28} -> {}",
+            z["zone"].as_str().unwrap_or("?"),
+            z["server"].as_str().unwrap_or("?")
+        );
+    }
+    let search: Vec<&str> = v["search"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    println!(
+        "search   {}",
+        if search.is_empty() {
+            "(none)".into()
+        } else {
+            search.join(" ")
+        }
+    );
+    match v["welcome"].as_str().filter(|w| !w.is_empty()) {
+        Some(w) => {
+            println!("welcome  |");
+            for l in w.lines() {
+                println!("  {l}");
+            }
+        }
+        None => println!("welcome  (none)"),
+    }
+}
+
+#[cfg(test)]
+mod client_config_tests {
+    use super::*;
+
+    #[test]
+    fn set_lays_options_over_the_document() {
+        let mut v = serde_json::json!({"dns": [{"zone": "a.example", "server": "10.0.0.1"}], "search": ["a.example"], "welcome": "hi"});
+        client_config_apply(
+            &mut v,
+            &[
+                "m.example=10.23.0.11".into(),
+                "i.example = 10.23.0.243".into(),
+            ],
+            Some("m.example, i.example,example"),
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(v["dns"][1]["zone"], "i.example");
+        assert_eq!(v["dns"][1]["server"], "10.23.0.243");
+        assert_eq!(
+            v["search"],
+            serde_json::json!(["m.example", "i.example", "example"])
+        );
+        assert_eq!(v["welcome"], "hi");
+        client_config_apply(
+            &mut v,
+            &["none".into()],
+            Some("none"),
+            None,
+            Some("line 1\\nline 2"),
+            false,
+        )
+        .unwrap();
+        assert_eq!(v["dns"], serde_json::json!([]));
+        assert_eq!(v["search"], serde_json::json!([]));
+        assert_eq!(v["welcome"], "line 1\nline 2");
+        client_config_apply(&mut v, &[], None, None, None, true).unwrap();
+        assert_eq!(v["welcome"], "");
+        assert!(client_config_apply(&mut v, &["nozone".into()], None, None, None, false).is_err());
     }
 }

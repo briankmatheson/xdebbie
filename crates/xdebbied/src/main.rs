@@ -5,6 +5,7 @@ mod abe;
 mod agent;
 mod api;
 mod bootstrap;
+mod client_config;
 mod config;
 mod dhcp;
 mod discovery;
@@ -493,6 +494,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             cfg: cfg.clone(),
         }),
         settings: Some(settings),
+        client_config: Some(Arc::new(client_config::ClientConfigCtl::new(&cfg))),
     });
     serve(&cfg, listen, app).await
 }

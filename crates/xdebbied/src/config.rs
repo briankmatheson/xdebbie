@@ -110,6 +110,12 @@ pub struct Config {
     /// underlay" (`mesh_config`). Set `enabled = false` to opt out.
     #[serde(default)]
     pub mesh: Option<crate::mesh::MeshConfig>,
+    /// What this hub tells its xdj clients (`[clients]`): DNS zones with
+    /// their resolvers, search domains in order, a welcome banner. Served at
+    /// `GET /v1/client-config` (public: nothing secret here); a `PUT` there
+    /// overrides it (client-config.json beside `state_file`).
+    #[serde(default)]
+    pub clients: Option<crate::client_config::ClientConfig>,
     /// Overlay addressing + built-in DHCP (`[network]`). Absent = VMs get no
     /// address from xdebbie and some other DHCP server must exist.
     #[serde(default)]

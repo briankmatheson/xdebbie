@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `[clients]` and `/v1/client-config`: what a hub tells its xdj clients --
+  DNS zones each with its resolver, search domains in order of preference,
+  and a welcome banner (at most 4 KiB). `GET /v1/client-config` (JSON) and
+  `GET /v1/client-config/xdj` (text, for xdj) are public, so nothing secret
+  belongs there; `PUT` needs the cluster token or a cluster certificate and
+  is kept in `client-config.json` beside `state_file`. Box-local.
+  `xdctl mesh client-config [set --zone Z=S... --search A,B --welcome-file F
+  | --welcome TEXT | --clear-welcome]`.
 - `schedule_token_file`: a token that opens the placement dry run
   (`POST /v1/schedule`) and nothing else, not even reads. For the aviary
   page's Add node, which asks whether one more worker VM fits on the
