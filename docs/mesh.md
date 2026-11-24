@@ -301,7 +301,7 @@ from those slots. If VMs on different boxes cannot reach each other, set
 
 ### Host firewall (ufw)
 
-`xdebbied bootstrap` (run by the unit's `ExecStartPre`) owns the host
+`xdebbied bootstrap` (run by postinst on install and upgrade) owns the host
 firewall through ufw: default deny inbound. The LAN interface accepts only
 ssh (anywhere), WireGuard (anywhere), and the API and discovery multicast
 (from local networks — so a box not yet meshed still finds the cluster).

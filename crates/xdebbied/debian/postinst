@@ -49,9 +49,19 @@ case "$1" in
             fi
         fi
 
-        # First install: bootstrap here, so what it prints (the cluster CA's
-        # fingerprint, or why it stopped) lands in this terminal rather than
-        # only in the journal. The service runs it again before every start.
+        # Bootstrap runs here, on install and on upgrade (it creates only
+        # what is missing, so an upgrade picks up what a new release adds),
+        # and by hand -- not before every start of the service: a failing
+        # bootstrap must not keep the hub from serving. A failure here is
+        # reported and the package still installs; fix it and re-run
+        # `sudo xdebbied bootstrap`.
+        if [ -f /etc/xdebbie/xdebbied.toml ]; then
+            echo "xdebbied: bootstrap (creates only what is missing)..."
+            if ! /usr/bin/xdebbied bootstrap; then
+                echo "xdebbied: bootstrap failed (above); the service still starts." >&2
+                echo "  Fix it, then: sudo xdebbied bootstrap && sudo systemctl restart xdebbied" >&2
+            fi
+        fi
         if [ ! -f /etc/xdebbie/xdebbied.toml ]; then
             echo "xdebbied: bootstrapping this box..."
             /usr/bin/xdebbied bootstrap || true
