@@ -19,6 +19,7 @@ mod mesh;
 #[cfg(test)]
 mod mesh_join_tests;
 mod mirror;
+mod preflight;
 mod reconcile;
 mod registrar;
 mod settings;
@@ -172,6 +173,12 @@ fn main() -> anyhow::Result<()> {
 }
 
 async fn run(cli: Cli) -> anyhow::Result<()> {
+    if !cli.config.exists() {
+        fatal_config(anyhow::anyhow!(
+            "{} does not exist: this box was never bootstrapped (run: sudo xdebbied bootstrap)",
+            cli.config.display()
+        ));
+    }
     let cfg = Arc::new(
         config::Config::load(&cli.config)
             .with_context(|| format!("loading {}", cli.config.display()))
@@ -206,6 +213,18 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             .nest("/v1", v1);
         info!("xdebbied --mesh-only: API + mesh module only");
         return serve(&cfg, listen, app).await;
+    }
+
+    // What bootstrap should have left here, checked read-only: the unit no
+    // longer runs bootstrap before every start (preflight.rs).
+    if !matches!(cli.cmd, Some(Cmd::Check)) {
+        preflight::run(&cfg, &cli.config);
+        // VM NAT/DNS forwarding: an nftables table, gone after a reboot.
+        if let Err(e) = bootstrap::firewall::apply_vm_egress(&cfg) {
+            tracing::warn!(
+                "VM egress (nftables) not applied: {e:#}; VMs here may not reach outside the box until `sudo xdebbied bootstrap`"
+            );
+        }
     }
 
     // Initialize LVM if configured

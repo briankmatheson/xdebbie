@@ -30,7 +30,7 @@ use super::api_tls::ApiTlsPaths;
 
 const CA_CERT: &str = "/etc/pki/CA/cacert.pem";
 const SERVER_CA: &str = "/etc/libvirt/pki/cacert.pem";
-const SERVER_CERT: &str = "/etc/libvirt/pki/servercert.pem";
+pub const SERVER_CERT: &str = "/etc/libvirt/pki/servercert.pem";
 const SERVER_KEY: &str = "/etc/libvirt/pki/private/serverkey.pem";
 const CLIENT_CERT: &str = "/etc/pki/libvirt/clientcert.pem";
 const CLIENT_KEY: &str = "/etc/pki/libvirt/private/clientkey.pem";

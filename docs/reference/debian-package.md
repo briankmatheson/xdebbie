@@ -57,8 +57,10 @@ themselves.
 
 ## The service
 
-`ExecStartPre=xdebbied bootstrap` (creates only what is missing), then
-`xdebbied serve`. `Restart=on-failure`, except exit 78 (a bad config or
+`xdebbied serve`, with no bootstrap before it: postinst runs `xdebbied
+bootstrap` on install and upgrade (a failure there is reported and the
+package still installs), and serve checks what bootstrap left and names the
+fix for any gap. `Restart=on-failure`, except exit 78 (a bad config or
 token file: restarting cannot help). Runs as root with
 `ProtectSystem=full`; the unit lists the paths it may write and why.
 

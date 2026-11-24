@@ -23,7 +23,7 @@ the scheduler and reconciler. This is what `xdebbied.service` runs.
 
 | Option | Meaning |
 |---|---|
-| `--bootstrap` | Run `bootstrap` first. The service does this with `ExecStartPre` instead. |
+| `--bootstrap` | Run `bootstrap` first. The service does not: the package runs bootstrap on install and upgrade. |
 | `--mesh-only` | Run only the API and the mesh: no libvirt, no LVM, no discovery. Used by `tests/mesh/`. |
 
 A configuration, state or token file that does not load makes `serve` exit
@@ -33,8 +33,13 @@ with status 78. The unit does not restart on 78, so the error stays in
 ## `xdebbied bootstrap`
 
 Prepare this box and write its configuration. Safe to run again: it creates
-only what is missing. The package runs it on first install and the service
-runs it before every start. See [Bootstrap](../bootstrap.md) for each step.
+only what is missing. The package runs it on install and on upgrade; the
+service does not run it before starting (a failing bootstrap kept the hub
+from serving). `serve` instead checks, read-only, what bootstrap leaves
+behind and logs each gap with the command that fixes it: a missing API
+certificate, key or token file stops it (exit 78); an LVM volume group not
+there yet is retried; libvirt not answering, no libvirt TLS certificate or
+no `xdebbie_env` only turn that part off. See [Bootstrap](../bootstrap.md) for each step.
 
 | Option | Default | Meaning |
 |---|---|---|

@@ -478,6 +478,19 @@ fn remove_legacy_chain() {
     }
 }
 
+/// VM egress (NAT, DNS forwarding) at daemon start. The nftables table is
+/// not saved across a reboot (ufw's rules and the ip_forward sysctl are),
+/// so `serve` puts it back from the config -- this used to happen only
+/// because the unit ran `bootstrap` before every start. Touches nothing
+/// else: no ufw, no packages.
+pub fn apply_vm_egress(cfg: &Config) -> Result<()> {
+    let spec = FirewallSpec::from_config(cfg);
+    if spec.egress.is_some() {
+        enable_ip_forward();
+    }
+    apply_nft(&spec)
+}
+
 /// Apply (or drop) the `xdebbie_host` nftables table.
 fn apply_nft(spec: &FirewallSpec) -> Result<()> {
     if !Command::new("nft")

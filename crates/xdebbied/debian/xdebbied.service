@@ -8,9 +8,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# Bootstrap is safe to repeat: it creates only what is missing (libvirt
-# network and pool, config, token, certificates) and leaves the rest alone.
-ExecStartPre=/usr/bin/xdebbied bootstrap
+# Bootstrap runs from the package's postinst (install and upgrade) and by
+# hand, not before every start: a bootstrap that failed kept the hub from
+# serving. serve checks read-only what bootstrap leaves (preflight.rs) and
+# names the fix for anything missing.
 ExecStart=/usr/bin/xdebbied serve
 Restart=on-failure
 RestartSec=5s

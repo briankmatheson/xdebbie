@@ -14,6 +14,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the reconciler's attach step, so the guest sees the bigger disk within a
   tick or two. abe-csi 0.6.0 uses it for PVC expansion.
 
+### Changed
+- The service no longer runs `xdebbied bootstrap` before every start
+  (`ExecStartPre` is gone): a bootstrap that failed kept the hub from
+  serving, and every restart ran it again. postinst runs bootstrap on
+  install and on upgrade (a failure is reported; the package still
+  installs), and it can be run by hand. `serve` checks read-only what
+  bootstrap leaves and logs each gap with its fix: a missing API
+  certificate, key or token file stops it (exit 78, not retried); an LVM
+  volume group not there yet is retried; libvirt not answering, a missing
+  libvirt TLS certificate or `xdebbie_env` only turn that part off. `serve`
+  puts the VM NAT/DNS nftables table back at start, since it does not
+  survive a reboot (ufw rules and the ip_forward sysctl do).
+
 ### Fixed
 - `bootstrap --join` on a box the package had set up as a cluster of its
   own (discovery off) no longer says "Already enrolled" and stays alone.

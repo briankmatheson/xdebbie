@@ -1,6 +1,6 @@
 # Bootstrap
 
-How `xdebbied bootstrap` turns a stock Debian 13 box into an XDebbie host, the files it writes, and how a box joins a cluster. The package runs it on first install and the service runs it before every start.
+How `xdebbied bootstrap` turns a stock Debian 13 box into an XDebbie host, the files it writes, and how a box joins a cluster. The package runs it on install and on upgrade, and you can run it again by hand; the service does not run it before starting.
 
 ## Overview
 
