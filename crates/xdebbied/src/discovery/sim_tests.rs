@@ -644,7 +644,6 @@ async fn followers_forward_to_the_leader() {
 /// announces, not only between them: `Leadership::leader` falls back to it
 /// whenever the follower has no vote on record.
 #[tokio::test(start_paused = true)]
-#[ignore = "bug: an ANNOUNCE clears the sender's leader mark in the peer table"]
 async fn announces_keep_the_leader_marked() {
     let lan = Lan::new();
     let v: Vec<SimBox> = (1..=2u8)

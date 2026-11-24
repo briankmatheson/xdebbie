@@ -37,6 +37,14 @@ impl PeerInfo {
         self.last_sequence = sequence;
     }
 
+    /// An announce: alive, with a new score. Says nothing about leadership,
+    /// so the mark from the last heartbeat stays.
+    pub fn update_announce(&mut self, score: f64, sequence: u64) {
+        self.score = score;
+        self.last_seen = Instant::now();
+        self.last_sequence = sequence;
+    }
+
     pub fn is_stale(&self, timeout: Duration) -> bool {
         self.last_seen.elapsed() > timeout
     }
@@ -85,5 +93,50 @@ impl PeerTable {
 
     pub fn current_leader(&self) -> Option<&PeerInfo> {
         self.peers.values().find(|p| p.is_leader)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn peer(n: u128) -> PeerInfo {
+        PeerInfo::new(Uuid::from_u128(n), format!("p{n}"), "http://x".into(), 1.0)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stale_peers_are_removed() {
+        let mut t = PeerTable::new();
+        t.insert(peer(1));
+        t.insert(peer(2));
+        tokio::time::advance(Duration::from_secs(10)).await;
+        t.get_mut(&Uuid::from_u128(2))
+            .unwrap()
+            .update_heartbeat(1.0, false, 2);
+        tokio::time::advance(Duration::from_secs(6)).await;
+        let gone = t.remove_stale(Duration::from_secs(15));
+        assert_eq!(gone.len(), 1);
+        assert_eq!(gone[0].hostname, "p1");
+        assert_eq!(t.peers().count(), 1);
+        // Discovery off drops everything.
+        assert_eq!(t.remove_stale(Duration::ZERO).len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn announce_keeps_the_leader_mark_heartbeat_moves_it() {
+        let mut t = PeerTable::new();
+        t.insert(peer(1));
+        let p = t.get_mut(&Uuid::from_u128(1)).unwrap();
+        p.update_heartbeat(5.0, true, 1);
+        tokio::time::advance(Duration::from_secs(3)).await;
+        p.update_announce(6.0, 2);
+        assert!(p.is_leader);
+        assert_eq!((p.score, p.last_sequence), (6.0, 2));
+        assert!(!p.is_stale(Duration::from_secs(1)));
+        assert!(t.current_leader().is_some());
+        t.get_mut(&Uuid::from_u128(1))
+            .unwrap()
+            .update_heartbeat(6.0, false, 3);
+        assert!(t.current_leader().is_none());
     }
 }

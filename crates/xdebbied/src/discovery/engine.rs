@@ -413,7 +413,7 @@ impl DiscoveryEngine {
                 sequence,
             } => {
                 if let Some(peer) = self.peers.write().await.get_mut(&node_id) {
-                    peer.update_heartbeat(score, false, sequence);
+                    peer.update_announce(score, sequence);
                 } else {
                     // New peer: make sure we can actually dial what it
                     // announced. Resolver runs off the runtime; see reach.rs.
