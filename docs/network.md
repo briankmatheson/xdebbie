@@ -45,6 +45,7 @@ the same records would say the same thing. Which box answers is policy:
 | 6 DNS | `dns` (default: the gateway) |
 | 12 hostname | the VM name |
 | 15 domain | `domain`, if set |
+| 42 NTP servers | `ntp`, if not empty (systemd-networkd passes them to timesyncd) |
 | 26 interface MTU | the mesh MTU when the bridge is a mesh overlay — so even guests that ignore cloud-init's `network-config` get the right MTU |
 | 51 / 58 / 59 | `lease_secs`, T1 = ½, T2 = ⅞ |
 | 54 server id | this box's address on the bridge (detected), else the gateway |
@@ -71,6 +72,7 @@ upstream_dns = ["192.168.1.1"]  # where VM DNS to the gateway is forwarded
 # bridge = "virbr-int"        # default: the mesh bridge, else the first host's
 # lease_secs = 86400
 # domain = "vm.example"
+# ntp = ["10.23.0.247"]        # option 42
 # leader_only = false
 ```
 

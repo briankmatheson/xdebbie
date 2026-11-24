@@ -19,6 +19,7 @@ pub mod opt {
     pub const DNS: u8 = 6;
     pub const HOSTNAME: u8 = 12;
     pub const DOMAIN: u8 = 15;
+    pub const NTP_SERVERS: u8 = 42;
     pub const MTU: u8 = 26;
     pub const BROADCAST: u8 = 28;
     pub const REQUESTED_IP: u8 = 50;

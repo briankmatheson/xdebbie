@@ -151,6 +151,10 @@ pub struct NetworkConfig {
     /// Option 15 (domain name), if set.
     #[serde(default)]
     pub domain: Option<String>,
+    /// Option 42 (NTP servers), offered when not empty. systemd-networkd
+    /// hands them to systemd-timesyncd (UseNTP= defaults to true).
+    #[serde(default)]
+    pub ntp: Vec<Ipv4Addr>,
     /// Answer only while this process is the elected control plane. Leave
     /// false while control planes keep independent stores (each box then
     /// answers for its own VMs and nobody else's).
@@ -361,6 +365,7 @@ mod tests {
             bridge: None,
             lease_secs: DEFAULT_LEASE_SECS,
             domain: None,
+            ntp: vec![],
             leader_only: false,
         }
     }
