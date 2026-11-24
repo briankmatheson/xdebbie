@@ -634,20 +634,16 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
             let bak = config_gen::back_up(&opts.config_path)?;
             info!("Previous configuration saved as {}", bak.display());
             let old = std::fs::read_to_string(&opts.config_path)?;
-            let mut fresh: Vec<&str> = if opts.join.is_some() {
-                vec!["ca_url"]
-            } else {
-                vec![]
-            };
-            if !reach.by_name {
-                fresh.push("advertise_url");
-            }
-            match config_gen::carry_over_except(&old, &generated, &fresh) {
+            match config_gen::regenerate(
+                &old,
+                &generated,
+                opts.join.is_some(),
+                reach.by_name,
+                box_id,
+            ) {
                 Ok(c) => {
                     info!("Regenerated configuration; operator settings carried over");
-                    // `[mesh]` is carried over whole; the box id is not the
-                    // operator's to keep.
-                    config_gen::set_mesh_box(&c, box_id)
+                    c
                 }
                 Err(e) => {
                     warn!("{e:#}; regenerated from scratch (previous file is in the backup)");

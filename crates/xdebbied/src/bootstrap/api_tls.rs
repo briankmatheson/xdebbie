@@ -320,6 +320,13 @@ pub struct Csr {
     pub fingerprint: String,
 }
 
+/// The CN a CSR asks for: the name the signed certificate will carry and
+/// that peers identify the box by.
+pub fn csr_common_name(csr_pem: &str) -> Result<Option<String>> {
+    let csr = rcgen::CertificateSigningRequestParams::from_pem(csr_pem).context("parsing CSR")?;
+    Ok(csr_hostname(&csr))
+}
+
 /// `sha256:<hex>` of a CSR's public key, as [`make_csr`] computed it on
 /// the joiner.
 pub fn csr_fingerprint(csr_pem: &str) -> Result<String> {

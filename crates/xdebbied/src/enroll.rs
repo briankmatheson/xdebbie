@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use xdebbie_core::{EnrollKind, EnrollRequest, EnrollStatus, Enrollment};
 
-use crate::bootstrap::api_tls::{CaSigner, csr_fingerprint};
+use crate::bootstrap::api_tls::{CaSigner, csr_common_name, csr_fingerprint};
 
 /// Pending requests kept at most; beyond that `submit` refuses, so a
 /// misbehaving LAN cannot fill the disk.
@@ -101,7 +101,13 @@ impl Enrollments {
     /// Pick a box id for `hostname`: the one it had when last approved, else
     /// the requested one if free, else the lowest free. Denied requests do
     /// not hold an id.
-    fn allocate(&self, recs: &[Record], hostname: &str, want: Option<u8>) -> Result<u8> {
+    fn allocate(
+        &self,
+        recs: &[Record],
+        hostname: &str,
+        want: Option<u8>,
+        in_use: &[u8],
+    ) -> Result<u8> {
         if let Some(prev) = recs
             .iter()
             .rev()
@@ -111,6 +117,7 @@ impl Enrollments {
         }
         let taken = |b: u8| {
             self.reserved.contains(&b)
+                || in_use.contains(&b)
                 || recs
                     .iter()
                     .any(|r| r.view.status != EnrollStatus::Denied && r.view.box_id == b)
@@ -158,10 +165,23 @@ impl Enrollments {
     }
 
     /// `submit`, noting the address the request came from.
+    #[allow(dead_code)] // the API also passes the live mesh's ids (submit_taking)
     pub async fn submit_from(
         &self,
         req: EnrollRequest,
         from: Option<String>,
+    ) -> Result<Enrollment> {
+        self.submit_taking(req, from, &[]).await
+    }
+
+    /// `submit_from`, with `in_use`: box ids the live mesh uses now (peers
+    /// and xdj clients added through the API, not only the TOML ones in
+    /// `reserved`). None of them is handed out.
+    pub async fn submit_taking(
+        &self,
+        req: EnrollRequest,
+        from: Option<String>,
+        in_use: &[u8],
     ) -> Result<Enrollment> {
         if req.hostname.trim().is_empty() {
             bail!("hostname must not be empty");
@@ -170,6 +190,17 @@ impl Enrollments {
             bail!("a client name is letters, digits, '-', '.' and '_' (at most 63)");
         }
         let fingerprint = csr_fingerprint(&req.csr)?;
+        // The certificate carries the CSR's name, and the cluster knows a
+        // member by it: it must be the hostname the operator approves.
+        if req.kind == EnrollKind::Box {
+            let cn = csr_common_name(&req.csr)?.unwrap_or_default();
+            if cn != req.hostname {
+                bail!(
+                    "the CSR asks for a certificate as {cn:?}, not {:?}: a box enrols under its own name",
+                    req.hostname
+                );
+            }
+        }
         let mut recs = self.recs.write().await;
         expire(&mut recs);
         if let Some(r) = recs.iter().find(|r| r.view.fingerprint == fingerprint) {
@@ -188,7 +219,7 @@ impl Enrollments {
         }
         // a client is no box: it takes no box id
         let box_id = match req.kind {
-            EnrollKind::Box => self.allocate(&recs, &req.hostname, req.box_id)?,
+            EnrollKind::Box => self.allocate(&recs, &req.hostname, req.box_id, in_use)?,
             EnrollKind::Client => 0,
         };
         let view = Enrollment {
@@ -223,8 +254,8 @@ impl Enrollments {
             .map(|r| r.view.clone())
     }
 
-    /// Approve or deny by id or hostname (pending ones first; an exact id
-    /// always wins).
+    /// Approve or deny by id or hostname (pending ones first, then the
+    /// host's latest; an exact id always wins).
     #[allow(dead_code)] // the API decides by kind (decide_kind); tests and callers by key
     pub async fn decide(&self, key: &str, d: Decision) -> Result<Enrollment> {
         self.decide_kind(key, d, None).await
@@ -254,7 +285,9 @@ impl Enrollments {
                 recs.iter()
                     .position(|r| r.view.hostname == key && r.view.status == EnrollStatus::Pending)
             })
-            .or_else(|| recs.iter().position(|r| r.view.hostname == key))
+            // no pending one: the host's latest enrolment, not a stale
+            // denial from before it asked again
+            .or_else(|| recs.iter().rposition(|r| r.view.hostname == key))
             .ok_or_else(|| anyhow::anyhow!("no enrolment {key:?}"))?;
         let r = &mut recs[idx];
         if only.is_some_and(|k| k != r.view.kind) {
@@ -277,6 +310,16 @@ impl Enrollments {
                 r.view.status = EnrollStatus::Approved;
             }
             Decision::Deny => {
+                // The box has its certificate and runs with its id; there is
+                // no revocation, so "denied" would only free that id for the
+                // next joiner while this box still uses it.
+                if r.view.status == EnrollStatus::Approved && r.view.kind == EnrollKind::Box {
+                    bail!(
+                        "{} is already approved as box {}: its certificate stays valid and the id stays taken",
+                        r.view.hostname,
+                        r.view.box_id
+                    );
+                }
                 r.view.cert = None;
                 r.view.ca = None;
                 r.view.status = EnrollStatus::Denied;

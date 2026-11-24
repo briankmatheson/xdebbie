@@ -16,6 +16,8 @@ mod leader;
 mod libvirt;
 mod lvm;
 mod mesh;
+#[cfg(test)]
+mod mesh_join_tests;
 mod mirror;
 mod reconcile;
 mod registrar;

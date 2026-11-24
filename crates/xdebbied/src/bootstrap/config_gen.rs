@@ -495,6 +495,30 @@ pub fn carry_over_except(old: &str, generated: &str, fresh: &[&str]) -> Result<S
     Ok(text)
 }
 
+/// `bootstrap --force` over an existing config: `generated` with the
+/// operator's settings from `old` carried over, and `[mesh] box` set to
+/// `box_id` (`[mesh]` is carried over whole, but the box id is the
+/// cluster's, not the operator's). `joining`: `ca_url` is the one being
+/// joined now; `advertise_by_name`: false when the name the kept
+/// `advertise_url` was built from no longer resolves, so it is regenerated.
+pub fn regenerate(
+    old: &str,
+    generated: &str,
+    joining: bool,
+    advertise_by_name: bool,
+    box_id: u8,
+) -> Result<String> {
+    let mut fresh: Vec<&str> = vec![];
+    if joining {
+        fresh.push("ca_url");
+    }
+    if !advertise_by_name {
+        fresh.push("advertise_url");
+    }
+    let c = carry_over_except(old, generated, &fresh)?;
+    Ok(set_mesh_box(&c, box_id))
+}
+
 /// A `[network]` for box `box_id` on the overlay the cluster already runs:
 /// same `cidr`, `domain` and lease; this box's own /24 of it (`addr.rs`) —
 /// its bridge as gateway, its VM range as pool. DNS is the cluster's unless

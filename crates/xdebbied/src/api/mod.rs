@@ -596,9 +596,15 @@ async fn enroll_submit(
     Json(req): Json<EnrollRequest>,
 ) -> R<(StatusCode, Json<Enrollment>)> {
     let from = from.map(|axum::Extension(crate::tls::RemoteAddr(sa))| sa.ip().to_string());
+    // what the mesh uses right now, API-added peers and clients included
+    let (spec, _) = a.mesh.get().await;
+    let in_use: Vec<u8> = std::iter::once(spec.box_id)
+        .chain(spec.peers.iter().map(|p| p.box_id))
+        .chain(spec.clients.iter().map(|c| c.box_id))
+        .collect();
     let e = a
         .enroll
-        .submit_from(req, from)
+        .submit_taking(req, from, &in_use)
         .await
         .map_err(|e| bad(e.to_string()))?;
     if e.status == EnrollStatus::Pending {

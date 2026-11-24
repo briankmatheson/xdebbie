@@ -69,11 +69,11 @@ public ones.
 |---|---|---|
 | GET | `/v1/ca` | *Public.* Cluster CA certificate, PEM; `X-Xdebbie-CA-Fingerprint: sha256:…` |
 | GET | `/v1/cert` | *Public, box-local.* The chain this box serves, leaf first: `[{subject, issuer, serial, not_before, not_after, fingerprint, self_signed, pem}]` (`xdctl ca --chain`) |
-| POST | `/v1/enroll` | *Public.* `{hostname, box?, apiUrl, csr, wgPubkey?}` → 202 `{id, hostname, box, apiUrl, fingerprint, status: "pending", requestedAt}`. `box` in the request is a wish (409-style error if taken); the reply carries the id the CA assigned — lowest free, or the one this hostname was approved with before. Same key again returns the same enrolment; at most 64 pending |
+| POST | `/v1/enroll` | *Public.* `{kind?, hostname, box?, api_url, csr, wg_pubkey?}` → 202 `{id, hostname, box, api_url, fingerprint, status: "pending", requested_at, from?}`. A box's CSR must name `hostname` (its CN). `box` in the request is a wish (400 if taken); the reply carries the id the CA assigned — lowest free, or the one this hostname was approved with before. Same key again returns the same enrolment; at most 64 pending |
 | GET | `/v1/enroll/{id}` | *Public.* The enrolment; once `approved` it carries `cert` and `ca` (PEM) |
 | GET | `/v1/enroll?all=true` | Pending enrolments (`all`: approved and denied too) |
 | POST | `/v1/enroll/{id-or-host}/approve` | Sign the CSR with the cluster CA |
-| POST | `/v1/enroll/{id-or-host}/deny` | Refuse |
+| POST | `/v1/enroll/{id-or-host}/deny` | Refuse a pending request. An approved box cannot be denied afterwards: its certificate stays valid (there is no revocation) and so does its hold on its box id |
 | GET | `/v1/enroll/token` | Local. `{current, previous}` for a caller with a **client certificate** (403 for a bearer token) |
 
 ## Hosts
