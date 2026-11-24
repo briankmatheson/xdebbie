@@ -722,6 +722,12 @@ fn print_net(v: &Value) {
             .map(|d| format!(" domain={d}"))
             .unwrap_or_default()
     );
+    if let Some(t) = v["ntp"].as_array().filter(|t| !t.is_empty()) {
+        println!(
+            "ntp={} (DHCP option 42)",
+            t.iter().map(s).collect::<Vec<_>>().join(",")
+        );
+    }
     if let Some(r) = v["reserved"].as_array().filter(|r| !r.is_empty()) {
         println!("reserved={}", r.iter().map(s).collect::<Vec<_>>().join(","));
     }

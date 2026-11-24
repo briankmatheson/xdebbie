@@ -119,6 +119,8 @@ pub struct NetworkStatus {
     pub lease_secs: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub domain: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ntp: Vec<Ipv4Addr>,
     pub dhcp: DhcpStatus,
 }
 
@@ -169,6 +171,7 @@ impl DhcpServer {
             upstream_dns: self.net.upstream_dns.clone(),
             lease_secs: self.net.lease_secs,
             domain: self.net.domain.clone(),
+            ntp: self.net.ntp.clone(),
             dhcp: DhcpStatus {
                 enabled: self.net.dhcp,
                 bridge: self.bridge.clone(),

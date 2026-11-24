@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `[network] ntp = ["ADDR", ...]`: DHCP offers the VMs these NTP servers
+  (option 42); systemd-networkd hands them to systemd-timesyncd. Joining
+  boxes copy it; `xdctl net ls` shows it.
 - `[network] reserve_from_dns = [{ zone, server }]`: every A record inside
   the overlay in those zones is reserved, read by zone transfer at startup
   and every minute; a failed transfer keeps the last good set (also on

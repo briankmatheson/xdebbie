@@ -127,6 +127,9 @@ fn net_options(p: &Params, b: &Binding, with_lease: bool) -> Vec<(u8, Vec<u8>)> 
     if let Some(d) = &n.domain {
         o.push((opt::DOMAIN, d.as_bytes().to_vec()));
     }
+    if !n.ntp.is_empty() {
+        o.push((opt::NTP_SERVERS, wire::ips_opt(&n.ntp)));
+    }
     if let Some(m) = p.mtu {
         o.push((opt::MTU, wire::u16_opt(m)));
     }
@@ -210,6 +213,7 @@ mod tests {
                 bridge: None,
                 lease_secs: DEFAULT_LEASE_SECS,
                 domain: Some("vm.example".into()),
+                ntp: vec![Ipv4Addr::new(10, 23, 0, 247)],
                 leader_only: false,
             },
             mtu,
@@ -258,6 +262,10 @@ mod tests {
         );
         assert_eq!(opt_of(&reply, opt::HOSTNAME), Some(&b"mesh-g1"[..]));
         assert_eq!(opt_of(&reply, opt::DOMAIN), Some(&b"vm.example"[..]));
+        assert_eq!(
+            opt_of(&reply, opt::NTP_SERVERS),
+            Some(&[10, 23, 0, 247][..])
+        );
         assert_eq!(opt_of(&reply, opt::MTU), Some(&[5, 90][..]));
         assert_eq!(
             opt_of(&reply, opt::LEASE_TIME),

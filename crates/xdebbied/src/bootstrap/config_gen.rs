@@ -144,6 +144,7 @@ pub fn generate_config_for(
                  {p}# lease_secs = 86400\n\
                  {p}# mesh_routed = false              # true: mesh peers without Geneve (xdj on macOS/Windows) reach VMs\n\
                  {p}# domain = \"vm.example\"\n\
+                 {p}# ntp = [\"10.23.0.247\"]             # DHCP option 42: NTP servers for the VMs (timesyncd uses them)\n\
                  {p}# leader_only = false              # true once control planes share state",
                 p = net_prefix
             )
@@ -573,6 +574,19 @@ pub fn network_block(
                 .join(", ")
         )
     };
+    // the cluster's NTP servers (option 42): every box offers the same ones
+    let ntp = if n.ntp.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "ntp = [{}]\n",
+            n.ntp
+                .iter()
+                .map(|a| format!("\"{a}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
     let warn_lines = warnings
         .iter()
         .map(|w| format!("# WARNING: {w}\n"))
@@ -591,6 +605,7 @@ pub fn network_block(
          pool_end = \"{end}\"\n\
          reserved = [{reserved_s}]\n\
          {from_dns}\
+         {ntp}\
          bridge = \"{bridge}\"\n\
          lease_secs = {}",
         n.cidr, n.lease_secs
