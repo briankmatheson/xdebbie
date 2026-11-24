@@ -202,6 +202,7 @@ mod tests {
                 pool_start: None,
                 pool_end: None,
                 reserved: vec![],
+                reserve_from_dns: vec![],
                 upstream_dns: vec![],
                 mesh_routed: false,
                 storage_cidr: None,

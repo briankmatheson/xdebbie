@@ -14,6 +14,7 @@
 //! * `respond` — the pure request → reply function.
 //! * this file — the UDP socket on the bridge, store lookup, status.
 
+pub mod dnsres;
 pub mod model;
 pub mod respond;
 pub mod wire;
@@ -108,6 +109,11 @@ pub struct NetworkStatus {
     pub pool_start: Ipv4Addr,
     pub pool_end: Ipv4Addr,
     pub reserved: Vec<Ipv4Addr>,
+    /// Zones whose names reserve addresses, and what they reserve now.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reserve_from_dns: Vec<dnsres::DnsSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reserved_dns: Option<dnsres::DnsReservedStatus>,
     #[serde(default)]
     pub upstream_dns: Vec<Ipv4Addr>,
     pub lease_secs: u32,
@@ -158,6 +164,8 @@ impl DhcpServer {
             pool_start,
             pool_end,
             reserved: self.net.reserved.clone(),
+            reserve_from_dns: self.net.reserve_from_dns.clone(),
+            reserved_dns: (!self.net.reserve_from_dns.is_empty()).then(dnsres::status),
             upstream_dns: self.net.upstream_dns.clone(),
             lease_secs: self.net.lease_secs,
             domain: self.net.domain.clone(),

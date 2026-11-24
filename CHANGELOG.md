@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `[network] reserve_from_dns = [{ zone, server }]`: every A record inside
+  the overlay in those zones is reserved, read by zone transfer at startup
+  and every minute; a failed transfer keeps the last good set (also on
+  disk). Name an address in DNS and no VM gets it; `xdctl vm create --ip`
+  on one is refused, naming the record. Shown in `GET /v1/network` and
+  `xdctl net ls`; joining boxes copy it. docs/network.md.
 - `[clients]` and `/v1/client-config`: what a hub tells its xdj clients --
   DNS zones each with its resolver, search domains in order of preference,
   and a welcome banner (at most 4 KiB). `GET /v1/client-config` (JSON) and

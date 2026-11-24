@@ -139,6 +139,7 @@ pub fn generate_config_for(
                  {q}pool_start = \"{start}\"\n\
                  {q}pool_end = \"{end}\"\n\
                  {q}reserved = []\n\
+                 # {q}reserve_from_dns = [{{ zone = \"mesh.example.org\", server = \"10.23.0.1\" }}]   # every A record there is reserved too\n\
                  {p}# bridge = \"{network}\"              # default: mesh bridge, else first host's\n\
                  {p}# lease_secs = 86400\n\
                  {p}# mesh_routed = false              # true: mesh peers without Geneve (xdj on macOS/Windows) reach VMs\n\
@@ -559,6 +560,19 @@ pub fn network_block(
         Some(d) => format!("domain = {d:?}\n"),
         None => String::new(),
     };
+    // the cluster's DNS-named reservations: every box reads the same zones
+    let from_dns = if n.reserve_from_dns.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "reserve_from_dns = [{}]\n",
+            n.reserve_from_dns
+                .iter()
+                .map(|z| format!("{{ zone = {:?}, server = {:?} }}", z.zone, z.server))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
     let warn_lines = warnings
         .iter()
         .map(|w| format!("# WARNING: {w}\n"))
@@ -576,6 +590,7 @@ pub fn network_block(
          pool_start = \"{start}\"\n\
          pool_end = \"{end}\"\n\
          reserved = [{reserved_s}]\n\
+         {from_dns}\
          bridge = \"{bridge}\"\n\
          lease_secs = {}",
         n.cidr, n.lease_secs
@@ -931,6 +946,22 @@ cpu_overcommit = 4.0
             pool.0, pool.1
         );
         serde_json::from_str(&s).unwrap()
+    }
+
+    #[test]
+    fn network_block_copies_the_dns_zones_that_reserve() {
+        let mut n = cluster_net("10.23.0.0/16", ("10.23.0.16", "10.23.0.239"));
+        n.reserve_from_dns = vec![crate::dhcp::dnsres::DnsSource {
+            zone: "mesh.example.org".into(),
+            server: "10.23.0.1".into(),
+        }];
+        let (block, _) = network_block(&n, 1, "virbr-xdebbie");
+        let t: toml::Value = toml::from_str(&block).unwrap();
+        let z = &t["network"]["reserve_from_dns"][0];
+        assert_eq!(z["zone"].as_str(), Some("mesh.example.org"));
+        assert_eq!(z["server"].as_str(), Some("10.23.0.1"));
+        // and it parses back as a [network] table
+        let _: crate::dhcp::NetworkConfig = t["network"].clone().try_into().unwrap();
     }
 
     #[test]

@@ -725,6 +725,33 @@ fn print_net(v: &Value) {
     if let Some(r) = v["reserved"].as_array().filter(|r| !r.is_empty()) {
         println!("reserved={}", r.iter().map(s).collect::<Vec<_>>().join(","));
     }
+    // reserved because DNS names them: address, name, and each zone's state
+    if let Some(d) = v["reserved_dns"].as_object() {
+        if let Some(e) = d
+            .get("entries")
+            .and_then(|e| e.as_array())
+            .filter(|e| !e.is_empty())
+        {
+            println!(
+                "reserved by dns={}",
+                e.iter()
+                    .map(|x| format!("{} ({})", s(&x["ip"]), s(&x["name"])))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        if let Some(z) = d.get("zones").and_then(|z| z.as_object()) {
+            for (zone, st) in z {
+                match st["error"].as_str() {
+                    Some(err) => println!(
+                        "  dns zone {zone}: {} records kept, last transfer failed: {err}",
+                        st["records"]
+                    ),
+                    None => println!("  dns zone {zone}: {} records", st["records"]),
+                }
+            }
+        }
+    }
     let state = if !d["enabled"].as_bool().unwrap_or(false) {
         "disabled (allocate only)".to_string()
     } else if !d["bound"].as_bool().unwrap_or(false) {

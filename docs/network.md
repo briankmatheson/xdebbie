@@ -63,6 +63,9 @@ dns = ["10.23.1.1"]
 pool_start = "10.23.1.2"
 pool_end = "10.23.1.254"
 reserved = []                 # appliances pinned by hand, if any
+reserve_from_dns = [          # ...or by name: every A record in these zones
+  { zone = "mesh.example.org", server = "10.23.0.1" },
+]
 upstream_dns = ["192.168.1.1"]  # where VM DNS to the gateway is forwarded
 # dhcp = true                 # false = allocate only, some other server answers
 # bridge = "virbr-int"        # default: the mesh bridge, else the first host's
@@ -83,6 +86,26 @@ just holds fewer boxes (a /24: box 0 only; a /20: boxes 0–15).
 
 `spec.ip` may be any free host address in `cidr`, inside the pool or not —
 pinning infrastructure addresses outside the pool is the intended use.
+
+### Reserved by DNS
+
+`reserve_from_dns` lists zones whose **A records inside `cidr`** are
+reserved: a LoadBalancer pool, an API endpoint, a hub's own address.
+Name the address in DNS and no VM is ever given it, automatically or
+pinned (`xdctl vm create --ip` is refused, naming the record). DNS is then
+the one list to keep; `reserved` stays for addresses with no name.
+
+- Each zone is fetched by zone transfer (AXFR, TCP) from `server` -- an
+  address, never a name -- at startup and every minute. The server must
+  allow transfers to the box (`REFUSED` says so).
+- A transfer that fails keeps that zone's **last good set**, also saved to
+  `dns-reserved.json` beside `state_file`, so a box that starts while DNS
+  is down still keeps its reservations.
+- A VM keeps an address it already holds even if DNS names it (its own
+  record, usually); only new picks avoid DNS-reserved addresses. A deleted
+  VM's leftover record keeps its address reserved until the record goes.
+- `xdctl net ls` shows what DNS reserves and each zone's last transfer.
+  Boxes that join copy the setting with the rest of `[network]`.
 
 Config is validated at startup; a bad `[network]` stops the daemon with a
 clear message.
