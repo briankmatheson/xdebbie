@@ -1,5 +1,7 @@
 # Discovery, election and the leader
 
+How boxes find each other, pick one leader, and route every request to it.
+
 Several xdebbied boxes on one LAN find each other over multicast, elect one
 leader, and that leader makes every decision: it runs the scheduler and the
 reconciler, and it owns the answer to every `/v1` cluster request. The
@@ -15,28 +17,29 @@ open the multicast socket, is its own leader. Nothing else changes.
 | Concern | Leader | Follower |
 |---|---|---|
 | Reconciler (`inventory → schedule → step VMs`) | runs every `reconcile_interval_secs` | idle (`follower: reconciler idle, the leader decides` in the log) |
-| `/v1/hosts`, `/v1/vms`, `/v1/volumes`, `/v1/failure-domains`, `/v1/schedule` | answers from its store | forwards to the leader verbatim, relays status, headers and body |
-| `/v1/leader`, `/v1/network`, `/v1/token`, `/v1/mesh*`, `/healthz` | local | local (they describe the box you asked) |
+| `/v1/hosts`, `/v1/vms`, `/v1/volumes`, `/v1/failure-domains`, `/v1/schedule`, `/v1/qos` | answers from its store | forwards to the leader verbatim, relays status, headers and body |
+| `/v1/enroll`, `/v1/enroll/ID…` | forwarded to the CA box (`ca_url`) | forwarded to the CA box |
+| `/v1/leader`, `/v1/network`, `/v1/token`, `/v1/mesh*`, `/v1/settings`, `/v1/version`, `/v1/client-config`, `/v1/ca`, `/v1/cert`, `/healthz` | local | local (they describe the box you asked) |
 | Token rotation (`/v1/token/rotate`) | mints, distributes to peers, retires the old one | forwards |
 | DHCP responder | answers | answers unless `[network] leader_only = true` |
 
-Forwarding adds one header, `X-Xdebbie-Forwarded-By: <hostname>`. A request
+Forwarding adds one header, `X-Xdebbie-Forwarded-By: HOSTNAME`. A request
 that already carries it is never forwarded again: if leadership moved
 between the two hops the second box answers `503` and the client retries.
 While an election is running a follower answers `503` with
 `Retry-After: 2`. If the leader cannot be reached the follower answers
 `502` naming it. Bearer auth is checked on the box you asked, then the
 `Authorization` header travels with the request, so every box in a cluster
-must share one token — `xdctl token rotate` changes it everywhere
-(docs/operations.md).
+must share one token. `xdctl token rotate` changes it everywhere
+([Rotate the API token](how-to/rotate-token.md)).
 
 ## `GET /v1/leader`
 
 ```json
-{"this":   {"node_id": "bef8ad05-…", "hostname": "node0.example.net", "api_url": "http://10.23.0.1:23443"},
+{"this":   {"node_id": "bef8ad05-…", "hostname": "box0.example.org", "api_url": "https://box0.example.org:23443"},
  "state":  "follower",
  "is_leader": false,
- "leader": {"node_id": "609980bd-…", "hostname": "node1.example.net", "api_url": "http://10.23.0.2:23443"},
+ "leader": {"node_id": "609980bd-…", "hostname": "box1.example.org", "api_url": "https://box1.example.org:23443"},
  "peers":  2}
 ```
 
@@ -55,16 +58,16 @@ rest of the command. An election in progress is waited out for up to 20 s
 stays on the first seed that answers and never follows the leader. To
 enrol a peer on box B, point `XDEBBIE_URL` (or `--url`) at B.
 
-```
+```console
 $ xdctl leader
-asked   node0.example.net (http://10.23.0.1:23443)  [follower, 2 peers]
-leader  node1.example.net (http://10.23.0.2:23443)
+asked   box0.example.org (https://box0.example.org:23443)  [follower, 2 peers]
+leader  box1.example.org (https://box1.example.org:23443)
 ```
 
 ## Advertised URL
 
 Peers and clients reach a box at the URL it announces: `advertise_url` from
-`xdebbied.toml` if set (use the FQDN: `https://node0.example.net:23443`),
+`xdebbied.toml` if set (use the FQDN: `https://box0.example.org:23443`),
 otherwise the scheme plus the listen address, with an unspecified IP
 (`0.0.0.0`) replaced by the default-route interface address.
 
@@ -101,7 +104,7 @@ signs every datagram and drops any that do not verify
 (`discovery/wire.rs`). A signed datagram wraps the message:
 
 ```json
-{"v":1,"ts":1763400000,"msg":"{\"type\":\"HEARTBEAT\",…}","mac":"<64 hex>"}
+{"v":1,"ts":1763400000,"msg":"{\"type\":\"HEARTBEAT\",…}","mac":"…64 hex digits…"}
 ```
 
 - **Key.** `HMAC-SHA256(token, "xdebbie discovery v1")`: derived from
@@ -171,8 +174,9 @@ with `cargo test -p xdebbied -- --ignored`.
 
 ## Network requirements
 
-- One L2 segment (TTL 1), with multicast allowed. `xdebbied bootstrap`
-  adds the `ufw` rule for the discovery port from local networks; if you
+- One L2 segment (TTL 1), with multicast allowed. With discovery on,
+  `xdebbied bootstrap` adds the `ufw` rule for the discovery port from
+  local networks; if you
   change `multicast_addr` afterwards, re-run it or add the rule yourself,
   or the box never sees a peer and leads alone.
 - `23443/tcp` reachable between boxes and from clients at the advertised
@@ -187,8 +191,8 @@ change from handing the cluster to a box that knows nothing about it:
 - **Registrar** (`registrar.rs`). A `[[hosts]]` entry seeds only the store
   of the daemon that read it, and nobody reads a follower's store. Every
   5 s a follower `PUT`s its entries to the leader as other boxes must see
-  them: `uri = qemu+tls://<libvirtd listen address>/system` and
-  `agent = <this box's API URL>`; it repeats a minute later in case the
+  them: `uri = qemu+tls://BRIDGE_ADDRESS/system` (where its libvirtd
+  listens) and `agent = API_URL` (this box's advertised URL); it repeats a minute later in case the
   leader's store went backwards. (`bootstrap --join` does the same once,
   with the CA box; the registrar covers the CA box itself and every later
   leader.) A VM pinned to a host the leader has not heard of waits in
@@ -200,7 +204,7 @@ change from handing the cluster to a box that knows nothing about it:
   DHCP responder answers from (`[network] leader_only = false`).
 
 The leader drives a host whose `agent` is another box through that box's
-daemon (`POST /v1/agent/<op>`, `agent.rs`): thin-pool disks, NVMe
+daemon (`POST /v1/agent/OP`, `agent.rs`): thin-pool disks, NVMe
 connects, the seed image and the base image all live where the VM runs,
 and `qemu+tls://` reaches none of them. Hosts added by hand (no `agent`)
 are driven over their `uri` as before. Live migration between boxes still

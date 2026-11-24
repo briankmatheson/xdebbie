@@ -15,4 +15,11 @@ if [ -n "$hits" ]; then
   echo "$hits" >&2
   exit 1
 fi
+# Relative links and anchors, code-fence languages, UPPERCASE placeholders,
+# site-specific names, and docs/SUMMARY.md coverage (tests/lint-docs.py).
+if command -v python3 >/dev/null 2>&1; then
+  python3 tests/lint-docs.py
+else
+  echo "lint-links: python3 missing; skipped tests/lint-docs.py" >&2
+fi
 echo "lint-links: ok"

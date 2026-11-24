@@ -1,5 +1,7 @@
 # Geneve overlay mesh (over WireGuard)
 
+How xdebbied joins every box's VM bridge into one encrypted Layer 2 network.
+
 `xdebbied` can stitch the overlay bridge of every host ("box") into one L2
 segment using Geneve tunnels, so VMs on different boxes talk as if they
 shared a switch. Since 0.5.0 it can also build the **WireGuard underlay**
@@ -10,16 +12,13 @@ peers — which only pins the bridge MTU, installs a small nftables table and
 creates the WireGuard link, so the box is ready to be enrolled from another
 one. `enabled = false` turns it off.
 
-Design reference: *Aviary in a Box Design Specification* §6.8 and the
-*XDebbie Geneve Mesh — Implementation Spec* v1.0.
-
 ## What it builds
 
 | Object | Per | Detail |
 |---|---|---|
-| `gnv-b<P>` | peer `P` | Geneve netdev, same VNI/dstport for every peer, `remote` = peer's underlay address, `ifalias xdebbie-mesh/v1`, enslaved to the overlay bridge |
+| `gnv-bP` | peer `P` | Geneve netdev, same VNI/dstport for every peer, `remote` = peer's underlay address, `ifalias xdebbie-mesh/v1`, enslaved to the overlay bridge |
 | bridge port flags | peer | `isolated on` (peers never bridge to each other → no loops), `learning/flood off` in `derived` mode (on in `learn`), `mcast_flood/bcast_flood on` |
-| static FDB | peer, `derived` only | 17 entries: `52:54:00:23:<PP>:00..0f` (VM slots) and `:fe` (the peer's bridge) |
+| static FDB | peer, `derived` only | 17 entries: `52:54:00:23:PP:00` to `:0f` (reserved slot MACs) and `:fe` (the peer's bridge) |
 | MTU | mesh | underlay MTU − 50 (`auto`) or a fixed value ≥ 1280; applied to tunnels, the bridge, and new VM NICs (`<mtu size=…/>`) |
 | `nft table inet xdebbie_mesh` | mesh | drops UDP `dstport` arriving on any interface other than `underlay` |
 | `/var/lib/xdebbie/mesh.json` | mesh | persisted spec when set through the API |
@@ -40,17 +39,20 @@ Geneve itself is plaintext. Set `wireguard` and the daemon owns the underlay:
 |---|---|
 | link `underlay` (default `wg-flock`) | kind wireguard, `ifalias xdebbie-mesh/v1`, MTU `wireguard.mtu` (1420) |
 | key | `/var/lib/xdebbie/wg.key`, generated with `wg genkey` once, mode 0600; survives teardown so a box keeps its identity |
-| address | `wireguard.address` or `10.22.<box>.1`, prefix `wireguard.prefix` (16) → the connected route sends `10.22.0.0/16` into the tunnel |
-| peers | one WireGuard peer per mesh peer with a `pubkey`: `endpoint` if given, `allowed-ips <remote>/32`, `persistent-keepalive wireguard.keepalive` (25) |
+| address | `wireguard.address` or `10.22.BOX.1`, prefix `wireguard.prefix` (16) → the connected route sends `10.22.0.0/16` into the tunnel |
+| peers | one WireGuard peer per mesh peer with a `pubkey`: `endpoint` if given, `allowed-ips REMOTE/32`, `persistent-keepalive wireguard.keepalive` (25) |
 
-With WireGuard managed, `peers[].remote` is derived (`10.22.<box>.1`), the
+With WireGuard managed, `peers[].remote` is derived (`10.22.BOX.1`), the
 underlay route check holds by construction, and `allow_plain_underlay` is
 moot. Enrolment is two commands:
 
-```
-boxA$ xdctl mesh wg                     # prints pubkey + the line to run elsewhere
-boxB$ xdctl mesh peer add 0 --pubkey <A's key> --endpoint boxA.example:51820
-boxA$ xdctl mesh peer add 1 --pubkey <B's key> --endpoint boxB.example:51820
+```bash
+# on box A (box 0), then the same on box B (box 1)
+xdctl mesh wg                           # prints this box's public key
+# on box B: add box A
+xdctl mesh peer add 0 --pubkey A_PUBKEY --endpoint box0.example.org:51820
+# on box A: add box B
+xdctl mesh peer add 1 --pubkey B_PUBKEY --endpoint box1.example.org:51820
 ```
 
 `xdctl mesh` talks to the box named in `--url`/`XDEBBIE_URL`, not the
@@ -60,8 +62,8 @@ the URL of the box whose peer list it edits (on that box, the sourced
 
 Those `xdctl` calls go to the API over HTTPS. Every box's cert is signed
 by the one cluster CA, which the second box got when it was enrolled
-(`xdebbied bootstrap --join https://first:23443`, then `xdctl approve` —
-see BOOTSTRAP.md, "Joining a cluster"). A box that was never enrolled
+(`xdebbied bootstrap --join https://box0.example.org:23443`, then
+`xdctl approve`; see [Join a second box](getting-started/join.md)). A box that was never enrolled
 cannot be reached by the others' daemons or `xdctl`.
 
 A peer behind NAT can omit `endpoint`; it initiates towards the others and
@@ -79,9 +81,9 @@ name exists but isn't a WireGuard link we own) are blocking.
 A laptop or server that runs **xdj** is a mesh *client*, not a box of the
 mesh: one WireGuard link to this box (the hub), no Geneve tunnel, and it
 routes `10.23.0.0/16` through the hub. Register it in `spec.clients`, not
-`spec.peers`:
+`spec.peers`. Step by step: [Connect a laptop with xdj](how-to/mesh-clients.md).
 
-```
+```console
 client$ xdj key                                             # prints KEY
 hub$    xdctl mesh client add --pubkey KEY --name laptop --hub-endpoint HUB_HOST
 added xdj client box 3 (10.22.3.1)
@@ -133,7 +135,7 @@ routes for clients with `mesh_routed` on (`/v1/settings`).
 forever, since it never answers Geneve probes), keeping its number so the
 client needs no change:
 
-```
+```bash
 xdctl mesh peer rm BOX
 xdctl mesh client add --box BOX --pubkey KEY
 ```
@@ -150,7 +152,7 @@ after each handshake from `GET /v1/client-config/xdj` and keeps a copy.
 search = ["mesh.example.org", "int.example.org", "example.org"]
 welcome = """
 Welcome to the example mesh.
-  the page:  https://aviary.mesh.example.org/
+  dashboard:  https://dash.mesh.example.org/
 """
 
 [[clients.dns]]
@@ -196,7 +198,7 @@ Two sources, API wins:
 [mesh]
 enabled = true               # default
 box = 0                      # 0–253, unique per host
-bridge = "virbr-int"         # default: the first [[hosts]] bridge
+bridge = "virbr-xdebbie"     # default: the first [[hosts]] bridge
 vni = 23
 dstport = 6081
 underlay = "wg-flock"        # interface peers are reached through
@@ -211,7 +213,7 @@ probe_up_after = 3
 
 [mesh.wireguard]             # the managed underlay; these are the defaults
 listen_port = 51820
-# address = "10.22.0.1"      # default 10.22.<box>.1
+# address = "10.22.0.1"      # default 10.22.BOX.1
 prefix = 16
 mtu = 1420
 keepalive = 25
@@ -219,15 +221,15 @@ keepalive = 25
 [[mesh.peers]]
 box = 1
 pubkey = "EtEvrro2LlkElPgm+ge5ndqtzL2o9ehIWwyIFnKsBQU="
-endpoint = "gram.example:51820"
+endpoint = "box1.example.org:51820"
 # remote = "10.22.1.1"       # derived when [mesh.wireguard] is set, required otherwise
-# probe = "10.23.1.1"        # default: 10.23.<box>.1 (derived) / remote (learn)
+# probe = "10.23.1.1"        # default: 10.23.BOX.1 (derived) / remote (learn)
 
 [[mesh.clients]]             # xdj; needs the managed WireGuard underlay
 box = 3
 pubkey = "4ZJxNbbSoUq4tgYKAa0Ow6EYwlANqldjfPGYdPZ9P2I="
 name = "laptop"              # optional
-# endpoint = "host:51820"    # optional: clients initiate
+# endpoint = "HOST:51820"    # optional: clients initiate
 ```
 
 Validation errors are returned field-by-field, e.g.
@@ -235,7 +237,9 @@ Validation errors are returned field-by-field, e.g.
 
 ## CLI
 
-```
+Full list with defaults: [xdctl reference](reference/xdctl.md#mesh).
+
+```bash
 xdctl mesh ls                         # peers table + conditions
 xdctl mesh describe                   # full {spec,status} JSON
 xdctl mesh apply -f mesh.json         # PUT (bare spec or {spec,status} doc)
@@ -255,7 +259,7 @@ xdctl mesh delete --yes               # tear down; falls back to [mesh] TOML
 | Method | Path | Notes |
 |---|---|---|
 | `GET` | `/v1/mesh` | `{spec, status}`; `status.generation` / `observed_generation` |
-| `PUT` | `/v1/mesh` | body = spec; `If-Match: <generation>` → `409` on mismatch; `400` with `errors[]` |
+| `PUT` | `/v1/mesh` | body = spec; `If-Match: GENERATION` → `409` on mismatch; `400` with `errors[]` |
 | `DELETE` | `/v1/mesh` | removes API state; `reenabled_from_config` tells whether TOML took over |
 | `GET` | `/v1/mesh/peers/{box}` | one peer's status |
 | `POST` | `/v1/mesh/reconcile` | `202`, triggers a tick |
@@ -265,10 +269,10 @@ xdctl mesh delete --yes               # tear down; falls back to [mesh] TOML
 Conditions: `Ready`, `Degraded` (some peer not Up), and blocking ones that
 stop all kernel writes: `GeneveModuleMissing`, `UnderlayMissing`,
 `BridgeMissing`, `WireguardModuleMissing`, `WireguardConflict`. Warnings:
-`BridgeMacMismatch` (the bridge is not `52:54:00:23:<box>:fe`, so in
+`BridgeMacMismatch` (the bridge is not `52:54:00:23:BOX:fe`, so in
 `derived` mode *peers* cannot reach this box's bridge address — its gateway
-and DNS — fix with `virsh net-edit` on the `<mac>` and `ip link set <bridge>
-address …` to apply live; bootstrap sets it when it creates the network,
+and DNS — fix with `virsh net-edit` on the `<mac>` element and
+`ip link set BRIDGE address MAC` to apply live; bootstrap sets it when it creates the network,
 from the box id the cluster CA assigned at enrolment), `NameConflict`, and `BridgeStpEnabled` — which only
 stays set if turning STP off failed: the mesh **forces STP off** on its
 bridge every tick, since isolated tunnel ports make it loop-free and BPDUs
@@ -286,8 +290,14 @@ daemon-wide metrics endpoint exists.
 The `.deb` ships `/etc/modules-load.d/xdebbie-mesh.conf` (`geneve`,
 `wireguard`) and depends on `iproute2`, `nftables` and `wireguard-tools`. The daemon runs as root with no
 `PrivateNetwork`/`CapabilityBoundingSet` restrictions, so netlink and raw
-ICMP (peer probes) work. The dev host should use `bridge = "virbr-int"` and
-`fdb = "learn"` until VM MACs are derivable.
+ICMP (peer probes) work.
+
+**`derived` FDB and VM MACs.** In `derived` mode the static FDB covers each
+peer's bridge MAC and its 16 slot MACs, `52:54:00:23:BOX:00` to `:0f`, and
+the tunnel ports neither learn nor flood unknown unicast. VM MACs are
+derived from the VM's UUID (`52:54:00:` plus its first three bytes), not
+from those slots. If VMs on different boxes cannot reach each other, set
+`fdb = "learn"` on every box.
 
 ### Host firewall (ufw)
 
@@ -302,13 +312,13 @@ bootstrap no longer wants are deleted, so a box converges on re-run. It
 also removes the `XDEBBIE-INPUT` iptables chain older versions installed.
 Services that run next to xdebbied (ABE, DNS, an apt proxy) add their own
 rules where they are set up. VM egress (NAT, DNS forwarding) is in
-`docs/network.md`.
+[Overlay addressing and DHCP](network.md#leaving-the-box-nat-and-dns).
 
 The symptom of a missing Geneve/WireGuard rule is a WireGuard handshake that
-succeeds and `gnv-b<N>` tunnels whose TX counters climb while RX stays at 0
+succeeds and `gnv-bN` tunnels whose TX counters climb while RX stays at 0
 on the far side; `sudo ufw status` should show:
 
-```
+```text
 51820/udp                  ALLOW IN    Anywhere        # xdebbie wireguard underlay
 6081/udp on wg-flock       ALLOW IN    Anywhere        # xdebbie geneve on wg-flock
 ```
@@ -328,11 +338,11 @@ use.
 
 Once two boxes are meshed their bridges are **one L2 segment**: every DHCP
 server on either bridge hears every VM's DISCOVER. Use xdebbie's own
-responder (`[network]`, see `docs/network.md`): it answers only for MACs in
+responder (`[network]`, see [network](network.md)): it answers only for MACs in
 its own VM store, so boxes never contend, and it hands out the mesh MTU as
 DHCP option 26. Each box's bridge has its own /24 of the shared /16
 (`10.23.0.1/16` on box 0, `10.23.1.1/16` on box 1, …; VMs at `.N.2-254`),
-which is also where the derived probe (`10.23.<box>.1`) lands. Bootstrap
+which is also where the derived probe (`10.23.BOX.1`) lands. Bootstrap
 sets this up; a bridge at some other address makes it warn with the
 `virsh net-edit` to run. If a box still runs libvirt's dnsmasq range or
 `dhcpd` on the bridge, remove it before enrolling.
@@ -343,18 +353,18 @@ sets this up; a bridge at some other address makes it warn with the
 routes (no libvirt, LVM, discovery). The 3-host network-namespace harness in
 `tests/mesh/` uses it:
 
-```
+```bash
 tests/mesh/run.sh            # M1–M14 acceptance tests (re-execs under unshare -Urnm)
 ONLY="M4 M8" KEEP=1 tests/mesh/run.sh
 ```
 
-## Flock contract
+## Driving the mesh from another controller
 
-`flockd` calls its **local** daemon with `PUT /v1/mesh` + `If-Match`, sending
-the full peer list. With the managed underlay each peer is just
+A controller that manages peers itself calls its **local** daemon with
+`PUT /v1/mesh` + `If-Match`, sending the full peer list. With the managed underlay each peer is just
 `{box, pubkey, endpoint}` (remote derived, no `probe`), and enrol/revoke is a
 single PUT — the daemon orders the WireGuard and Geneve changes itself.
 Wait for `observed_generation == generation` before treating a change as
-applied. `spec.clients` (xdj) is not Flock's to manage: carry it over from
-the `GET` unchanged, or the PUT removes every client. See the
-module docs in `crates/xdebbied/src/mesh/mod.rs`.
+applied. Carry `spec.clients` (xdj) over from the `GET` unchanged, or the
+PUT removes every client. See the module docs in
+`crates/xdebbied/src/mesh/mod.rs`.

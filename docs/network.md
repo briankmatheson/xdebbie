@@ -1,5 +1,7 @@
 # Overlay addressing and the built-in DHCP responder
 
+How every VM gets a fixed address on the overlay, and how its traffic leaves the box.
+
 `[network]` in `xdebbied.toml` makes xdebbie the owner of VM addressing on
 the overlay bridge. It replaces libvirt's dnsmasq range or a hand-run
 `dhcpd`, and it is what makes a Geneve mesh of bridges safe: one subnet,
@@ -29,7 +31,7 @@ the same records would say the same thing. Which box answers is policy:
 
 - `leader_only = false` (default): every box with `[network]` answers — for
   the VMs in *its* store. With today's independent control planes that is
-  exactly right: timesink answers for timesink's VMs, gram for gram's, and
+  exactly right: box 0 answers for box 0's VMs, box 1 for box 1's, and
   they never overlap because they never hold the same MAC.
 - `leader_only = true`: answer only while this process is the elected
   leader. Use this once control planes share one store (replicated state);
@@ -37,6 +39,8 @@ the same records would say the same thing. Which box answers is policy:
   with the same answers the moment it wins the election.
 
 ## Options handed to guests
+
+The same list, with message types, is in [DHCP options served](reference/dhcp-options.md).
 
 | option | value |
 |---|---|
@@ -67,7 +71,7 @@ reserved = []                 # appliances pinned by hand, if any
 reserve_from_dns = [          # ...or by name: every A record in these zones
   { zone = "mesh.example.org", server = "10.23.0.1" },
 ]
-upstream_dns = ["192.168.1.1"]  # where VM DNS to the gateway is forwarded
+upstream_dns = ["192.0.2.53"]   # where VM DNS to the gateway is forwarded
 # dhcp = true                 # false = allocate only, some other server answers
 # bridge = "virbr-int"        # default: the mesh bridge, else the first host's
 # lease_secs = 86400
@@ -76,14 +80,15 @@ upstream_dns = ["192.168.1.1"]  # where VM DNS to the gateway is forwarded
 # leader_only = false
 ```
 
-One /16 per overlay, one /24 per box. `cidr` (and `domain`) is the same on
-every meshed box; box *N* owns `<cidr>.N.0/24`: its bridge is `.N.1` — the
+One /16 per overlay, one /24 per box (shown here with the default
+`10.23.0.0/16`). `cidr` (and `domain`) is the same on
+every meshed box; box *N* owns `10.23.N.0/24`: its bridge is `.N.1` — the
 gateway and DNS its VMs are told, and where the mesh probes it
-(`docs/mesh.md`) — and its VMs get `.N.2`–`.N.254`. Pools are disjoint by
+([mesh](mesh.md)) — and its VMs get `.N.2`–`.N.254`. Pools are disjoint by
 construction, so independent control planes on one overlay never pick the
 same address and there is nothing to `reserved`. Bootstrap writes exactly
 this for every box, the first one from `--subnet` and a joiner from the CA
-box's `/v1/network` (BOOTSTRAP.md, "Joining a cluster"). A narrower `cidr`
+box's `/v1/network` ([Bootstrap](bootstrap.md#joining-a-cluster-enrolment-and-approval)). A narrower `cidr`
 just holds fewer boxes (a /24: box 0 only; a /20: boxes 0–15).
 
 `spec.ip` may be any free host address in `cidr`, inside the pool or not —
@@ -115,16 +120,16 @@ clear message.
 ## Leaving the box: NAT and DNS
 
 Each box forwards for its own /24 and nothing else, so VM traffic leaves
-by the box the VM runs on: a VM on timesink appears as timesink's address,
-a VM on gram as gram's. VM-to-VM traffic between boxes is bridged over the
+by the box the VM runs on: a VM on box 0 appears as box 0's address,
+a VM on box 1 as box 1's. VM-to-VM traffic between boxes is bridged over the
 mesh and never touches this. Bootstrap sets it up (`bootstrap/firewall.rs`):
 
 - the libvirt network is `<forward mode='route'/>` (an isolated network
   makes libvirt reject all forwarding; bootstrap warns, with the
   `virsh net-edit` to run, when it adopts one), `ip_forward` is on and
   pinned in `/etc/sysctl.d/90-xdebbie-forward.conf`;
-- ufw forwards the /24 out of the bridge (`route allow in on <bridge>
-  from <cidr>.N.0/24`);
+- ufw forwards the /24 out of the bridge (`route allow in on BRIDGE
+  from 10.23.N.0/24`);
 - the `ip xdebbie_host` nftables table masquerades the /24 behind
   whatever interface a packet leaves by, DNATs the VMs' DNS — they are told
   the bridge, `.N.1`, port 53 udp and tcp — to `upstream_dns`, and drops new
@@ -137,17 +142,17 @@ skipped) and is copied to every joiner with the rest of `[network]`, so all
 VMs in the cluster ask the same server box 0 does. Change it on box 0 and
 re-join, or set it by hand everywhere. Empty = no DNAT: VM DNS goes nowhere.
 
-```
+```bash
 sudo nft list table ip xdebbie_host     # counters per rule
 sudo ufw status                         # "# xdebbie vm egress …" is the forward rule
 ```
 
 ## Operating it
 
-```
+```bash
 xdctl net ls        # config, whether the responder is bound/serving, counters
 xdctl net seen      # MACs heard on the bridge and what they were told
-xdctl vm create web --image debian-12-base --ip 10.23.0.5 ...
+xdctl vm create web --image debian-13 --ip 10.23.0.5
 ```
 
 `GET /v1/network` returns the same as JSON.
@@ -188,6 +193,7 @@ network probably still runs dnsmasq.
   `xdctl net seen` to spot them.
 - No DNS of its own. `dns` names the bridge; queries there are forwarded to
   `upstream_dns`. VM names are not registered anywhere.
-- No replication of the VM store between control planes. Every request
-  already goes through the leader (docs/autodiscovery.md), so the
-  leader's store is the truth; a new leader starts from its own copy.
+- No replicated VM store between control planes. Every request
+  goes through the leader, so the
+  leader's store is the truth, and followers mirror it every 5 seconds
+  ([Discovery](autodiscovery.md#the-store-is-per-box-followers-keep-up)).

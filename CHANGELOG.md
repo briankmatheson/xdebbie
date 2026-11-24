@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+- The docs are a site: `book.toml` and `docs/SUMMARY.md` make `mdbook build`
+  produce it in `book/`. Pages are grouped as getting started, how-to
+  guides, reference and explanation, with new pages for every
+  `xdebbied.toml` key, every `xdctl` command, files and ports, DHCP
+  options, security, troubleshooting and known limits.
+- `BOOTSTRAP.md` moved to `docs/bootstrap.md` (still shipped as
+  `/usr/share/doc/xdebbied/BOOTSTRAP.md`); `docs/api.md`,
+  `docs/capi-contract.md` and `docs/debian-package.md` moved to
+  `docs/reference/`. `docs/operations.md` was split into how-to guides,
+  `docs/security.md` and `docs/limits.md`. `docs/aviary-in-a-box.md`
+  (external dnsmasq/ISC DHCP setup, replaced by the built-in responder)
+  is gone.
+- The package also ships `troubleshooting.md` and `configuration.md`.
+- Corrected: `policy` is `"spread"` or `"pack"` (not `"binpack"`); joining a
+  box the package already bootstrapped needs its own identity cleared
+  first; token rotation reaches only boxes known through discovery;
+  hot-plugged volumes appear as `scsi-0QEMU_QEMU_HARDDISK_ID`; `nvme`,
+  `qemu_img` and `nvme_sys` are top-level keys; VMs have had a video device
+  since 0.8.1.
+- `tests/lint-links.sh` also checks relative links and anchors, code-block
+  languages, placeholders and site-specific names (`tests/lint-docs.py`);
+  `tests/lint-config-doc.sh` checks every config key is documented.
+
 ## [0.21.0] - 2026-11-24
 
 ### Added

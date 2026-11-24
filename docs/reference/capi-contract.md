@@ -1,12 +1,14 @@
 # Cluster API contract coverage
 
-capq implements Cluster API **contract v1beta2** (CAPI v1.11 and later). Its
+What each Cluster API contract requirement asks of an infrastructure provider, and how capx meets it.
+
+capx implements Cluster API **contract v1beta2** (CAPI v1.11 and later). Its
 CRDs carry `cluster.x-k8s.io/v1beta2: v1alpha1`, mapping the contract to the
 version XDebbie8s serves.
 
 ## InfraCluster → `XDebbie8sCluster`
 
-| Contract requirement | capq |
+| Contract requirement | capx |
 |---|---|
 | CRD contract label | `cluster.x-k8s.io/v1beta2: v1alpha1` |
 | `spec.controlPlaneEndpoint {host, port}` | User-supplied VIP (kube-vip) or external LB. Missing → `Ready=False` with a reason |
@@ -20,10 +22,10 @@ version XDebbie8s serves.
 
 ## InfraMachine → `XDebbie8sMachine`
 
-| Contract requirement | capq |
+| Contract requirement | capx |
 |---|---|
-| `spec.providerID` | `xdebbie://<vm-uuid>`; set as soon as the VM is created |
-| Node ↔ Machine matching | kubelet `--provider-id={{ ds.meta_data.provider_id }}`; capq substitutes the value into bootstrap data, so jinja is not needed |
+| `spec.providerID` | `xdebbie://VM_UUID`; set as soon as the VM is created |
+| Node ↔ Machine matching | kubelet `--provider-id={{ ds.meta_data.provider_id }}`; capx substitutes the value into bootstrap data, so jinja is not needed |
 | `spec.failureDomain` from Machine | Hard placement constraint |
 | `status.failureDomain` | The failure domain of the host actually chosen |
 | `status.initialization.provisioned` | `true` when VM is Running with an InternalIP; never flips back |
@@ -39,7 +41,7 @@ version XDebbie8s serves.
 
 | Feature | How it works with XDebbie8s |
 |---|---|
-| KubeadmControlPlane spreading | KCP picks a failure domain per replica; capq places there. Soft anti-affinity spreads further; `strictAntiAffinity` makes it hard |
+| KubeadmControlPlane spreading | KCP picks a failure domain per replica; capx places there. Soft anti-affinity spreads further; `strictAntiAffinity` makes it hard |
 | MachineDeployment spreading | Soft anti-affinity per MachineDeployment across hosts and failure domains |
 | Rolling upgrades | Create-before-delete on immutable machines. XDebbie8s has no in-place updates |
 | MachineHealthCheck remediation | Machine deletion → VM deletion; replacement goes through the scheduler |
@@ -55,4 +57,4 @@ version XDebbie8s serves.
 | IPAM contract (`IPAddressClaim`) | Not implemented; VMs use DHCP on the host bridge |
 | Load balancer for the API endpoint | Out of scope by design; use kube-vip as in the example |
 | In-place updates / runtime hooks | Not implemented |
-| Leader election for capq | Single replica with `Recreate` strategy |
+| Leader election for capx | Single replica with `Recreate` strategy |
