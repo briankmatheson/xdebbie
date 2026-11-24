@@ -478,8 +478,12 @@ impl DiscoveryEngine {
         let mut heartbeat_ticker = tokio::time::interval(HEARTBEAT_INTERVAL);
         let mut cleanup_ticker = tokio::time::interval(Duration::from_secs(10));
 
-        // Send initial announce
-        if let Err(e) = self.send_announce().await {
+        // Send initial announce. Not with discovery off: peers would list
+        // this box for 15 s and a bootstrap listening nearby would refuse
+        // to start a cluster because of it.
+        if self.enabled()
+            && let Err(e) = self.send_announce().await
+        {
             warn!("Failed to send initial announce: {}", e);
         }
 

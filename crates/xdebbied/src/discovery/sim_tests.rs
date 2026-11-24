@@ -725,7 +725,6 @@ async fn randomized_clusters_converge() {
 /// Discovery off (the default): the box leads alone at once and puts
 /// nothing on the wire.
 #[tokio::test(start_paused = true)]
-#[ignore = "bug: discovery off still sends an ANNOUNCE at start"]
 async fn discovery_off_leads_alone_and_stays_silent() {
     let lan = Lan::new();
     let cluster = lan.spawn(Spec::new("cluster", 1));
