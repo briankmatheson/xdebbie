@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   assigned box id, and the box enrols. A cluster in use is never left
   behind: `--join` refuses and says what is in it, unless `--force`. A box
   enrolled with a different CA is refused too, instead of being reused.
+- The generated `xdebbied.toml` comment named the placement policy
+  "binpack"; the value is "pack".
 
 ## [0.21.1] - 2026-11-24
 

@@ -169,7 +169,7 @@ token_file = "/etc/xdebbie/token"
 tls_cert = "/etc/xdebbie/api-cert.pem"
 tls_key  = "/etc/xdebbie/api-key.pem"
 
-# Placement policy: "spread" or "binpack"
+# Placement policy: "spread" or "pack"
 policy = "spread"
 
 # Reconciliation interval in seconds
