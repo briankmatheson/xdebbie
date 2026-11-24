@@ -518,7 +518,6 @@ async fn reelection_after_leader_goes_silent() {
 /// Boxes that come up together never end up with two leaders once the
 /// first election is over, and never more than briefly during it.
 #[tokio::test(start_paused = true)]
-#[ignore = "bug: a candidate keeps collecting votes after hearing a better one; outranking half the cluster wins a majority"]
 async fn no_split_brain_when_started_together() {
     let lan = Lan::new();
     let v: Vec<SimBox> = [3u8, 5, 1, 4, 2]

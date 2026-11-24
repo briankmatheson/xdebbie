@@ -501,17 +501,38 @@ impl DiscoveryEngine {
                 sequence: _,
             } => {
                 if voted_for == self.node_id {
+                    let mine = self.calculate_our_score().await;
                     let mut election = self.election.write().await;
+                    election.update_score(mine);
                     election.received_vote(msg.node_id());
 
                     // Check if we won the election
                     let peers = self.peers.read().await;
                     let total_nodes = peers.peers().count() + 1; // +1 for ourselves
+                    // Votes only say the voters rank below us: a box that
+                    // outranks half the cluster collects a majority. Not a
+                    // win while a box we heard from lately outranks us; it
+                    // will campaign (it heard our proposal) and we will vote
+                    // for it.
+                    let better = peers
+                        .peers()
+                        .find(|p| {
+                            p.last_seen.elapsed() <= HEARTBEAT_TIMEOUT
+                                && election.outranked_by(p.score, p.node_id)
+                        })
+                        .map(|p| p.hostname.clone());
                     drop(peers);
 
                     if election.has_majority(total_nodes) {
-                        info!("Won election with majority vote, becoming leader");
-                        election.become_leader();
+                        match better {
+                            Some(b) => tracing::debug!(
+                                "majority of votes, but {b} outranks us; not taking the lead"
+                            ),
+                            None => {
+                                info!("Won election with majority vote, becoming leader");
+                                election.become_leader();
+                            }
+                        }
                     }
                 }
             }
