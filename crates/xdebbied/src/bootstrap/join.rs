@@ -59,7 +59,7 @@ fn state_path(state_dir: &Path) -> PathBuf {
     state_dir.join("join.json")
 }
 
-fn load_state(state_dir: &Path) -> Option<JoinState> {
+pub(crate) fn load_state(state_dir: &Path) -> Option<JoinState> {
     let b = std::fs::read(state_path(state_dir)).ok()?;
     serde_json::from_slice(&b).ok()
 }

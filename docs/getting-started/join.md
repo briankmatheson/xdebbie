@@ -21,30 +21,23 @@ The package runs bootstrap, which listens 20 seconds for a running cluster:
   LAN): bootstrap stops and tells you to re-run with `--join`. Nothing was
   created. Go to step 3.
 - **It heard nothing** (discovery is off, the default): it set the new box
-  up as a cluster of its own. Clear that first, in step 2.
+  up as a cluster of its own. That is fine: `--join` in step 3 takes the box
+  over from that empty cluster.
 
-To tell which happened:
+## 2. If the new box is already in use
 
-```bash
-sudo test -e /etc/xdebbie/api-ca-key.pem && echo "a cluster of its own: do step 2"
-```
+Since 0.22, `--join` on a box that is still the empty cluster the package
+made (no VMs, no volumes, no other boxes) moves that cluster's identity
+aside and enrols. The files are renamed, not deleted:
+`/etc/xdebbie/api-*.pem.own-cluster-STAMP` and `token.own-cluster-STAMP`.
+The libvirt network the package made is made again for the box id the
+cluster assigns.
 
-## 2. Clear the box's own cluster
-
-Do this only on a new box with no VMs. It removes the identity, config and
-libvirt network that the package's bootstrap just made:
-
-```bash
-sudo systemctl stop xdebbied
-sudo rm -f /etc/xdebbie/xdebbied.toml /etc/xdebbie/xdebbie_env \
-           /etc/xdebbie/token /etc/xdebbie/api-*.pem
-sudo virsh net-destroy xdebbie
-sudo virsh net-undefine xdebbie
-```
-
-Joining needs this because bootstrap keeps an existing certificate, token
-and network: `--join` on a box that already has them reuses them and does
-not enrol.
+If you have already used the box on its own (it has VMs, volumes, other
+boxes or mesh peers), `--join` refuses and says what is in it. Move or
+remove those first, or pass `--force` to join anyway; `--force` replaces
+the box's CA and certificates, and its VMs no longer belong to any cluster
+you can reach.
 
 ## 3. Ask to join
 
