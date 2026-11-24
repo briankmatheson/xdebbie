@@ -101,7 +101,13 @@ impl Enrollments {
     /// Pick a box id for `hostname`: the one it had when last approved, else
     /// the requested one if free, else the lowest free. Denied requests do
     /// not hold an id.
-    fn allocate(&self, recs: &[Record], hostname: &str, want: Option<u8>) -> Result<u8> {
+    fn allocate(
+        &self,
+        recs: &[Record],
+        hostname: &str,
+        want: Option<u8>,
+        in_use: &[u8],
+    ) -> Result<u8> {
         if let Some(prev) = recs
             .iter()
             .rev()
@@ -111,6 +117,7 @@ impl Enrollments {
         }
         let taken = |b: u8| {
             self.reserved.contains(&b)
+                || in_use.contains(&b)
                 || recs
                     .iter()
                     .any(|r| r.view.status != EnrollStatus::Denied && r.view.box_id == b)
@@ -158,10 +165,23 @@ impl Enrollments {
     }
 
     /// `submit`, noting the address the request came from.
+    #[allow(dead_code)] // the API also passes the live mesh's ids (submit_taking)
     pub async fn submit_from(
         &self,
         req: EnrollRequest,
         from: Option<String>,
+    ) -> Result<Enrollment> {
+        self.submit_taking(req, from, &[]).await
+    }
+
+    /// `submit_from`, with `in_use`: box ids the live mesh uses now (peers
+    /// and xdj clients added through the API, not only the TOML ones in
+    /// `reserved`). None of them is handed out.
+    pub async fn submit_taking(
+        &self,
+        req: EnrollRequest,
+        from: Option<String>,
+        in_use: &[u8],
     ) -> Result<Enrollment> {
         if req.hostname.trim().is_empty() {
             bail!("hostname must not be empty");
@@ -199,7 +219,7 @@ impl Enrollments {
         }
         // a client is no box: it takes no box id
         let box_id = match req.kind {
-            EnrollKind::Box => self.allocate(&recs, &req.hostname, req.box_id)?,
+            EnrollKind::Box => self.allocate(&recs, &req.hostname, req.box_id, in_use)?,
             EnrollKind::Client => 0,
         };
         let view = Enrollment {

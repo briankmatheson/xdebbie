@@ -158,11 +158,7 @@ async fn denying_an_approved_box_does_not_free_its_id() {
     let e = queue(dir.path(), vec![0]);
     let a = e.submit(box_req("a", None).0).await.unwrap();
     e.decide("a", Decision::Approve).await.unwrap();
-    let err = e
-        .decide("a", Decision::Deny)
-        .await
-        .unwrap_err()
-        .to_string();
+    let err = e.decide("a", Decision::Deny).await.unwrap_err().to_string();
     assert!(err.contains("already approved"), "{err}");
     let still = e.get(&a.id).await.unwrap();
     assert_eq!(still.status, EnrollStatus::Approved, "deny is refused");
@@ -279,7 +275,6 @@ fn every_assignable_id_maps_to_its_own_slash_24_underlay_and_mac() {
 /// Peers and xdj clients added through the API (`xdctl mesh peer add`,
 /// `xdctl mesh client add`) use their box numbers just as much as the ones
 /// in the CA box's TOML: enrolment must not hand them out again.
-#[ignore = "bug: enrolment only reserves box ids from the TOML [mesh], not the live (API) spec"]
 #[tokio::test]
 async fn ids_in_the_live_mesh_spec_are_not_handed_out() {
     let ca = CaBox::start().await;
