@@ -114,6 +114,10 @@ signs every datagram and drops any that do not verify
 - **Replay.** `ts` is Unix seconds; a datagram more than 30 s from the
   receiver's clock is dropped. Boxes need clocks within 30 s of each
   other (NTP), or they stop hearing each other and each leads alone.
+  Inside that window every message carries the sender's `sequence`, which
+  rises with each one it sends; a datagram whose sequence does not exceed
+  the last one heard from that `node_id` is a replay (or a duplicate) and
+  is dropped. Senders are remembered for 75 s after they fall silent.
 - **Dropped datagrams.** The first from each source address logs a
   warning naming the reason (bad signature, out of the clock window,
   unsigned); the rest are at debug.

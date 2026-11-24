@@ -24,6 +24,12 @@ pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 pub const PEER_TIMEOUT: Duration = Duration::from_secs(15);
 pub const ELECTION_TIMEOUT: Duration = Duration::from_secs(10);
 pub const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long a sender's last sequence number is remembered after it falls
+/// silent. A captured datagram verifies for as long as its timestamp is
+/// within [`wire::MAX_SKEW`] of the receiver's clock, and the sender's clock
+/// may itself be up to that far off: so at most twice that after it was
+/// sent, plus a margin.
+const REPLAY_MEMORY: Duration = Duration::from_secs(2 * wire::MAX_SKEW.as_secs() + 15);
 
 /// What the engine reads from the box it runs on. [`DiscoveryEngine::new`]
 /// uses the real box ([`RealHost`]); the simulated-LAN tests substitute
@@ -131,6 +137,9 @@ pub struct DiscoveryEngine {
     start_time: Instant,
     /// Sources already warned about, so a stray sender logs once, not every second.
     warned: std::sync::Mutex<std::collections::HashSet<std::net::IpAddr>>,
+    /// The highest sequence number heard from each sender, and when. A
+    /// datagram that does not raise it is a replay (or a duplicate).
+    seen: std::sync::Mutex<std::collections::HashMap<Uuid, (u64, Instant)>>,
     /// Discovery switched on (`PUT /v1/settings`). Off: send nothing, drop
     /// what arrives, forget the peers, and lead alone.
     enabled: std::sync::atomic::AtomicBool,
@@ -188,6 +197,7 @@ impl DiscoveryEngine {
             election,
             start_time: Instant::now(),
             warned: Default::default(),
+            seen: Default::default(),
         }
     }
 
@@ -268,6 +278,24 @@ impl DiscoveryEngine {
             tracing::debug!(%src, "discovery: dropping datagram: {why}");
         }
         None
+    }
+
+    /// Is `msg` newer than anything heard from its sender? Signatures and
+    /// the clock window stop forgeries and old captures; this stops a
+    /// datagram captured in the last minute from being played back, which
+    /// could keep a dead leader looking alive or a dead peer listed.
+    fn fresh(&self, msg: &DiscoveryMessage) -> bool {
+        let Ok(mut seen) = self.seen.lock() else {
+            return true;
+        };
+        let (id, seq) = (msg.node_id(), msg.sequence());
+        match seen.get(&id) {
+            Some((last, _)) if seq <= *last => false,
+            _ => {
+                seen.insert(id, (seq, Instant::now()));
+                true
+            }
+        }
     }
 
     fn get_capacity(&self) -> NodeCapacity {
@@ -539,6 +567,9 @@ impl DiscoveryEngine {
                     for peer in stale {
                         info!("Removed stale peer: {} ({})", peer.hostname, peer.node_id);
                     }
+                    if let Ok(mut seen) = self.seen.lock() {
+                        seen.retain(|_, (_, at)| at.elapsed() <= REPLAY_MEMORY);
+                    }
                 }
 
                 _ = tokio::time::sleep(Duration::from_millis(100)) => {
@@ -547,6 +578,10 @@ impl DiscoveryEngine {
                         let Some(msg) = self.admit(&bytes, addr).await else {
                             continue;
                         };
+                        if msg.node_id() != self.node_id && !self.fresh(&msg) {
+                            tracing::debug!(src = %addr, node = %msg.node_id(), seq = msg.sequence(), "discovery: dropping replayed or duplicate datagram");
+                            continue;
+                        }
                         if let Err(e) = self.process_message(msg, addr).await {
                             warn!("Failed to process message: {}", e);
                         }

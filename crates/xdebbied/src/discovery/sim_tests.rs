@@ -257,7 +257,6 @@ async fn stale_and_future_announces_rejected() {
 /// A dead box's captured announce, replayed inside the clock window after
 /// it has been dropped as stale, must not bring it back.
 #[tokio::test(start_paused = true)]
-#[ignore = "bug: a signed datagram replayed inside the 30 s clock window is accepted"]
 async fn replayed_announce_rejected() {
     let lan = Lan::new();
     let a = lan.spawn(Spec::new("a", 1));
