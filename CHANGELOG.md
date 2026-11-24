@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `POST /v1/volumes/{id}/grow` and `xdctl volume grow ID --gib N`: grow a volume on its
+  ABE (abe >= 0.7.2), never shrinking it. An attached VM's host passes the new
+  size to the guest (`virsh blockresize`, after an NVMe rescan if needed) in
+  the reconciler's attach step, so the guest sees the bigger disk within a
+  tick or two. abe-csi 0.6.0 uses it for PVC expansion.
+
 ### Fixed
 - `bootstrap --join` on a box the package had set up as a cluster of its
   own (discovery off) no longer says "Already enrolled" and stays alone.

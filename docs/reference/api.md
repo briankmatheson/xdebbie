@@ -157,6 +157,7 @@ ABE. This is what the `abe-csi` driver uses from inside Kubernetes VMs.
 | DELETE | `/v1/volumes/{id}` | 204; 409 while attached (detach first). Synchronous on ABE: the record is marked `deleting: true` first, then ABE is called. **502** if ABE fails; the record stays with `deleting: true` (the reconciler will not attach it) and a second DELETE retries |
 | POST | `/v1/volumes/{id}/attach` | `{"vm": "VM_UUID", "force": false}` → 202. The reconciler connects on the VM's host and hot-plugs; poll until `attached.vm` matches. 409 if a *running* VM still has it, unless `force`; **409** `volume is being deleted` for a volume with `deleting: true` |
 | POST | `/v1/volumes/{id}/detach` | 202; poll until `attached` is absent |
+| POST | `/v1/volumes/{id}/grow` | `{"bytes": N}` → 200 with the volume. Grows on its ABE (abe >= 0.7.2, feature `grow`; rounded up to a MiB), never shrinks: no bigger than it is answers 200 unchanged. Where it is attached, the VM's host passes the new size to the guest (`virsh blockresize`) within a tick or two; the filesystem is the guest's to grow. **501** when the ABE cannot grow, **409** when ABE's kernel cannot re-read the size live, **507** when ABE has no room |
 
 Volume:
 

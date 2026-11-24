@@ -117,6 +117,18 @@ where
     Ok(v.and_then(|v| serde_json::from_value(v).ok()))
 }
 
+/// Reply of `GET /grow/<id>?bytes=N` (abe >= 0.7.2, feature `grow`).
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct Grown {
+    pub id: String,
+    /// The LV's size before and after.
+    pub from: u64,
+    pub bytes: u64,
+    /// nvmet namespaces told to re-read the size.
+    #[serde(default)]
+    pub revalidated: u32,
+}
+
 /// Reply of `GET /configure?base=<image>`: the export plus what makes it a
 /// base. A sealed base comes back with an empty `port`.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -458,6 +470,14 @@ impl Client {
             .features(base)
             .await?
             .is_some_and(|f| f.features.contains(feature)))
+    }
+
+    /// Grow volume `id` to `bytes` (ABE rounds up to a whole MiB, never
+    /// shrinks, and has its NVMe namespaces re-read the size, so a
+    /// connected host sees it without a reconnect). abe >= 0.7.2 (`grow`).
+    pub async fn grow(&self, base: &str, id: &str, bytes: u64) -> Result<Grown> {
+        self.get_json(base, &format!("/grow/{id}?bytes={bytes}"), "grow")
+            .await
     }
 
     /// Unexport and remove. A volume that is already gone is not an error.

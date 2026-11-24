@@ -75,24 +75,24 @@ For the configuration keys themselves, see
 | xdj client certificate | 60 min | `CLIENT_MINUTES` (`bootstrap/api_tls.rs:43`) | xdj renews it before then. |
 | `/v1/client-config` welcome banner | 4096 bytes | `WELCOME_MAX` (`client_config.rs:37`) | `PUT` is rejected. |
 | DNS names in client-config | 63 bytes a label, 253 in all (**inherited**: RFC 1035) | `client_config.rs` | `PUT` is rejected. |
-| `/v1/qos` cache | 2 s | `QOS_CACHE` (`api/mod.rs:757`) | — |
-| One abe's `/qos` answer | 2 s | `QOS_ABE_TIMEOUT` (`api/mod.rs:759`) | That abe's volumes are left out (unshaped). |
+| `/v1/qos` cache | 2 s | `QOS_CACHE` (`api/mod.rs:758`) | — |
+| One abe's `/qos` answer | 2 s | `QOS_ABE_TIMEOUT` (`api/mod.rs:760`) | That abe's volumes are left out (unshaped). |
 
 ## VMs and hosts
 
 | Limit | Value | Where | When it is reached |
 |---|---|---|---|
-| VM name | DNS-1123 label: 1–63 of `[a-z0-9-]`, no leading or trailing `-` | `validate()` (`api/mod.rs:1050`) | 400. |
-| VM size, minimum | vCPUs > 0, memory ≥ 256 MiB, disk > 0 GiB; no maximum in xdebbied | `api/mod.rs:1061` | 400. The scheduler then needs a host with room. |
+| VM name | DNS-1123 label: 1–63 of `[a-z0-9-]`, no leading or trailing `-` | `validate()` (`api/mod.rs:1051`) | 400. |
+| VM size, minimum | vCPUs > 0, memory ≥ 256 MiB, disk > 0 GiB; no maximum in xdebbied | `api/mod.rs:1062` | 400. The scheduler then needs a host with room. |
 | Root disk of a `k8s` image | at least 25 GiB | `MIN_ROOT_DISK_GIB` (`lvm.rs:22`) | Smaller requests are rounded up. |
 | Schedulable vCPUs per host | `(cpus − reserved_cpus) × cpu_overcommit` | `allocatable()` (`xdebbie-core/src/model.rs`); `reserved_cpus` = 2, `cpu_overcommit` = 4.0 by default (`:120–127`) | Scheduler rejects the host: `cpu`. |
 | Schedulable memory per host | `(memory − reserved_memory_mib) × mem_overcommit` | `reserved_memory_mib` = 4096, `mem_overcommit` = 1.0 by default | Scheduler rejects the host: `memory`. |
 | Host contact | stale after 60 s | `host_stale_secs` (`config.rs:155`) | Host counts as unhealthy; no new VMs there. |
 | Reconcile loop | every 5 s | `reconcile_interval_secs` (`config.rs:152`) | — |
-| Hot-plug PCIe root ports per VM | 16 | `HOTPLUG_ROOT_PORTS` (`libvirt.rs:684`) | Root ports cannot be hot-plugged (**inherited**: QEMU/q35); a VM defined with fewer has fewer. |
-| abe volumes per VM (virtio-scsi targets) | **255** (`sdb` …) | `SCSI_MAX_TARGET` (`libvirt.rs:703`); **inherited**: QEMU virtio-scsi max target 255 | The attach fails. |
-| virtio-scsi queues | 4 | `SCSI_QUEUES` (`libvirt.rs:705`) | — |
-| No room for the SCSI controller | retried after 600 s | `no_scsi_slot::FOR` (`libvirt.rs:937`) | The VM is skipped for 10 min. |
+| Hot-plug PCIe root ports per VM | 16 | `HOTPLUG_ROOT_PORTS` (`libvirt.rs:734`) | Root ports cannot be hot-plugged (**inherited**: QEMU/q35); a VM defined with fewer has fewer. |
+| abe volumes per VM (virtio-scsi targets) | **255** (`sdb` …) | `SCSI_MAX_TARGET` (`libvirt.rs:753`); **inherited**: QEMU virtio-scsi max target 255 | The attach fails. |
+| virtio-scsi queues | 4 | `SCSI_QUEUES` (`libvirt.rs:755`) | — |
+| No room for the SCSI controller | retried after 600 s | `no_scsi_slot::FOR` (`libvirt.rs:1050`) | The VM is skipped for 10 min. |
 | Disk serial | 20 bytes virtio-blk, 36 scsi-hd (**inherited**: `VIRTIO_BLK_ID_BYTES`, QEMU `MAX_SERIAL_LEN`) | `VIRTIO_SERIAL_LEN`, `SCSI_SERIAL_LEN` (`xdebbie-core/src/model.rs:398`) | xdebbied uses the first 20 (or 36) characters of the volume id as the serial. |
 | Failed attach retry | 5 s, doubling to 300 s | `attach_backoff` (`reconcile.rs:665`) | Forgotten on success or restart. |
 | Live migration ports | TCP 49152–49215 (**inherited**: libvirt `migration_port_min/max`) | libvirt `qemu.conf` | Migration fails when they are closed. |
@@ -104,12 +104,12 @@ For the configuration keys themselves, see
 | Pool data fill | 85% | `abe_max_data_percent` (`xdebbie-core/src/model.rs:132`) | No new abe volumes on that host: `abe pool full`. |
 | Pool metadata fill | 80% | `abe_max_metadata_percent` (`:135`) | Same. A full metadata LV breaks the thin pool. |
 | Thin provisioning | sum of volume sizes ≤ pool size × `abe_overcommit` (default 1.0) | `AbeCapacity::limit()` (`:178`) | Scheduler rejects the host: `abe capacity`. |
-| Volume name (`POST /v1/volumes`) | 1–253 bytes; size > 0 | `create_volume` (`api/mod.rs:1381`) | 400. |
-| One abe call | 120 s (a create waits for fio and the trim) | `abe::TIMEOUT` (`abe.rs:235`) | The call fails; the VM or volume is retried. |
+| Volume name (`POST /v1/volumes`) | 1–253 bytes; size > 0 | `create_volume` (`api/mod.rs:1390`) | 400. |
+| One abe call | 120 s (a create waits for fio and the trim) | `abe::TIMEOUT` (`abe.rs:247`) | The call fails; the VM or volume is retried. |
 | abe `/version` cache | 60 s | `FEATURE_TTL` (`abe.rs:30`) | — |
-| NVMe/TCP I/O queues per connect | 4 (one TCP connection each) | `NVME_IO_QUEUES` (`abe.rs:483`) | — |
+| NVMe/TCP I/O queues per connect | 4 (one TCP connection each) | `NVME_IO_QUEUES` (`abe.rs:503`) | — |
 | NVMe/TCP queue depth | not set, so the kernel default: 128 (**inherited**: `NVMF_DEF_QUEUE_SIZE`, `drivers/nvme/host/fabrics.h`) | — | Requests wait in the guest. |
-| Controller loss timeout | `-1`: retry for ever | `--ctrl-loss-tmo -1` (`abe.rs:531`) | The guest stalls instead of getting I/O errors. |
+| Controller loss timeout | `-1`: retry for ever | `--ctrl-loss-tmo -1` (`abe.rs:551`) | The guest stalls instead of getting I/O errors. |
 | abe export ports | TCP 23000–23999 opened by bootstrap's firewall | `ABE_EXPORT_PORTS` (`bootstrap/firewall.rs:101`) | Must match abe's `ABE_PORT_MIN`/`MAX`. |
 
 ## DHCP and DNS

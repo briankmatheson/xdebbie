@@ -226,6 +226,15 @@ enum VolumeCmd {
     Detach {
         id: String,
     },
+    /// Grow a volume to a size (never shrinks; needs abe 0.7.2 or later).
+    /// An attached VM sees the bigger disk within a tick or two; its
+    /// filesystem is the guest's to grow (abe-csi does that for a PVC).
+    Grow {
+        id: String,
+        /// The new size, in GiB.
+        #[arg(long)]
+        gib: u64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2028,6 +2037,11 @@ fn main() -> Result<()> {
             VolumeCmd::Detach { id } => {
                 out(api.call(Method::POST, &format!("/volumes/{id}/detach"), None)?)?
             }
+            VolumeCmd::Grow { id, gib } => out(api.call(
+                Method::POST,
+                &format!("/volumes/{id}/grow"),
+                Some(serde_json::json!({ "bytes": gib << 30 })),
+            )?)?,
         },
         Cmd::Image(_) => unreachable!("handled before contacting xdebbied"),
         Cmd::Version => unreachable!("handled before contacting xdebbied"),
