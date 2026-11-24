@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! `[network]` configuration, the overlay address pool and the allocator.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::Ipv4Addr;
 use std::str::FromStr;
 
@@ -110,6 +110,12 @@ pub struct NetworkConfig {
     /// Never allocate these (appliances pinned by hand...).
     #[serde(default)]
     pub reserved: Vec<Ipv4Addr>,
+    /// Zones whose A records inside `cidr` are reserved too (zone transfer,
+    /// refreshed every minute; dhcp/dnsres.rs): name an address in DNS and
+    /// no VM is ever given it. Addresses bound to this box's VMs are not
+    /// affected.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reserve_from_dns: Vec<super::dnsres::DnsSource>,
     /// Where this box forwards its VMs' DNS: queries to the gateway on
     /// port 53 are DNAT'd to the first of these (bootstrap/firewall.rs).
     /// The first box takes its own resolvers; joiners copy the cluster's,
@@ -227,11 +233,18 @@ impl NetworkConfig {
         Some(Ipv4Addr::from(u32::from(s.network) | host_bits))
     }
 
-    /// Everything that may never be handed out, regardless of pool bounds.
-    fn blocked(&self) -> BTreeSet<Ipv4Addr> {
+    /// Everything that may never be handed out, regardless of pool bounds:
+    /// `reserved`, the gateway and resolvers, and what DNS names (`dns`:
+    /// address -> name, from `reserve_from_dns`).
+    fn blocked(&self, dns: &BTreeMap<Ipv4Addr, String>) -> BTreeSet<Ipv4Addr> {
         let mut b: BTreeSet<Ipv4Addr> = self.reserved.iter().copied().collect();
         b.insert(self.gateway());
         b.extend(self.dns().into_iter().filter(|d| self.cidr.contains(*d)));
+        b.extend(
+            dns.keys()
+                .copied()
+                .filter(|ip| self.cidr.contains_host(*ip)),
+        );
         b
     }
 
@@ -249,10 +262,23 @@ impl NetworkConfig {
         requested: Option<Ipv4Addr>,
         in_use: &BTreeSet<Ipv4Addr>,
     ) -> Result<Ipv4Addr> {
-        let blocked = self.blocked();
+        self.allocate_with(requested, in_use, &super::dnsres::current())
+    }
+
+    /// `allocate`, with the DNS-reserved set given (tests; one snapshot).
+    pub fn allocate_with(
+        &self,
+        requested: Option<Ipv4Addr>,
+        in_use: &BTreeSet<Ipv4Addr>,
+        dns: &BTreeMap<Ipv4Addr, String>,
+    ) -> Result<Ipv4Addr> {
+        let blocked = self.blocked(dns);
         if let Some(r) = requested {
             if !self.cidr.contains_host(r) {
                 bail!("requested ip {r} is not a host address in {}", self.cidr);
+            }
+            if let Some(n) = dns.get(&r) {
+                bail!("requested ip {r} is reserved: DNS names it {n}");
             }
             if blocked.contains(&r) {
                 bail!("requested ip {r} is reserved");
@@ -279,8 +305,11 @@ impl NetworkConfig {
     /// from a previous DHCP server keeps it), otherwise allocates.
     /// Returns `(vm id, ip)` pairs that were assigned.
     pub fn adopt(&self, vms: &mut std::collections::BTreeMap<Uuid, Vm>) -> Vec<(Uuid, Ipv4Addr)> {
+        let dns = super::dnsres::current();
         let mut in_use = Self::in_use(vms.values());
-        let blocked = self.blocked();
+        // a VM keeps an address it already holds even if DNS names it (its
+        // own record, as a rule); only new picks avoid DNS-reserved ones
+        let blocked = self.blocked(&BTreeMap::new());
         let mut out = Vec::new();
         let ids: Vec<Uuid> = vms
             .iter()
@@ -299,7 +328,7 @@ impl NetworkConfig {
                 });
             let ip = match known {
                 Some(ip) => ip,
-                None => match self.allocate(None, &in_use) {
+                None => match self.allocate_with(None, &in_use, &dns) {
                     Ok(ip) => ip,
                     Err(_) => continue,
                 },
@@ -324,6 +353,7 @@ mod tests {
             pool_start: None,
             pool_end: None,
             reserved: vec![],
+            reserve_from_dns: vec![],
             upstream_dns: vec![],
             mesh_routed: false,
             storage_cidr: None,
@@ -523,6 +553,30 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("exhausted")
+        );
+    }
+
+    #[test]
+    fn dns_named_addresses_are_never_picked_and_pins_name_the_owner() {
+        let n = cfg("10.23.0.0/16");
+        let mut dns = BTreeMap::new();
+        let (start, _) = n.pool();
+        dns.insert(start, "lb.mesh.test".to_string());
+        dns.insert(Ipv4Addr::new(10, 23, 0, 9), "eyrie.mesh.test".to_string());
+        dns.insert(Ipv4Addr::new(192, 168, 1, 1), "far.example".to_string()); // outside: ignored
+        let used = BTreeSet::new();
+        let got = n.allocate_with(None, &used, &dns).unwrap();
+        assert_ne!(got, start, "the DNS-named pool address is skipped");
+        let e = n
+            .allocate_with(Some(Ipv4Addr::new(10, 23, 0, 9)), &used, &dns)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("eyrie.mesh.test"), "{e}");
+        // other pins are unaffected
+        assert_eq!(
+            n.allocate_with(Some(Ipv4Addr::new(10, 23, 0, 7)), &used, &dns)
+                .unwrap(),
+            Ipv4Addr::new(10, 23, 0, 7)
         );
     }
 }

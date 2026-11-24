@@ -290,13 +290,22 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         })
         .await?;
 
-    // Give VMs that predate `[network]` an overlay address; new ones get
-    // theirs at creation.
-    if let Some(net) = cfg.network.clone() {
-        let adopted = store.update(move |s| net.adopt(&mut s.vms)).await?;
-        for (id, ip) in adopted {
-            info!(vm = %id, %ip, "network: adopted overlay address");
-        }
+    // Addresses DNS names are reserved (`[network] reserve_from_dns`): the
+    // last good set from disk now, before any allocation; a fresh transfer
+    // right after, then every minute.
+    if let Some(net) = cfg
+        .network
+        .as_ref()
+        .filter(|n| !n.reserve_from_dns.is_empty())
+    {
+        let saved = dhcp::dnsres::saved_path(&cfg.state_file);
+        dhcp::dnsres::load(&saved);
+        tokio::spawn(dhcp::dnsres::run(
+            net.reserve_from_dns.clone(),
+            net.cidr,
+            saved,
+            std::time::Duration::from_secs(60),
+        ));
     }
 
     // Give VMs that predate `[network]` an overlay address; new ones get
