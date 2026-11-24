@@ -214,7 +214,6 @@ async fn a_new_key_for_a_pending_hostname_replaces_it_and_the_first_joiner_is_to
 /// The CA signs the CN and SANs in the CSR, and the cluster identifies a
 /// member by that CN. A request whose CSR names another host than the one
 /// the operator is shown (and approves) is refused up front.
-#[ignore = "bug: the CA signs the CSR CN even when it names another host than the request"]
 #[tokio::test]
 async fn a_csr_naming_another_host_is_refused() {
     let dir = tempfile::tempdir().unwrap();

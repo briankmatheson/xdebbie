@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use xdebbie_core::{EnrollKind, EnrollRequest, EnrollStatus, Enrollment};
 
-use crate::bootstrap::api_tls::{CaSigner, csr_fingerprint};
+use crate::bootstrap::api_tls::{CaSigner, csr_common_name, csr_fingerprint};
 
 /// Pending requests kept at most; beyond that `submit` refuses, so a
 /// misbehaving LAN cannot fill the disk.
@@ -170,6 +170,17 @@ impl Enrollments {
             bail!("a client name is letters, digits, '-', '.' and '_' (at most 63)");
         }
         let fingerprint = csr_fingerprint(&req.csr)?;
+        // The certificate carries the CSR's name, and the cluster knows a
+        // member by it: it must be the hostname the operator approves.
+        if req.kind == EnrollKind::Box {
+            let cn = csr_common_name(&req.csr)?.unwrap_or_default();
+            if cn != req.hostname {
+                bail!(
+                    "the CSR asks for a certificate as {cn:?}, not {:?}: a box enrols under its own name",
+                    req.hostname
+                );
+            }
+        }
         let mut recs = self.recs.write().await;
         expire(&mut recs);
         if let Some(r) = recs.iter().find(|r| r.view.fingerprint == fingerprint) {
