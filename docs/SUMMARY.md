@@ -46,3 +46,4 @@
 
 - [Troubleshooting](troubleshooting.md)
 - [Limits and known gaps](limits.md)
+- [Max values: every limit and default](max-values.md)
