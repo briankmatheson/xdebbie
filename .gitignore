@@ -1,3 +1,4 @@
 /target
 *.qcow2
 *.iso
+/book

@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# The documentation site: `mdbook build` writes it to book/.
+[book]
+title = "XDebbie"
+description = "A small, self-hosted cloud for ordinary Linux servers"
+authors = ["Brian Matheson and XDebbie contributors"]
+language = "en"
+src = "docs"
+
+[build]
+build-dir = "book"
+create-missing = false
+
+[output.html]
+git-repository-url = "https://github.com/briankmatheson/xdebbie"
+edit-url-template = "https://github.com/briankmatheson/xdebbie/edit/main/{path}"
