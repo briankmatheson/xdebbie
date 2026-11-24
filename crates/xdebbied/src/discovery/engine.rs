@@ -126,6 +126,14 @@ impl Default for DiscoveryConfig {
     }
 }
 
+/// Did a message just start an election here (we outrank a proposer or a
+/// leader)? Then we must say so: a candidate nobody hears from wins nothing,
+/// and the weaker side would only learn of us after the election timeout,
+/// when every candidate declares itself leader at once.
+fn entered_election(before: ElectionState, after: ElectionState) -> bool {
+    before != ElectionState::Election && after == ElectionState::Election
+}
+
 /// Discovery engine managing peer discovery and leader election
 pub struct DiscoveryEngine {
     node_id: Uuid,
@@ -456,7 +464,13 @@ impl DiscoveryEngine {
                     let mine = self.calculate_our_score().await;
                     let mut election = self.election.write().await;
                     election.update_score(mine);
+                    let before = election.state();
                     election.received_leader_heartbeat(node_id, score);
+                    let challenge = entered_election(before, election.state());
+                    drop(election);
+                    if challenge {
+                        self.send_election_propose().await?;
+                    }
                 }
             }
 
@@ -468,11 +482,16 @@ impl DiscoveryEngine {
                 let mine = self.calculate_our_score().await;
                 let mut election = self.election.write().await;
                 election.update_score(mine);
+                let before = election.state();
                 let should_vote = election.received_election_propose(node_id, score);
+                let challenge = entered_election(before, election.state());
                 drop(election);
 
                 if should_vote {
                     self.send_vote(node_id).await?;
+                }
+                if challenge {
+                    self.send_election_propose().await?;
                 }
             }
 

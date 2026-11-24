@@ -287,7 +287,6 @@ async fn replayed_announce_rejected() {
 /// Replaying a dead leader's captured heartbeats must not hold off the
 /// re-election.
 #[tokio::test(start_paused = true)]
-#[ignore = "bug: a box that outranks a proposer or leader enters an election without proposing; elections end only by timeout, every candidate declaring itself leader"]
 async fn replayed_leader_heartbeats_do_not_hold_off_reelection() {
     let lan = Lan::new();
     let v = vec![
@@ -412,7 +411,6 @@ async fn lone_box_leads_in_about_15s() {
 /// The box holding VMs leads whatever its tiebreak; with no state the
 /// bigger box does.
 #[tokio::test(start_paused = true)]
-#[ignore = "bug: a box that outranks a proposer or leader enters an election without proposing; elections end only by timeout, every candidate declaring itself leader"]
 async fn best_scored_box_wins() {
     let lan = Lan::new();
     let v = vec![
@@ -436,7 +434,6 @@ async fn best_scored_box_wins() {
 /// Identical boxes started together: the UUID tiebreak picks the same one
 /// whatever order they come up in.
 #[tokio::test(start_paused = true)]
-#[ignore = "bug: a box that outranks a proposer or leader enters an election without proposing; elections end only by timeout, every candidate declaring itself leader"]
 async fn tie_break_is_stable() {
     for order in [[1u8, 2, 3, 4], [4, 3, 2, 1], [2, 4, 1, 3], [3, 1, 4, 2]] {
         let lan = Lan::new();
@@ -467,7 +464,6 @@ async fn late_equal_box_follows_the_incumbent() {
 /// takes over (state outranks the incumbent bonus), and promptly: it
 /// proposes itself as soon as it hears the weaker leader.
 #[tokio::test(start_paused = true)]
-#[ignore = "bug: a box that outranks a proposer or leader enters an election without proposing; elections end only by timeout, every candidate declaring itself leader"]
 async fn stronger_box_takes_over_promptly() {
     let lan = Lan::new();
     let empty = lan.spawn(Spec::new("empty", 9));
@@ -490,7 +486,6 @@ async fn stronger_box_takes_over_promptly() {
 
 /// Leader dies; the rest elect a new one within the documented ~15 s.
 #[tokio::test(start_paused = true)]
-#[ignore = "bug: a box that outranks a proposer or leader enters an election without proposing; elections end only by timeout, every candidate declaring itself leader"]
 async fn reelection_after_leader_goes_silent() {
     for n in [2usize, 3, 5] {
         let lan = Lan::new();
@@ -569,7 +564,6 @@ async fn partition_heals_to_one_leader() {
 /// The old leader comes back after a new one was elected: at most one
 /// handover, then nothing moves.
 #[tokio::test(start_paused = true)]
-#[ignore = "bug: a box that outranks a proposer or leader enters an election without proposing; elections end only by timeout, every candidate declaring itself leader"]
 async fn returning_old_leader_does_not_flap() {
     let lan = Lan::new();
     let v: Vec<SimBox> = (1..=3u8)
@@ -590,7 +584,6 @@ async fn returning_old_leader_does_not_flap() {
 /// The old leader's daemon restarts (new node id, no incumbent bonus)
 /// next to the new leader: equal boxes, so the incumbent keeps the job.
 #[tokio::test(start_paused = true)]
-#[ignore = "bug: a box that outranks a proposer or leader enters an election without proposing; elections end only by timeout, every candidate declaring itself leader"]
 async fn restarted_old_leader_does_not_take_back() {
     let lan = Lan::new();
     let specs: Vec<Spec> = (1..=3u8).map(|r| Spec::new(&format!("n{r}"), r)).collect();
@@ -660,7 +653,6 @@ async fn announces_keep_the_leader_marked() {
 /// seconds, random state. Each must settle on its best box, stay there, and
 /// never show two leaders for longer than a heartbeat.
 #[tokio::test(start_paused = true)]
-#[ignore = "bug: a box that outranks a proposer or leader enters an election without proposing; elections end only by timeout, every candidate declaring itself leader"]
 async fn randomized_clusters_converge() {
     use rand::{Rng, SeedableRng, rngs::StdRng};
     for seed in 0..40u64 {
@@ -810,7 +802,6 @@ async fn settings_switch_drives_the_engine() {
 /// put on the wire: it hears every box, marks the leader, and (without a
 /// terminal) refuses to found a second cluster.
 #[tokio::test(start_paused = true)]
-#[ignore = "bug: a box that outranks a proposer or leader enters an election without proposing; elections end only by timeout, every candidate declaring itself leader"]
 async fn bootstrap_hears_a_running_cluster() {
     use crate::bootstrap::discover::{
         DEFAULT_LISTEN_SECS, decide, listen_on,
@@ -873,7 +864,6 @@ async fn bootstrap_hears_a_running_cluster() {
 /// Several followers' votes for the same proposer arrive twice (two
 /// interfaces on one segment, say): duplicates count once.
 #[tokio::test(start_paused = true)]
-#[ignore = "bug: a box that outranks a proposer or leader enters an election without proposing; elections end only by timeout, every candidate declaring itself leader"]
 async fn duplicated_datagrams_are_harmless() {
     let lan = Lan::new();
     let v: Vec<SimBox> = (1..=3u8)
