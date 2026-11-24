@@ -134,11 +134,18 @@ signs every datagram and drops any that do not verify
 ## Election
 
 Bully, by score. A follower that misses leader heartbeats for 5 s proposes
-itself; boxes with a lower score vote for it; a majority of the peers it
-knows about makes it leader, and so does a 10 s election timeout with no
-better proposal. A leader that hears a heartbeat from a higher-scored
-leader steps down; a follower that hears a lower-scored leader starts an
-election. A lone box therefore leads about 15 s after start.
+itself; boxes with a lower score vote for it; a box with a higher score
+proposes itself in turn (unless it has heard a leader in the last 5 s),
+and a candidate that hears a better proposal stands down and votes for
+it. A majority of the peers it knows about makes a candidate leader,
+unless a box it heard from in the last 5 s outranks it; so does a 10 s
+election timeout with no better proposal. A leader that hears a heartbeat
+from a higher-scored leader steps down; a follower that hears a
+lower-scored leader proposes itself. Scores are compared fresh, leader
+bonus included. A lone box therefore leads 15 to 17 s after start (the
+timeouts are checked on the 1 s heartbeat tick), and so does the
+survivor of a two-box cluster after the leader goes; with three or more
+boxes the next best takes over about 6 s after the last heartbeat.
 
 Score = state (0 or 2000–4000) + uptime (0–1000) + capacity (0–1000) +
 free resources (0–1000) + incumbent bonus (500) + UUID tiebreak (0–1).
