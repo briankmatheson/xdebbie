@@ -141,7 +141,6 @@ async fn sequence_numbers_rise() {
 }
 
 #[tokio::test(start_paused = true)]
-#[ignore = "bug: own score compared stale; a new leader lacks its bonus for up to 1 s and steps down to a weaker one"]
 async fn wrong_token_is_not_heard() {
     let lan = Lan::new();
     let a = lan.spawn(Spec::new("a", 1));
@@ -452,7 +451,6 @@ async fn tie_break_is_stable() {
 /// A box that starts after a cluster has a leader follows it, even with
 /// the better tiebreak: the incumbent bonus keeps the job.
 #[tokio::test(start_paused = true)]
-#[ignore = "bug: own score compared stale; a new leader lacks its bonus for up to 1 s and steps down to a weaker one"]
 async fn late_equal_box_follows_the_incumbent() {
     let lan = Lan::new();
     let a = lan.spawn(Spec::new("a", 1));
@@ -546,7 +544,6 @@ async fn no_split_brain_when_started_together() {
 /// During a partition each side may lead itself (there is no quorum
 /// rule); once it heals there is one leader again, quickly, and it stays.
 #[tokio::test(start_paused = true)]
-#[ignore = "bug: own score compared stale; a new leader lacks its bonus for up to 1 s and steps down to a weaker one"]
 async fn partition_heals_to_one_leader() {
     let lan = Lan::new();
     let v: Vec<SimBox> = (1..=4u8)
@@ -612,7 +609,6 @@ async fn restarted_old_leader_does_not_take_back() {
 /// Every follower's forwarding target is the leader's dialable URL, and
 /// nobody forwards during an election.
 #[tokio::test(start_paused = true)]
-#[ignore = "bug: own score compared stale; a new leader lacks its bonus for up to 1 s and steps down to a weaker one"]
 async fn followers_forward_to_the_leader() {
     let lan = Lan::new();
     let v: Vec<SimBox> = (1..=3u8)
@@ -744,7 +740,6 @@ async fn discovery_off_leads_alone_and_stays_silent() {
 }
 
 #[tokio::test(start_paused = true)]
-#[ignore = "bug: own score compared stale; a new leader lacks its bonus for up to 1 s and steps down to a weaker one"]
 async fn switching_discovery_on_joins_and_off_leaves() {
     let lan = Lan::new();
     let a = lan.spawn(Spec::new("a", 1));
@@ -781,7 +776,6 @@ async fn switching_discovery_on_joins_and_off_leaves() {
 
 /// `PUT /v1/settings {"discovery": …}` reaches the running engine.
 #[tokio::test(start_paused = true)]
-#[ignore = "bug: own score compared stale; a new leader lacks its bonus for up to 1 s and steps down to a weaker one"]
 async fn settings_switch_drives_the_engine() {
     use crate::settings::{Change, Settings, SettingsCtl};
     let lan = Lan::new();

@@ -306,7 +306,9 @@ impl DiscoveryEngine {
         )
     }
 
-    /// Calculate our current score
+    /// Calculate our current score. Compare only against this, freshly
+    /// computed: the copy in the election state machine is from our last
+    /// heartbeat, and lacks the leader bonus for up to a second after we win.
     async fn calculate_our_score(&self) -> f64 {
         let capacity = self.get_capacity();
         let uptime = self.host.uptime().max(self.start_time.elapsed());
@@ -451,7 +453,9 @@ impl DiscoveryEngine {
                 drop(peers);
 
                 if is_leader {
+                    let mine = self.calculate_our_score().await;
                     let mut election = self.election.write().await;
+                    election.update_score(mine);
                     election.received_leader_heartbeat(node_id, score);
                 }
             }
@@ -461,7 +465,9 @@ impl DiscoveryEngine {
                 score,
                 sequence: _,
             } => {
+                let mine = self.calculate_our_score().await;
                 let mut election = self.election.write().await;
+                election.update_score(mine);
                 let should_vote = election.received_election_propose(node_id, score);
                 drop(election);
 
