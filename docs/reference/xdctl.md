@@ -123,6 +123,7 @@ Standalone ABE volumes. See [VM storage](../storage.md).
 | `xdctl volume create NAME --gib N [--host HOST]` | Create a blank volume. |
 | `xdctl volume attach ID VM [--force]` | Plug it into a VM. `--force` takes it from a running VM that still has it. |
 | `xdctl volume detach ID` | Unplug it. |
+| `xdctl volume grow ID --gib N` | Grow it to N GiB (never shrinks; abe >= 0.7.2). An attached VM sees the bigger disk within a tick or two; growing the filesystem is the guest's job. |
 | `xdctl volume rm ID` | Delete it. Refused while attached. |
 
 ## Images

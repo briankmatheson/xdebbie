@@ -170,6 +170,7 @@ pub fn router(app: App) -> Router {
         .route("/volumes/{id}", get(get_volume).delete(delete_volume))
         .route("/volumes/{id}/attach", post(attach_volume))
         .route("/volumes/{id}/detach", post(detach_volume))
+        .route("/volumes/{id}/grow", post(grow_volume))
         .route("/qos", get(qos))
         .route("/token/rotate", post(rotate_token))
         .layer(middleware::from_fn_with_state(
@@ -1286,6 +1287,14 @@ struct AttachVolume {
     force: bool,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GrowVolume {
+    /// The size to grow to; a volume already this big (or bigger) is left
+    /// as it is.
+    bytes: u64,
+}
+
 async fn list_volumes(State(a): State<App>) -> Json<Vec<Volume>> {
     Json(a.store.read().await.volumes.into_values().collect())
 }
@@ -1499,6 +1508,82 @@ async fn delete_volume(State(a): State<App>, Path(id): Path<String>) -> R<Status
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Grow a volume to `bytes`, never shrinking it. ABE extends it and its
+/// NVMe namespace re-reads the size (abe >= 0.7.2, feature `grow`); the
+/// record's `bytes` becomes the new size. Where it is attached, the
+/// reconciler on the VM's host then has QEMU pass the new size to the
+/// guest (`virsh blockresize`, see `Virsh::attach_volume`): the guest sees
+/// a bigger disk within a tick or two. The filesystem on it is the
+/// caller's to grow. Idempotent: no bigger than it is answers 200 with the
+/// volume unchanged, without asking ABE.
+async fn grow_volume(
+    State(a): State<App>,
+    Path(id): Path<String>,
+    Json(req): Json<GrowVolume>,
+) -> R<(StatusCode, Json<Volume>)> {
+    if req.bytes == 0 {
+        return Err(bad("bytes must be > 0"));
+    }
+    let vol = a
+        .store
+        .read()
+        .await
+        .volumes
+        .remove(&id)
+        .ok_or_else(|| nf("volume"))?;
+    if vol.deleting {
+        return Err(conflict("volume is being deleted"));
+    }
+    if req.bytes <= vol.bytes {
+        return Ok((StatusCode::OK, Json(vol)));
+    }
+    let can = a
+        .abe
+        .has(&vol.server, "grow")
+        .await
+        .map_err(|e| ApiErr(StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
+    if !can {
+        return Err(ApiErr(
+            StatusCode::NOT_IMPLEMENTED,
+            format!(
+                "abe at {} cannot grow volumes (needs abe 0.7.2 or later)",
+                vol.server
+            ),
+        ));
+    }
+    let g = a.abe.grow(&vol.server, &id, req.bytes).await.map_err(|e| {
+        let code = match abe::http_status(&e) {
+            Some(404) => StatusCode::NOT_FOUND,
+            Some(409) => StatusCode::CONFLICT,
+            Some(503) | Some(507) => StatusCode::INSUFFICIENT_STORAGE,
+            _ => StatusCode::BAD_GATEWAY,
+        };
+        ApiErr(code, format!("{e:#}"))
+    })?;
+    if g.bytes < req.bytes {
+        return Err(ApiErr(
+            StatusCode::BAD_GATEWAY,
+            format!(
+                "abe at {} grew {id} to {} bytes, less than the {} asked for",
+                vol.server, g.bytes, req.bytes
+            ),
+        ));
+    }
+    let grown = a
+        .store
+        .update(|s| {
+            let v = s.volumes.get_mut(&id).ok_or_else(|| nf("volume"))?;
+            if g.bytes > v.bytes {
+                v.bytes = g.bytes;
+                v.updated = Utc::now();
+            }
+            Ok::<_, ApiErr>(v.clone())
+        })
+        .await??;
+    tracing::info!(%id, server = %vol.server, from = g.from, bytes = grown.bytes, "grew volume");
+    Ok((StatusCode::OK, Json(grown)))
+}
+
 async fn mutate_volume(
     a: &App,
     id: &str,
@@ -1666,6 +1751,141 @@ mod tests {
         );
         assert_eq!(v["hosts"]["a"]["enabled"], true);
         assert!(v["hosts"]["b"]["error"].is_string(), "{v}");
+    }
+
+    /// A fake abe for grow: `/version` lists `grow` when `can`, and
+    /// `/grow/<id>` grows to what is asked (counting the calls).
+    async fn fake_grow_abe(can: bool) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c2 = calls.clone();
+        let features = if can {
+            vec!["name", "grow"]
+        } else {
+            vec!["name"]
+        };
+        let fake = axum::Router::new()
+            .route(
+                "/version",
+                get(move || {
+                    let f = features.clone();
+                    async move { Json(serde_json::json!({"version": "0.7.3", "features": f})) }
+                }),
+            )
+            .route(
+                "/grow/{id}",
+                get(
+                    move |Path(id): Path<String>,
+                          axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, u64>>| {
+                        let c = c2.clone();
+                        async move {
+                            c.fetch_add(1, Ordering::SeqCst);
+                            Json(serde_json::json!({"id": id, "from": 1u64 << 30, "bytes": q["bytes"], "revalidated": 1}))
+                        }
+                    },
+                ),
+            );
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", l.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(l, fake).await.unwrap() });
+        (url, calls)
+    }
+
+    async fn store_with_volume(dir: &std::path::Path, server: &str) -> Store {
+        let store = Store::open(dir.join("s.json")).unwrap();
+        let now = Utc::now();
+        store
+            .update(|s| {
+                s.volumes.insert(
+                    "v1".into(),
+                    Volume {
+                        id: "v1".into(),
+                        name: "pvc-1".into(),
+                        server: server.into(),
+                        traddr: "10.22.0.1".into(),
+                        port: "44001".into(),
+                        bytes: 1 << 30,
+                        perf: None,
+                        attach_to: None,
+                        attached: None,
+                        message: None,
+                        deleting: false,
+                        created: now,
+                        updated: now,
+                    },
+                );
+            })
+            .await
+            .unwrap();
+        store
+    }
+
+    #[tokio::test]
+    async fn grow_grows_never_shrinks_and_is_idempotent() {
+        use std::sync::atomic::Ordering;
+        let (abe_url, calls) = fake_grow_abe(true).await;
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_with_volume(dir.path(), &abe_url).await;
+        let url = spawn(
+            Leadership::standalone("box", "http://box:23443"),
+            store.clone(),
+        )
+        .await;
+        let c = reqwest::Client::new();
+        let grow = |b: u64| {
+            c.post(format!("{url}/v1/volumes/v1/grow"))
+                .bearer_auth("secret")
+                .json(&serde_json::json!({"bytes": b}))
+                .send()
+        };
+        // smaller or the same: nothing asked of abe, the volume as it is
+        for b in [1u64 << 29, 1 << 30] {
+            let r = grow(b).await.unwrap();
+            assert_eq!(r.status(), 200);
+            let v: serde_json::Value = r.json().await.unwrap();
+            assert_eq!(v["bytes"], 1u64 << 30);
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        // bigger: abe grows it, the record follows
+        let r = grow(2 << 30).await.unwrap();
+        assert_eq!(r.status(), 200, "{}", r.text().await.unwrap());
+        assert_eq!(store.read().await.volumes["v1"].bytes, 2 << 30);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        // again: already that big
+        assert_eq!(grow(2 << 30).await.unwrap().status(), 200);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        // no such volume, and a zero size
+        let r = c
+            .post(format!("{url}/v1/volumes/nope/grow"))
+            .bearer_auth("secret")
+            .json(&serde_json::json!({"bytes": 5}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 404);
+        assert_eq!(grow(0).await.unwrap().status(), 400);
+    }
+
+    #[tokio::test]
+    async fn grow_on_an_abe_that_cannot_says_so() {
+        let (abe_url, _) = fake_grow_abe(false).await;
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_with_volume(dir.path(), &abe_url).await;
+        let url = spawn(
+            Leadership::standalone("box", "http://box:23443"),
+            store.clone(),
+        )
+        .await;
+        let r = reqwest::Client::new()
+            .post(format!("{url}/v1/volumes/v1/grow"))
+            .bearer_auth("secret")
+            .json(&serde_json::json!({"bytes": 2u64 << 30}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 501);
+        assert!(r.text().await.unwrap().contains("0.7.2"));
+        assert_eq!(store.read().await.volumes["v1"].bytes, 1 << 30);
     }
 
     #[tokio::test]

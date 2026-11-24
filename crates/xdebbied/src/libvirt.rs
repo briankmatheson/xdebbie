@@ -208,6 +208,56 @@ impl Virsh {
         }
     }
 
+    /// Have an attached volume's guest disk match the volume's size after
+    /// a grow. ABE re-reads the NVMe namespace size on its side; this host
+    /// may need a rescan to see it, and QEMU never notices a backing block
+    /// device growing by itself: `virsh blockresize` tells it, and the
+    /// guest gets a capacity change on the disk (virtio-scsi: a unit
+    /// attention its kernel acts on, or a rescan). Cheap when nothing
+    /// changed: one sysfs read, virsh only when this host's size moved.
+    async fn sync_volume_size(
+        &self,
+        host: &Host,
+        dom: &str,
+        target: &str,
+        dev: &str,
+        vol: &Volume,
+    ) -> Result<()> {
+        let sys = Path::new("/sys/class/block");
+        let mut have = host_block_bytes(sys, dev)?;
+        if have < vol.bytes {
+            rescan_nvme(sys, dev);
+            have = host_block_bytes(sys, dev)?;
+        }
+        if have < vol.bytes {
+            bail!(
+                "this host sees {have} of {}'s {} bytes yet (waiting for its NVMe namespace to re-read the size)",
+                vol.id,
+                vol.bytes
+            );
+        }
+        if size_sync::seen(&vol.id) == Some(have) {
+            return Ok(());
+        }
+        let info = self
+            .run(&host.uri, &["domblkinfo", dom, target])
+            .await
+            .with_context(|| format!("domblkinfo {dom} {target}"))?;
+        let cap = parse_domblkinfo_capacity(&info)
+            .ok_or_else(|| anyhow!("domblkinfo {dom} {target}: no Capacity in {info:?}"))?;
+        if cap < have {
+            self.run(
+                &host.uri,
+                &["blockresize", dom, target, &format!("{have}B")],
+            )
+            .await
+            .with_context(|| format!("growing {} ({target}) in {dom} to {have} bytes", vol.id))?;
+            tracing::info!(%dom, volume = %vol.id, %target, from = cap, to = have, "grew attached volume");
+        }
+        size_sync::record(&vol.id, have);
+        Ok(())
+    }
+
     async fn run(&self, uri: &str, args: &[&str]) -> Result<String> {
         let out = Command::new(&self.bin)
             .arg("-q")
@@ -892,6 +942,69 @@ pub fn domain_xml(
     )
 }
 
+/// The size QEMU gives the guest, from `virsh domblkinfo` (bytes).
+pub fn parse_domblkinfo_capacity(text: &str) -> Option<u64> {
+    text.lines()
+        .find_map(|l| l.trim().strip_prefix("Capacity:"))
+        .and_then(|v| v.trim().parse().ok())
+}
+
+/// The size of a host block device in bytes, by its path (a /dev/disk/by-id
+/// link is followed): `<sys>/<name>/size` is in 512-byte sectors.
+pub fn host_block_bytes(sys: &Path, dev: &str) -> Result<u64> {
+    let real = std::fs::canonicalize(dev).with_context(|| format!("resolving {dev}"))?;
+    let name = real
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| anyhow!("{dev}: no device name"))?;
+    let f = sys.join(name).join("size");
+    let sectors: u64 = std::fs::read_to_string(&f)
+        .with_context(|| format!("reading {}", f.display()))?
+        .trim()
+        .parse()
+        .with_context(|| format!("{}: not a number", f.display()))?;
+    Ok(sectors * 512)
+}
+
+/// Ask the NVMe controller behind a namespace device to rescan (its
+/// namespaces re-read their sizes). Best effort: the namespace normally
+/// hears of a resize from the target by itself (an AEN).
+fn rescan_nvme(sys: &Path, dev: &str) {
+    let Some(name) = std::fs::canonicalize(dev)
+        .ok()
+        .and_then(|p| p.file_name().and_then(|n| n.to_str()).map(String::from))
+    else {
+        return;
+    };
+    let f = sys.join(&name).join("device").join("rescan_controller");
+    if let Err(e) = std::fs::write(&f, "1") {
+        tracing::debug!(dev = %name, "nvme rescan: {e}");
+    }
+}
+
+/// The size each attached volume's guest disk was last brought to, so the
+/// size check costs one sysfs read a tick, not a virsh call.
+mod size_sync {
+    use std::collections::HashMap;
+    use std::sync::{LazyLock, Mutex};
+
+    static SEEN: LazyLock<Mutex<HashMap<String, u64>>> = LazyLock::new(Default::default);
+
+    pub fn seen(id: &str) -> Option<u64> {
+        SEEN.lock().ok()?.get(id).copied()
+    }
+    pub fn record(id: &str, bytes: u64) {
+        if let Ok(mut m) = SEEN.lock() {
+            m.insert(id.to_string(), bytes);
+        }
+    }
+    pub fn forget(id: &str) {
+        if let Ok(mut m) = SEEN.lock() {
+            m.remove(id);
+        }
+    }
+}
+
 /// `virsh domblklist` → (target, source) pairs.
 pub fn parse_domblklist(text: &str) -> Vec<(String, String)> {
     text.lines()
@@ -1340,6 +1453,9 @@ impl Hypervisor for Virsh {
         let dom = vm.domain_name();
         let blk = parse_domblklist(&self.run(&host.uri, &["domblklist", &dom]).await?);
         if let Some((t, _)) = blk.iter().find(|(_, src)| *src == dev) {
+            // Plugged in already: the guest sees the size the volume has now
+            // (a grow: `POST /volumes/{id}/grow` raised `vol.bytes`).
+            self.sync_volume_size(host, &dom, t, &dev, vol).await?;
             return Ok(t.clone());
         }
         let used: Vec<String> = blk.into_iter().map(|(t, _)| t).collect();
@@ -1370,6 +1486,7 @@ impl Hypervisor for Virsh {
     }
 
     async fn detach_volume(&self, host: &Host, vol: &Volume, att: &Attachment) -> Result<()> {
+        size_sync::forget(&vol.id);
         if !uri_is_local(&host.uri) {
             bail!(
                 "detaching volumes on remote host {} is not supported yet",
@@ -1493,6 +1610,39 @@ mod locality_tests {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn domblkinfo_capacity_is_read_in_bytes() {
+        let out = "Capacity:       2147483648\nAllocation:     0\nPhysical:       2147483648\n";
+        assert_eq!(parse_domblkinfo_capacity(out), Some(2 << 30));
+        assert_eq!(parse_domblkinfo_capacity("Allocation: 1\n"), None);
+    }
+
+    #[test]
+    fn host_block_size_follows_the_by_id_link_to_sysfs() {
+        let d = tempfile::tempdir().unwrap();
+        let sys = d.path().join("sys");
+        std::fs::create_dir_all(sys.join("nvme3n1")).unwrap();
+        std::fs::write(sys.join("nvme3n1").join("size"), "4194304\n").unwrap();
+        let dev = d.path().join("nvme3n1");
+        std::fs::write(&dev, "").unwrap();
+        let link = d.path().join("nvme-uuid.x");
+        std::os::unix::fs::symlink(&dev, &link).unwrap();
+        assert_eq!(
+            host_block_bytes(&sys, link.to_str().unwrap()).unwrap(),
+            2 << 30
+        );
+        assert!(host_block_bytes(&sys, "/no/such/dev").is_err());
+    }
+
+    #[test]
+    fn size_sync_remembers_until_forgotten() {
+        size_sync::record("vol-a", 5);
+        assert_eq!(size_sync::seen("vol-a"), Some(5));
+        size_sync::forget("vol-a");
+        assert_eq!(size_sync::seen("vol-a"), None);
+    }
+
     use super::*;
 
     #[test]
