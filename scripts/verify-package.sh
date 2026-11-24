@@ -22,7 +22,8 @@ for f in usr/bin/xdebbied usr/bin/xdctl usr/lib/systemd/system/xdebbied.service 
          etc/modules-load.d/xdebbie-mesh.conf etc/apparmor.d/local/wg \
          usr/share/doc/xdebbied/copyright usr/share/doc/xdebbied/README.md \
          usr/share/doc/xdebbied/BOOTSTRAP.md usr/share/doc/xdebbied/mesh.md \
-         usr/share/doc/xdebbied/network.md; do
+         usr/share/doc/xdebbied/network.md usr/share/doc/xdebbied/troubleshooting.md \
+         usr/share/doc/xdebbied/configuration.md; do
   check "ships /$f" '[ -e "$work/root/$f" ]'
 done
 check "no docs outside /usr/share/doc/xdebbied" '[ ! -e "$work/root/usr/share/doc/xdebbie" ]'
