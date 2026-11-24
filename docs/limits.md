@@ -12,10 +12,11 @@ What XDebbie does not do yet, so you can plan around it.
 - **Stores are per box.** With discovery on, followers mirror the leader's
   records every 5 seconds, so a new leader starts from a copy a few seconds
   old. There is no replicated store.
-- **Joining a box the package already bootstrapped needs a manual reset.**
-  With discovery off, the package makes a new box a cluster of its own, and
-  `--join` keeps that identity. See
-  [Join a second box](getting-started/join.md#2-clear-the-boxs-own-cluster).
+- **Joining takes over only an empty box.** With discovery off, the package
+  makes a new box a cluster of its own; `--join` takes it over while that
+  cluster is empty, and refuses (without `--force`) once it has VMs,
+  volumes, other boxes or mesh peers. See
+  [Join a second box](getting-started/join.md#2-if-the-new-box-is-already-in-use).
 - **Token rotation reaches only boxes known through discovery.** With
   discovery off, copy the new token to the other boxes by hand.
 - **The CA lives on one box.** Without the first box (or a backup of its CA

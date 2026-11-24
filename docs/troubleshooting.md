@@ -42,7 +42,9 @@ without touching contents.
 
 | What you see | Cause and fix |
 |---|---|
-| `--join` says *Already enrolled (certificate and token present); reusing* | The package's bootstrap made the box a cluster of its own. Clear it as in [Join a second box](getting-started/join.md#2-clear-the-boxs-own-cluster), then join again. |
+| `--join` says *this box is the CA of a cluster of its own, and that cluster is in use* | The box was used on its own before joining. Move or remove its VMs and volumes, or pass `--force` (see [Join a second box](getting-started/join.md#2-if-the-new-box-is-already-in-use)). |
+| `--join` says *this box is enrolled with … already, not …* | It joined another cluster before. `--force` enrols it with the new one. |
+| `--join` says *Already enrolled (certificate and token present); reusing* on 0.21 or older | The package's bootstrap made the box a cluster of its own. Upgrade to 0.22, or clear `/etc/xdebbie/xdebbied.toml`, `xdebbie_env`, `token`, `api-*.pem` and the `xdebbie` libvirt network by hand, then join again. |
 | The CA fingerprint does not match | You are talking to a different box than you think, or someone is in the middle. Stop and check `xdctl ca` on the first box. |
 | `GET /v1/ca` fails, or *is that the box bootstrapped first?* | The URL is wrong, or 23443/tcp is blocked. `curl -k https://box0.example.org:23443/healthz` from the new box should print `ok`. |
 | `--join refuses plain http://` | Use the `https://` URL. |

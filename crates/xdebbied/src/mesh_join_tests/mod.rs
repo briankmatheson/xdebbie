@@ -13,4 +13,5 @@ mod enrolment;
 mod force;
 mod join_flow;
 mod joiner_config;
+mod own_cluster;
 mod support;

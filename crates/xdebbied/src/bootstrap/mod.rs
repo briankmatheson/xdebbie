@@ -14,6 +14,7 @@ pub mod dns;
 pub mod firewall;
 pub mod join;
 pub mod libvirt_setup;
+pub mod takeover;
 pub mod tls_certs;
 pub mod token;
 
@@ -268,7 +269,7 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
 
     // Step 3: Discover existing resources
     info!("Step 3/9: Discovering libvirt resources");
-    let resources = libvirt_setup::discover_libvirt(&opts.libvirt_uri)?;
+    let mut resources = libvirt_setup::discover_libvirt(&opts.libvirt_uri)?;
     info!(
         "Found {} networks and {} storage pools",
         resources.networks.len(),
@@ -296,9 +297,78 @@ pub fn bootstrap(opts: &BootstrapOptions) -> Result<()> {
         .and_then(|c| c.mesh.as_ref().map(|m| m.box_id));
     let (token, box_id) = if let Some(ca_url) = &opts.join {
         info!("Step 4/9: Enrolling with the cluster CA at {ca_url}");
-        if api_tls_paths.all_exist() && token::token_exists(&opts.token_path) && !opts.force {
+        // What the identity already here is worth (takeover.rs): the
+        // package's own empty single-box cluster is moved aside and the box
+        // enrols; a cluster in use is never left behind without --force.
+        let enrolled = api_tls_paths.all_exist() && token::token_exists(&opts.token_path);
+        let start = takeover::decide(
+            enrolled,
+            opts.force,
+            api_tls_paths.is_ca(),
+            join::load_state(&opts.state_dir).as_ref(),
+            ca_url,
+            || {
+                let cfg = crate::config::Config::load(&opts.config_path).ok();
+                let peers = cfg
+                    .as_ref()
+                    .and_then(|c| c.mesh.as_ref())
+                    .map_or(0, |m| m.peers.len());
+                let (state_file, state_dir) = match &cfg {
+                    Some(c) => (c.state_file.clone(), c.state_dir()),
+                    None => (opts.state_dir.join("state.json"), opts.state_dir.clone()),
+                };
+                let mut names: Vec<String> = cfg
+                    .as_ref()
+                    .map(|c| c.hosts.iter().map(|h| h.name.clone()).collect())
+                    .unwrap_or_default();
+                names.push(hostname.clone());
+                takeover::survey(&state_file, &state_dir, peers, &names)
+            },
+        )?;
+        // A box id from the cluster left behind means nothing to the new
+        // one (a first box is box 0, which the CA box already is): only an
+        // id the operator passed is asked for.
+        let took_over = matches!(start, takeover::JoinStart::TakeOverOwn(_));
+        let old_box = existing_box;
+        let existing_box = if took_over { None } else { existing_box };
+        if took_over {
+            // The libvirt network the package made for its own cluster is
+            // shaped for that box id (bridge MAC, bridge address); the box
+            // has no VMs (checked), so it is made again in step 5 for the
+            // id the cluster assigns. Only when it is plainly the package's
+            // (its MAC is the one bootstrap derives): any other is left.
+            let ours = old_box.is_some_and(|b| {
+                libvirt_setup::network_mac(&opts.libvirt_uri, &opts.network_name)
+                    .is_some_and(|m| m == crate::mesh::bridge_mac(b))
+            });
+            if ours {
+                libvirt_setup::remove_network(&opts.libvirt_uri, &opts.network_name)?;
+                resources.networks.retain(|n| n.name != opts.network_name);
+                info!(
+                    "  libvirt network '{}' (made for the box's own cluster) removed; it is made again for this cluster",
+                    opts.network_name
+                );
+            } else if resources
+                .networks
+                .iter()
+                .any(|n| n.name == opts.network_name)
+            {
+                warn!(
+                    "  libvirt network '{}' was not made by bootstrap for this box; left as it is",
+                    opts.network_name
+                );
+            }
             info!(
-                "Already enrolled (certificate and token present); reusing. Use --force to re-enrol"
+                "This box is the first box of a cluster of its own, with nothing in it \
+                 (the package's default); joining {ca_url} instead"
+            );
+            for (from, to) in takeover::set_aside(&api_tls_paths, &opts.token_path)? {
+                info!("  {} kept as {}", from.display(), to.display());
+            }
+        }
+        if start == takeover::JoinStart::Reuse {
+            info!(
+                "Already enrolled with {ca_url} (certificate and token present); reusing. Use --force to re-enrol"
             );
             let b = existing_box.or(opts.box_id).unwrap_or(0);
             (token::read_token(&opts.token_path)?, b)

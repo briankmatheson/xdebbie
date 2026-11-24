@@ -294,6 +294,25 @@ pub fn network_mac(uri: &str, name: &str) -> Option<String> {
     Some(rest[..rest.find('\'')?].to_ascii_lowercase())
 }
 
+/// Stop and undefine a libvirt network (`virsh net-destroy`, then
+/// `net-undefine`). Destroying one that is not running is not an error.
+pub fn remove_network(uri: &str, name: &str) -> Result<()> {
+    let _ = Command::new("virsh")
+        .args(["-q", "-c", uri, "net-destroy", name])
+        .output();
+    let out = Command::new("virsh")
+        .args(["-q", "-c", uri, "net-undefine", name])
+        .output()
+        .context("running virsh net-undefine")?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "virsh net-undefine {name}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
 /// What an existing libvirt network looks like, for deciding whether
 /// xdebbied may run DHCP on its bridge.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `bootstrap --join` on a box the package had set up as a cluster of its
+  own (discovery off) no longer says "Already enrolled" and stays alone.
+  While that cluster is empty (no VMs, volumes, other hosts, approved boxes
+  or mesh peers), its identity is moved aside (renamed `*.own-cluster-STAMP`,
+  never deleted), the package's libvirt network is made again for the
+  assigned box id, and the box enrols. A cluster in use is never left
+  behind: `--join` refuses and says what is in it, unless `--force`. A box
+  enrolled with a different CA is refused too, instead of being reused.
+
 ## [0.21.1] - 2026-11-24
 
 ### Documentation
