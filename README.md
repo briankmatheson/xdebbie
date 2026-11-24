@@ -223,7 +223,7 @@ Cluster API asks and how capx answers), `api.md` (the REST API),
 
 ## Status
 
-**0.20.0.** The scheduler and reconciler are unit-tested against a fake
+**0.21.0.** The scheduler and reconciler are unit-tested against a fake
 hypervisor; the mesh, enrolment and Cluster API provider run the author's
 own clusters. Known gaps are listed in
 [docs/operations.md](docs/operations.md#limits); releases are in
