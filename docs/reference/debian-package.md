@@ -1,5 +1,7 @@
 # The xdebbied Debian package
 
+How the `xdebbied` package is built, what it installs, and what its maintainer scripts do.
+
 One package, `xdebbied`, carries the daemon and the CLI. It is built with
 [cargo-deb](https://github.com/kornelski/cargo-deb) from
 `[package.metadata.deb]` in `crates/xdebbied/Cargo.toml`, and CI publishes
@@ -24,7 +26,7 @@ metadata is bumped only when the same version is rebuilt.
 | `/usr/lib/systemd/system/xdebbied.service` | the unit (`crates/xdebbied/debian/xdebbied.service`) |
 | `/etc/modules-load.d/xdebbie-mesh.conf` | loads `geneve` and `wireguard` at boot (conffile) |
 | `/etc/apparmor.d/local/wg` | lets `wg` read `/var/lib/xdebbie/wg.key` (conffile) |
-| `/usr/share/doc/xdebbied/` | README, BOOTSTRAP, mesh and network docs, copyright |
+| `/usr/share/doc/xdebbied/` | `README.md`, `BOOTSTRAP.md` (from `docs/bootstrap.md`), `mesh.md`, `network.md`, `troubleshooting.md`, `configuration.md` (from `docs/reference/`), `copyright` |
 
 Depends: libvirt-daemon-system, libvirt-clients, qemu-kvm, qemu-utils,
 cloud-image-utils, lvm2, thin-provisioning-tools, iproute2, nftables,
@@ -59,3 +61,9 @@ themselves.
 `xdebbied serve`. `Restart=on-failure`, except exit 78 (a bad config or
 token file: restarting cannot help). Runs as root with
 `ProtectSystem=full`; the unit lists the paths it may write and why.
+
+The shipped docs are flat files, so links between them do not resolve
+there; the full set is in the source tree and on the documentation site.
+When a shipped doc moves or a new one is added, update `assets` in
+`crates/xdebbied/Cargo.toml` and the file list in
+`scripts/verify-package.sh` together.

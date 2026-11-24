@@ -12,7 +12,7 @@ command and an operator's approval. Between boxes, XDebbie builds an
 encrypted WireGuard mesh with a shared Layer 2 overlay, so VMs on different
 hosts sit on one network.
 
-```
+```text
               ┌──────────────────── management cluster ────────────────────┐
               │  CAPI core + kubeadm providers                             │
   kubectl ──▶ │  capx (XDebbie8sCluster / XDebbie8sMachine controllers)    │
@@ -23,11 +23,11 @@ hosts sit on one network.
                                   │ API · scheduler ·   │
                                   │ reconciler          │
                                   └──┬──────┬──────┬────┘
-                        libvirt over │ ssh  │      │
+               agent / libvirt TLS   │      │      │
                ┌─────────────────────▼┐ ┌───▼────┐ ┌▼────────────────┐
-               │ srv1  KVM            │ │ srv2   │ │ srvN            │
+               │ box0  KVM            │ │ box1   │ │ boxN            │
                │ pool: LVM thin pool  │ │  ...   │ │  ...            │
-               │ br0 ── VMs           │ │        │ │                 │
+               │ virbr-xdebbie ── VMs │ │        │ │                 │
                └──────────────────────┘ └────────┘ └─────────────────┘
                  └──── WireGuard underlay + Geneve overlay mesh ────┘
 ```
@@ -101,6 +101,16 @@ note it for the boxes that join (`xdctl ca` shows it again).
 
 ```bash
 sudo apt install xdebbied
+```
+
+With discovery off (the default) the package cannot hear the first box, so
+it makes this box a cluster of its own. Clear that before joining (only on
+a new box with no VMs):
+
+```bash
+sudo systemctl stop xdebbied
+sudo rm -f /etc/xdebbie/xdebbied.toml /etc/xdebbie/xdebbie_env /etc/xdebbie/token /etc/xdebbie/api-*.pem
+sudo virsh net-destroy xdebbie && sudo virsh net-undefine xdebbie
 sudo xdebbied bootstrap --join https://FIRST_BOX:23443 --ca-fingerprint sha256:FINGERPRINT
 ```
 
@@ -112,9 +122,12 @@ xdctl approve NEW_BOX    # sign its certificate and assign its mesh box id
 ```
 
 The new box picks up its certificate, the cluster token and its share of
-the overlay network, and finishes on its own. If the package's own
-bootstrap on this box hears the cluster first, it stops and tells you to
-re-run with `--join`: it never starts a second cluster by accident.
+the overlay network, and finishes. Then `sudo systemctl start xdebbied` on
+it, and connect the mesh both ways with `xdctl mesh peer add`. The whole
+walk-through is in [Join a second box](docs/getting-started/join.md).
+With discovery on and the boxes on one LAN, the package's bootstrap hears
+the cluster, stops and tells you to re-run with `--join`; then skip the
+clearing step.
 
 ### 4. Use the CLI
 
@@ -138,33 +151,17 @@ xdctl version
 `xdctl token rotate` replaces the API token on every box; the old one
 keeps working until every box has the new one.
 
-### Optional: LVM thin provisioning
+### Base images and LVM
 
-```bash
-sudo lvcreate -L 200G -T VG/xdebbie-pool
+`--image debian-13` means the volume `debian-13.qcow2` in each host's
+`xdebbie` storage pool, or, with an LVM thin pool configured, the thin LV
+`base-debian-13`. See [Create your first VM](docs/getting-started/first-vm.md)
+and [Use an LVM thin pool](docs/how-to/lvm-thin-pool.md). With a thin pool,
+new VM disks are snapshots ready in under a second; without one they are
+qcow2 overlays, slower to create but otherwise the same.
 
-# top-level keys in /etc/xdebbie/xdebbied.toml, not a table
-sudo tee -a /etc/xdebbie/xdebbied.toml <<'EOF'
-volume_group = "VG"
-thin_pool = "xdebbie-pool"
-EOF
-
-# a base image as a thin volume
-sudo lvcreate -V 25G -T VG/xdebbie-pool -n base-debian-13
-sudo qemu-img convert -f qcow2 -O raw -t none debian-13-generic-amd64.qcow2 /dev/VG/base-debian-13
-
-sudo systemctl restart xdebbied
-```
-
-Without it, VM disks are qcow2 overlays: slower to create, otherwise the
-same.
-
-> **Base images must boot headless.** XDebbie's VMs have no video device.
-> An image with `GRUB_TERMINAL_OUTPUT="gfxterm serial"` loops forever on
-> `Booting 'Debian GNU/Linux'`. Use `GRUB_TERMINAL="console serial"` and
-> run `update-grub` (for example with `virt-customize`). Test with
-> `qemu-system-x86_64 -vga none -display none -serial stdio ...`; plain
-> `-nographic` still adds a VGA device and hides the problem.
+Images should log to the serial console; see
+[A VM never finishes booting](docs/troubleshooting.md#a-vm-never-finishes-booting).
 
 ## How it works
 
@@ -174,12 +171,12 @@ start) installs anything missing, makes sure libvirtd runs, creates the
 pool, and writes `/etc/xdebbie/xdebbied.toml`, the token, the API
 certificate and the env file. It is safe to run again; `--force`
 regenerates the config and keeps your settings. See
-[BOOTSTRAP.md](BOOTSTRAP.md).
+[Bootstrap](docs/bootstrap.md).
 
 **Who decides.** One box leads: it runs the scheduler and reconciler and
 answers every cluster request; the others forward to it, and `xdctl`
 talks to it directly (`xdctl leader`). With discovery off (the default),
-a box with no peers is its own leader. With discovery on
+every box leads alone, so point `xdctl` and capx at one box. With discovery on
 (`enable_discovery = true`, or `PUT /v1/settings` at runtime), boxes
 announce themselves on `239.0.0.42:23442`, sign every message with the
 cluster token, elect the best-scored box, and elect again within about
@@ -206,27 +203,25 @@ the DHCP lease.
 | `/var/lib/xdebbie/` | state, the WireGuard key, enrolment records |
 | `journalctl -u xdebbied` | the daemon's log |
 
+Every file and port: [Files, ports and interfaces](docs/reference/files-and-ports.md).
+
 ## Documentation
 
-Installed with the package, in `/usr/share/doc/xdebbied/`:
+The full documentation starts at [docs/README.md](docs/README.md):
+getting started, how-to guides, reference (every config key, the REST API,
+every `xdctl` command) and explanation. `mdbook build` turns it into a
+static site.
 
-- **README.md**: this file
-- **BOOTSTRAP.md**: bootstrap, the files it writes, joining a cluster
-- **mesh.md**: the WireGuard underlay and Geneve overlay, `xdctl mesh`
-- **network.md**: overlay addressing and the built-in DHCP, `xdctl net`
-
-In the source tree, under `docs/`: `autodiscovery.md` (discovery,
-election and the leader), `architecture.md`, `capi-contract.md` (what
-Cluster API asks and how capx answers), `api.md` (the REST API),
-`operations.md` (drain, upgrades, backup, security, limits) and
-`storage.md` (ABE volumes).
+Installed with the package, in `/usr/share/doc/xdebbied/`: this README,
+`BOOTSTRAP.md`, `mesh.md`, `network.md`, `troubleshooting.md` and
+`configuration.md`.
 
 ## Status
 
 **0.21.0.** The scheduler and reconciler are unit-tested against a fake
 hypervisor; the mesh, enrolment and Cluster API provider run the author's
 own clusters. Known gaps are listed in
-[docs/operations.md](docs/operations.md#limits); releases are in
+[docs/limits.md](docs/limits.md); releases are in
 [CHANGELOG.md](CHANGELOG.md).
 
 ## License

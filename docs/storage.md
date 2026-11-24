@@ -1,12 +1,14 @@
 # VM storage: local or ABE
 
+Where a VM's disks live, and how ABE network volumes work.
+
 A VM's disks live in one of two places, chosen per VM with `spec.storage`
 (`xdctl vm create --storage local|abe`, CAPX `XDebbie8sMachineTemplate
 .spec.template.spec.storage`):
 
 | `storage` | root disk | data disk (`dataDiskGib`) | reachable from |
 |---|---|---|---|
-| `local` (default) | thin LVM snapshot of `base-<image>` or qcow2 overlay in the host's pool | thin LV / raw pool volume | the host that created it |
+| `local` (default) | thin LVM snapshot of `base-IMAGE` or qcow2 overlay in the host's pool | thin LV / raw pool volume | the host that created it |
 | `abe` | NVMe/TCP volume exported by the host's `abe` daemon, filled from the base image | NVMe/TCP volume, blank | **any host** that can reach the exporter |
 
 `local` is what xdebbie always did. `abe` is for the case where **every
@@ -22,7 +24,7 @@ between boxes is still not done.
 
 ## How it works
 
-1. `[[hosts]].abe = "https://<addr>:<port>"` tells xdebbied where each host's
+1. `[[hosts]].abe = "https://ADDRESS:PORT"` tells xdebbied where each host's
    ABE API is (`http://` for an ABE before 0.5.0; the scheme is used as
    written, nothing rewrites it). Hosts without it cannot run `storage = abe` VMs: the
    scheduler skips them (`no abe`) and the VM stays `Pending` until a host
@@ -42,23 +44,23 @@ between boxes is still not done.
 
    With ABE ≥ 0.4.0 the root is a thin clone of a shared [base
    volume](#base-volumes) (`origin` is the base's id) and the data disk is
-   `GET /configure?bytes=N&raw=true&name=vm-<uuid>-data`. ABE's `?name=`
+   `GET /configure?bytes=N&raw=true&name=vm-UUID-data`. ABE's `?name=`
    makes the call idempotent: a retry after a crash gets the same volume
    back (`existing: true`) instead of a second one. The record is persisted
    **before** anything else happens, so the next reconcile tick picks up
    where it left off. Against an ABE older than 0.4.0 (no `GET /version`)
-   xdebbied logs `abe at <url> predates 0.4.0: no thin root clones, no name
+   xdebbied logs `abe at URL predates 0.4.0: no thin root clones, no name
    idempotency` once and does what 0.14 did: unnamed volumes, root filled
    with a full copy.
-3. The host attaches each volume: `nvme connect -t tcp -a <traddr> -s <port>
-   -n <id> --ctrl-loss-tmo -1` (retry forever if the exporter is away, so the
+3. The host attaches each volume: `nvme connect -t tcp -a TRADDR -s PORT
+   -n ID --ctrl-loss-tmo -1 --nr-io-queues 4` (retry forever if the exporter is away, so the
    guest stalls instead of taking I/O errors). ABE ≥ 0.2.0 sets the
    namespace's `device_uuid` to the volume id, which makes udev create
-   `/dev/disk/by-id/nvme-uuid.<id>` — a path that survives reboots and
+   `/dev/disk/by-id/nvme-uuid.ID` — a path that survives reboots and
    reconnects, unlike `/dev/nvmeXnY`.
 4. Without thin clones, the root volume is filled once from the host's
-   copy of the base image (`/dev/<vg>/base-<image>` with LVM, else the
-   pool's `<image>.qcow2`) using `qemu-img convert -n -O raw`; `populated`
+   copy of the base image (`/dev/VG/base-IMAGE` with LVM, else the
+   pool's `IMAGE.qcow2`) using `qemu-img convert -n -O raw`; `populated`
    is then set. Data volumes stay blank.
 5. The domain is defined with `<disk type='block'>` pointing at the by-id
    paths. The cloud-init seed ISO stays in the local pool.
@@ -69,19 +71,18 @@ between boxes is still not done.
    are attempted and the first error makes the reconciler retry. The base a
    root was cloned from is left alone.
 
-What is *not* done: attaching on a host other than the one that holds the
-ABE (remote-host NVMe; `traddr` is reachable from every host, the control
-path is not there yet), migration (refused with a clear message), base
-garbage collection (a sealed base stays until someone `DELETE`s it on ABE),
-picking a different ABE than the scheduled host's.
+What is *not* done: live migration of an `abe` VM (refused with a clear
+message), base garbage collection (a sealed base stays until someone
+`DELETE`s it on ABE), and picking a different ABE than the scheduled host's
+for a VM's own disks.
 
 ### Importing a base image
 
 With LVM (`volume_group` and `thin_pool` set in `xdebbied.toml`) the host's
-copy of an image is the thin LV `base-<image>`. Put one there with:
+copy of an image is the thin LV `base-IMAGE`. Put one there with:
 
 ```bash
-sudo xdctl image import ~/images/debian-13-k8s-v1.36.raw
+sudo xdctl image import debian-13-k8s-v1.36.raw
 ```
 
 This runs on the host itself and does not go through xdebbied. It creates
@@ -108,25 +109,29 @@ filled once.
 1. `qemu-img info` gives the image's virtual size, rounded up to a MiB. A
    VM whose `disk_gib` is smaller than that fails provisioning with a clear
    message.
-2. `GET /configure?base=<image>&bytes=<size>` returns the base for that
-   image, creating it if needed. ABE tags it `abe_base=<image>`, so a second
+2. `GET /configure?base=IMAGE&bytes=SIZE` returns the base for that
+   image, creating it if needed. ABE tags it `abe_base=IMAGE`, so a second
    call (another VM, another xdebbied tick, a retry after a crash) gets the
    same volume back.
 3. If the base is not `sealed` yet xdebbied connects it, fills it with
    `qemu-img convert`, flushes (`blockdev --flushbufs`), disconnects and
-   calls `GET /seal/<id>`. Sealing un-exports the base for good (its port is
-   freed; `GET /id/<base>` answers 409). All of that happens under a lock
+   calls `GET /seal/ID`. Sealing un-exports the base for good (its port is
+   freed; `GET /id/BASE_ID` answers 409). All of that happens under a lock
    keyed by `(server, image)`, so two VMs from the same image provisioned at
    once share one fill.
-4. `GET /clone/<base>?bytes=<disk_gib>&name=vm-<uuid>-root` makes the root:
+4. `GET /clone/BASE_ID?bytes=DISK_BYTES&name=vm-UUID-root` makes the root:
    a thin snapshot that is grown to the requested size. The clone costs no
    space until the guest writes, and the provision step takes seconds
    instead of a full image copy. `Vm.disks[].origin` records the base.
 
 A sealed base is tied to the image *name*: re-importing a changed image
-under the same name does not refresh it. To pick up a new image, `curl -X
-DELETE http://<abe>/id/<base id>` (ABE refuses while clones exist) and the
-next VM rebuilds it.
+under the same name does not refresh it. To pick up a new image, delete the
+base on ABE (ABE refuses while clones exist) and the next VM rebuilds it:
+
+```bash
+sudo curl --cacert /etc/xdebbie/api-ca.pem --cert /etc/xdebbie/api-cert.pem \
+     --key /etc/xdebbie/api-key.pem -X DELETE https://ABE_ADDRESS/id/BASE_ID
+```
 
 ### Capacity accounting
 
@@ -169,10 +174,10 @@ the raw reading.
 ABE assigns ports lowest-free, and a restart re-exports every volume, so a
 volume may come back on a different port than the one in xdebbied's record.
 Before starting a stopped ABE VM, before provisioning one whose disks exist,
-and before attaching a standalone volume, xdebbied asks `GET /id/<id>` for
+and before attaching a standalone volume, xdebbied asks `GET /id/ID` for
 each disk that is not connected; when `traddr` or `port` differ it drops any
 controller still retrying the old port (`nvme disconnect`), updates the
-record and logs `abe moved <id> from <old> to <new>; record updated`. A
+record and logs `abe moved ID from OLD to NEW; record updated`. A
 connected disk is left alone: its controller follows the exporter on its
 own.
 
@@ -182,19 +187,23 @@ Guests have no route to ABE (it listens on the WireGuard underlay only), so
 block storage for things *inside* a VM — Kubernetes PersistentVolumes via
 `abe-csi` — goes through xdebbied too:
 
-```sh
-xdctl volume create pvc-demo --gib 5        # ABE /configure?name=vol-pvc-demo on the ABE with the most headroom
-xdctl volume attach <id> my-vm              # host: nvme connect + virsh attach-device --persistent
-#   guest: /dev/disk/by-id/virtio-<first 20 chars of id>
-xdctl volume detach <id>                    # host: virsh detach-disk + nvme disconnect
-xdctl volume rm <id>                        # ABE DELETE /id/<id>; refused while attached
+```bash
+xdctl volume create pvc-demo --gib 5   # ABE /configure?name=vol-pvc-demo on the ABE with the most headroom
+xdctl volume attach VOLUME_ID my-vm    # host: nvme connect + virsh attach-device
+xdctl volume detach VOLUME_ID          # host: virsh detach-disk + nvme disconnect
+xdctl volume rm VOLUME_ID              # ABE DELETE /id/VOLUME_ID; refused while attached
 ```
+
+In the guest, the volume is a SCSI disk on the VM's virtio-scsi controller,
+at `/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_VOLUME_ID` (the whole id). A
+VM with no PCI slot left for the controller gets a virtio-blk disk instead,
+at `/dev/disk/by-id/virtio-` plus the first 20 characters of the id.
 
 Create and delete are synchronous (the caller needs ABE's id). Create is
 serialized per name and idempotent: concurrent `POST`s of one name make one
 ABE call, the first answers 201 and the rest 200 with the same record. The
 host is the one whose ABE has the most headroom unless `host` pins it; 507
-means none fits (`no ABE host fits <bytes> bytes: <host>: <reason>, …`), 503
+means none fits (`no ABE host fits BYTES bytes: HOST: REASON, …`), 503
 that no host has an ABE. Delete marks the record `deleting: true` first,
 then calls ABE; if ABE fails the record stays with that flag and the call
 answers 502, attach answers 409 and the reconciler leaves it alone until a
@@ -205,53 +214,16 @@ reconciler re-runs the attach every tick while it is wanted, so a host
 reboot (devices gone) or a recreated domain heals itself. If the VM is
 deleted the volume is unplugged and kept.
 
-Hot-plugging a virtio disk on the host beat an in-guest NVMe/TCP initiator
+Hot-plugging the disk on the host beat an in-guest NVMe/TCP initiator
 in every fio test we ran (3× on sequential reads, 6× lower p99 on random
 writes), because the TCP session stays on the host and the guest only sees
-virtio-blk. Volumes attach on the VM's own host only (the same local-nvme
-limitation as above).
+a local disk. Volumes attach on the VM's own host only: that host runs `nvme connect`.
 
 ## Setting up a host
 
-```sh
-# the exporter (abe >= 0.5.0), see abe/README.md
-sudo apt install ./abe-block-exporter_0.5.0-1_amd64.deb nvme-cli
-sudo tee /etc/default/abe <<'EOF'
-ABE_VG=timesink-vg            # any VG; a thin pool is recommended
-ABE_THIN_POOL=xdebbie-pool
-ABE_TRADDR=10.22.0.1          # bind nvmet ports and the API to the WireGuard
-ABE_ADVERTISE=10.22.0.1       # underlay address only: reachable from other
-ABE_LISTEN=10.22.0.1:443      # hypervisors, not from the LAN or from guests
-# the API is mutual TLS; reuse xdebbie's cluster identity (every box's
-# api-cert.pem carries serverAuth + clientAuth, and abe runs as root)
-ABE_TLS_CERT=/etc/xdebbie/api-cert.pem
-ABE_TLS_KEY=/etc/xdebbie/api-key.pem
-ABE_TLS_CA=/etc/xdebbie/api-ca.pem
-EOF
-# wg-flock is created by xdebbied, so make abe wait for it at boot
-sudo mkdir -p /etc/systemd/system/abe.service.d
-sudo tee /etc/systemd/system/abe.service.d/underlay.conf <<'EOF'
-[Unit]
-After=xdebbied.service
-[Service]
-ExecStartPre=/usr/bin/timeout 90 /bin/sh -c 'until ip -4 addr show to 10.22.0.1/32 | grep -q inet; do sleep 1; done'
-EOF
-sudo systemctl daemon-reload && sudo systemctl enable --now abe
-sudo modprobe nvme-tcp && echo nvme-tcp | sudo tee /etc/modules-load.d/nvme-tcp.conf
-
-# tell xdebbied
-sudo tee -a /etc/xdebbie/xdebbied.toml <<'EOF'   # inside the host's [[hosts]] block
-abe = "https://10.22.0.1:443"
-EOF
-sudo systemctl restart xdebbied
-```
-
-Then `xdctl vm create demo --image debian-13 --disk-gib 10 --storage abe`.
-`xdctl vm describe demo | jq .disks` shows the volumes; `nvme list` on the
-host shows them attached; `curl --cacert /etc/xdebbie/api-ca.pem --cert
-/etc/xdebbie/api-cert.pem --key /etc/xdebbie/api-key.pem
-https://10.22.0.1/volumes` shows them on the exporter. `xdctl host ls` has a
-`TLS` column (`yes` once `/version` says so, `no` for an older ABE).
+Installing ABE on a host and pointing xdebbied at it is a how-to:
+[Use ABE volumes](how-to/abe-volumes.md). The sections below explain the
+choices it makes.
 
 ### TLS
 
@@ -261,7 +233,7 @@ xdebbied talks to ABE with the same client it uses for other boxes
 client certificate. An ABE 0.5.0 on the paths above therefore admits
 exactly the xdebbieds enrolled under the cluster CA and nothing else: no
 token, no extra configuration. A refused handshake shows up in the log and
-in the host's inventory error as `tls: <reason>` (for example `tls: invalid
+in the host's inventory error as `tls: REASON` (for example `tls: invalid
 peer certificate: UnknownIssuer` when the CA paths disagree) rather than as
 a timeout. TLS applies to `https://` URLs only, so an `http://` host record
 keeps working for an ABE 0.4.0 that has not been upgraded.
@@ -274,7 +246,7 @@ address of the TLS connection that made the `/configure`, `GET /id` or
 source gets a TCP reset on that port. Nothing in xdebbie had to change for
 this: `nvme connect` always runs on the box that made the ABE call (attach
 is local), and the [endpoint refresh](#endpoint-refresh) already asks
-`GET /id/<id>` for every disk that is not connected before connecting, so
+`GET /id/ID` for every disk that is not connected before connecting, so
 after moving a VM or restoring ABE the next reconcile re-asks and the port
 follows. An ABE restarted with volumes exported by 0.4.0 (no client
 recorded) adopts the one established connection it finds on each port; a
@@ -285,7 +257,7 @@ makes.
 
 `ABE_ADVERTISE` is what ends up in `traddr`, so it must be reachable from
 every host that may attach the volume. With the [mesh](mesh.md) on, use the
-box's WireGuard underlay address (`10.22.<box>.1`): NVMe/TCP then rides the
+box's WireGuard underlay address (`10.22.BOX.1`): NVMe/TCP then rides the
 encrypted underlay directly instead of the Geneve overlay, and the local
 host reaches its own underlay address too. The ABE HTTP API only needs to be
 reachable by the xdebbied that schedules VMs onto that host.
@@ -301,10 +273,10 @@ an old port is moved into the range at abe's next re-export).
 
 ### Firewall
 
-xdebbied's bootstrap sets ufw to default-deny; the ABE ports must be opened
-on the underlay only, which `simple/bin/setup_abe_host.py` does:
+xdebbied's bootstrap sets ufw to default-deny; open the ABE ports on the
+underlay only:
 
-```sh
+```bash
 sudo ufw allow in on wg-flock proto tcp from 10.22.0.0/16 to any port 23000:23999 comment 'abe nvme/tcp'
 sudo ufw allow in on wg-flock proto tcp from 10.22.0.0/16 to any port 443 comment 'abe api'
 ```
@@ -323,13 +295,13 @@ cidr = "10.23.0.0/16"
 storage_cidr = "10.24.0.0/16"     # same prefix length as cidr
 
 [[hosts]]
-name = "timesink"
+name = "box0"
 storage_bridge = "virbr-abe"      # libvirt network "abe"
 ```
 
 - Bootstrap (every service start) creates libvirt network `abe` if it is
   missing: bridge `virbr-abe`, this box at its block's first address
-  (`10.24.<box>.1`), no `<forward>` (isolated: libvirt rejects anything
+  (`10.24.BOX.1`), no `<forward>` (isolated: libvirt rejects anything
   routed in or out), no DHCP.
 - A VM defined on that host gets a second virtio NIC on the bridge, MAC
   `52:54:24:` + the same id bytes as its first NIC, and in its
@@ -341,28 +313,30 @@ storage_bridge = "virbr-abe"      # libvirt network "abe"
   the `xdebbie_host` forward chain drops anything in or out of it.
 
 abe itself does not change: it keeps listening on the underlay address
-(`10.22.<box>.1`). The storage NIC's network-config carries one route, the
+(`10.22.BOX.1`). The storage NIC's network-config carries one route, the
 host's abe address (`/32`, from the host's `abe` URL) via the host's storage
-address (`10.24.<box>.1`); the host accepts packets for any of its own
+address (`10.24.BOX.1`); the host accepts packets for any of its own
 addresses on any interface, so guests reach the very same abe over
 `virbr-abe`, and abe's port fence and TLS work as before. Only that host's
 abe is routed this way: another box's abe is not on this bridge.
 
 ## Configuration reference
 
+Every key is in [the configuration reference](reference/configuration.md).
+
 ```toml
+# top level: binaries, overridable for tests
+nvme = "nvme"
+qemu_img = "qemu-img"
+nvme_sys = "/sys/class/nvme"
+
 [[hosts]]
-name = "timesink"
+name = "box0"
 uri = "qemu:///system"
 abe = "https://10.22.0.1:443"   # this host's ABE API (underlay address)
 abe_overcommit = 1.0            # thin pool: promised bytes may reach bytes × this
 abe_max_data_percent = 85.0     # refuse new volumes above this data usage
 abe_max_metadata_percent = 80.0 # … or this metadata usage
-
-# binaries, overridable for tests
-nvme = "nvme"
-qemu_img = "qemu-img"
-nvme_sys = "/sys/class/nvme"
 ```
 
 `VmSpec.storage`: `local` | `abe` (default `local`). `Vm.disks[]`: `role`

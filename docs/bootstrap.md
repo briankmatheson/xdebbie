@@ -1,4 +1,4 @@
-# xdebbied Bootstrap
+# Bootstrap
 
 How `xdebbied bootstrap` turns a stock Debian 13 box into an XDebbie host, the files it writes, and how a box joins a cluster. The package runs it on first install and the service runs it before every start.
 
@@ -10,7 +10,7 @@ The bootstrap functionality automatically:
 2. **Ensures libvirtd is running** and enabled
 3. **Discovers existing libvirt resources** (networks, storage pools)
 4. **Creates default resources** if none exist:
-   - Network: `xdebbie` on `10.23.0.0/16` with bridge `virbr-xdebbie` at `10.23.<box>.1`
+   - Network: `xdebbie` on `10.23.0.0/16` with bridge `virbr-xdebbie` at `10.23.BOX.1`
    - Storage pool: `xdebbie` at `/var/lib/libvirt/xdebbie`
 5. **Generates configuration** at `/etc/xdebbie/xdebbied.toml`
 6. **Generates secure API token** at `/etc/xdebbie/token`
@@ -58,13 +58,25 @@ Bootstrap the system with automatic resource discovery and creation.
 
 **Options:**
 
-- `--force` - Regenerate the configuration and token. The old files are kept as `.bak-<timestamp>`; operator settings (`volume_group`, `thin_pool`, `tls_*`, `advertise_url`, `policy`, `[network]`, `[mesh]`, `[[hosts]]`) are carried into the new config. A config that exists but does not parse is never replaced without `--force`
-- `--uri <URI>` - Libvirt URI (default: `qemu:///system`)
-- `--network <NAME>` - Network name to create (default: `xdebbie`)
-- `--subnet <CIDR>` - Overlay subnet (default: `10.23.0.0/16`). One /16 for the cluster; box N's bridge is `<subnet>.N.1`, its VMs `<subnet>.N.2-254`
-- `--pool <NAME>` - Storage pool name (default: `xdebbie`)
-- `--pool-path <PATH>` - Storage pool path (default: `/var/lib/libvirt/xdebbie`)
-- `--box <0-253>` - Mesh box id to ask for. Normally not needed: the first box takes `0` and every box that joins is **assigned the next free id by the CA box** at approval (a host that re-enrols keeps the id it had). The id goes into `[mesh]`, and the libvirt network bootstrap creates gets the bridge MAC `52:54:00:23:<box>:fe` the mesh's derived FDB scheme expects — which is why enrolment happens before the network is created. For a network that already exists bootstrap only warns when the MAC differs. With `--join`, `--box` is a wish the CA box honours only if that id is free
+Every option, with its default, is in the
+[xdebbied command reference](reference/xdebbied.md#xdebbied-bootstrap). Two
+need more words:
+
+- `--force` regenerates the configuration and, on the first box, the
+  token. The old files are kept as `FILE.bak-TIMESTAMP`. Operator settings
+  are carried into the new config: `volume_group`, `thin_pool`, `tls_cert`,
+  `tls_key`, `advertise_url`, `ca_url`, `policy`,
+  `reconcile_interval_secs`, `host_stale_secs`, and the `[network]`,
+  `[mesh]` and `[[hosts]]` tables. A config that exists but does not parse
+  is never replaced without `--force`.
+- `--box N` asks for a mesh box id, 0-253. Normally not needed: the first
+  box takes `0` and every box that joins is **assigned the lowest free id
+  by the CA box** at approval (a host that re-enrols keeps the id it had).
+  The id goes into `[mesh]`, and the libvirt network bootstrap creates gets
+  the bridge MAC `52:54:00:23:BOX:fe` that the mesh expects. That is why
+  enrolment happens before the network is created. For a network that
+  already exists, bootstrap only warns when the MAC differs. With `--join`,
+  `--box` is a wish the CA box honours only if that id is free.
 
 **Examples:**
 
@@ -98,7 +110,7 @@ the subcommand.
 sudo xdebbied serve --bootstrap
 
 # Start with another config
-sudo xdebbied --config /tmp/my-config.toml serve
+sudo xdebbied --config /etc/xdebbie/other.toml serve
 ```
 
 ### `xdebbied check`
@@ -118,14 +130,14 @@ state_file = "/var/lib/xdebbie/state.json"
 token_file = "/etc/xdebbie/token"
 tls_cert = "/etc/xdebbie/api-cert.pem"   # HTTPS from the first start
 tls_key  = "/etc/xdebbie/api-key.pem"
-policy = "spread"                        # or "binpack"
+policy = "spread"                        # or "pack"
 enable_discovery = false                 # PUT /v1/settings switches it at runtime
 multicast_addr = "239.0.0.42:23442"
 advertise_url = "https://HOSTNAME:23443" # what peers and xdctl use
-# ca_url = "https://FIRST_BOX:23443"     # set by `bootstrap --join`
+# ca_url = "https://box0.example.org:23443"  # set by `bootstrap --join`
 
-[network]            # overlay addressing + built-in DHCP (docs/network.md)
-[mesh]               # Geneve overlay, on by default (docs/mesh.md)
+[network]            # overlay addressing + built-in DHCP (network.md)
+[mesh]               # Geneve overlay, on by default (mesh.md)
 box = 0              # assigned by the cluster CA at enrolment
 [mesh.wireguard]     # the managed WireGuard underlay, 10.22.BOX.1/16
 
@@ -140,7 +152,7 @@ storage_pool = "xdebbie"
 
 64-character hexadecimal token (32 random bytes), root:root mode 0400:
 
-```
+```text
 a1b2c3d4e5f6...
 ```
 
@@ -155,7 +167,7 @@ without sudo. Nobody else can read it.
 # xdebbie environment variables
 # Source this file: source /etc/xdebbie/xdebbie_env
 
-export XDEBBIE_URL=https://gram.example.net:23443
+export XDEBBIE_URL=https://box0.example.org:23443
 export XDEBBIE_TOKEN='a1b2c3d4e5f6...'
 export XDEBBIE_CA=/etc/xdebbie/api-ca.pem
 ```
@@ -197,12 +209,12 @@ token. That is how a new box gets the token in the first place.
 Nothing to copy by hand. A plain `sudo xdebbied bootstrap` on a
 new box first **listens 20 s on the discovery group** (239.0.0.42:23442)
 for a running cluster. If it hears one it shows what it found (leader
-first) and asks `Join it via https://gram…:23443? [Y/n/other URL]`; if it
+first) and asks `Join it via https://box0.example.org:23443? [Y/n/other URL]`; if it
 hears nothing it asks for a URL, and Enter means "this is the first box"
 (a new cluster; this box keeps the CA key). Without a terminal — the
 package's first-install bootstrap — a found cluster is an error telling
 you to re-run with `--join`, never a silent second cluster; silence means
-first box. Skip the listening with `--join <url>` or `--standalone`
+first box. Skip the listening with `--join URL` or `--standalone`
 (`--discover-secs N` tunes it, 0 disables). A box that already holds the
 CA key, or has `ca_url` in its config, never asks.
 
@@ -210,8 +222,8 @@ Explicitly, with the CA fingerprint that bootstrap printed on the CA box
 (or `xdctl ca`):
 
 ```bash
-sudo xdebbied bootstrap --join https://gram.example.net:23443 \
-     --ca-fingerprint sha256:3fa1…        # optional; without it you are asked y/N
+sudo xdebbied bootstrap --join https://box0.example.org:23443 \
+     --ca-fingerprint sha256:FINGERPRINT   # optional; without it you are asked y/N
 ```
 
 The joiner fetches the CA, pins it, generates a key (`api-key.pem`, never
@@ -221,7 +233,7 @@ are forwarded to the CA box via `ca_url`):
 
 ```bash
 xdctl enroll ls                 # ID  HOST  BOX  URL  FINGERPRINT  STATUS  AGE
-xdctl approve timesink          # == xdctl enroll approve; by hostname or id
+xdctl approve NEW_BOX           # == xdctl enroll approve; by hostname or id
 xdctl enroll deny ID            # the box can ask again with --join --force
 xdctl enroll ls --all           # include approved / denied
 xdctl ca                        # CA PEM + fingerprint, to check against --join
@@ -237,14 +249,14 @@ picks up the certificate within seconds, installs `api-cert.pem` +
 matching MAC, then fetches the
 **cluster token** over mTLS (`GET /v1/enroll/token`, client-certificate
 only) and writes `/etc/xdebbie/token` and `xdebbie_env`. Bootstrap then
-finishes as usual. The joiner's config gets `ca_url = "https://gram…"`
+finishes as usual. The joiner's config gets `ca_url = "https://box0.example.org:23443"`
 so later `xdctl approve` calls made against it are forwarded.
 
 The joiner also copies the **overlay network** from the CA box
 (`GET /v1/network` over mTLS): same `cidr` and `domain`, and this box's own
-/24 of it — bridge `<cidr>.<box>.1` as gateway and DNS, VMs
-`.<box>.2`–`.254` as the pool — so pools are disjoint by construction
-(docs/network.md). A kept config gains the block only if it has no live
+/24 of it — bridge `10.23.BOX.1` as gateway and DNS, VMs
+`10.23.BOX.2`–`.254` as the pool — so pools are disjoint by construction
+([network](network.md)). A kept config gains the block only if it has no live
 `[network]`; a regenerated one gets it in place of the template. If the CA
 box still allocates from the whole subnet, bootstrap warns with the
 `pool_end` to set there. No `[network]` on the CA box means the joiner's is
@@ -265,9 +277,10 @@ Created at runtime to persist VM and host state.
 
 ### Network: `xdebbie`
 
-- **Bridge**: `virbr-xdebbie`, MAC `52:54:00:23:<box>:fe`
-- **Subnet**: `10.23.0.0/16`; this bridge at `10.23.<box>.1`
-- **DHCP**: none from libvirt — xdebbied's own responder serves `10.23.<box>.2-254` (docs/network.md)
+- **Bridge**: `virbr-xdebbie`, MAC `52:54:00:23:BOX:fe`
+- **Subnet**: `10.23.0.0/16`; this bridge at `10.23.BOX.1`
+- **Forwarding**: routed (`<forward mode='route'/>`); xdebbied's nftables table masquerades the box's /24
+- **DHCP**: none from libvirt — xdebbied's own responder serves `10.23.BOX.2-254` ([network](network.md))
 - **Autostart**: Enabled
 
 Created with (box 1 shown):
@@ -275,6 +288,7 @@ Created with (box 1 shown):
 ```xml
 <network>
   <name>xdebbie</name>
+  <forward mode='route'/>
   <bridge name='virbr-xdebbie' stp='off' delay='0'/>
   <mac address='52:54:00:23:01:fe'/>
   <dns enable='no'/>
@@ -325,7 +339,7 @@ sudo apt-get install -y libvirt-daemon-system libvirt-clients qemu-kvm qemu-util
 
 ## Bootstrap Process Flow
 
-```
+```text
 1. Check Dependencies
    ├─ virsh, qemu-system-x86_64, qemu-img, cloud-localds
    └─ Missing and root → apt-get install; not root → error with package list
@@ -366,8 +380,8 @@ sudo apt-get install -y libvirt-daemon-system libvirt-clients qemu-kvm qemu-util
 8. Firewall (ufw) from the config
 
 9. Register with the cluster (--join only)
-   └─ PUT /v1/hosts/<fqdn> at the CA box (forwarded to the leader):
-       the local [[hosts]] entry with uri = qemu+tls://<listen address>/system
+   └─ PUT /v1/hosts/FQDN at the CA box (forwarded to the leader):
+       the local [[hosts]] entry with uri = qemu+tls://BRIDGE_ADDRESS/system
 ```
 
 Every box's libvirt trusts every other box's client certificate because
@@ -375,7 +389,7 @@ they are all issued by the one cluster CA; nothing is copied by hand. The
 leader reaches a box's libvirtd on its overlay bridge address, i.e. across
 the Geneve mesh, so a freshly joined box shows in `xdctl host ls` at once
 but turns `Ready` once `xdctl mesh peer add` has been done both ways
-(docs/mesh.md).
+([mesh](mesh.md)).
 
 ## Resource Discovery
 
@@ -419,59 +433,33 @@ nftables, WireGuard and ufw. systemd keeps `/usr`, `/boot` and the rest of
 The `xdebbie` libvirt network has no NAT of its own and no libvirt DHCP.
 Each box's bridge holds its /24 of the overlay; xdebbied answers DHCP for
 its own VMs, the mesh joins the bridges across boxes, and bootstrap's ufw
-rules route the /24 out (docs/network.md).
+rules route the /24 out ([network](network.md)).
 
 ## Integration with Cluster API
 
 `capx`, the Cluster API infrastructure provider, runs in the management
 cluster and talks to xdebbied with the same three values `xdctl` uses:
 `XDEBBIE_URL`, `XDEBBIE_TOKEN` and `XDEBBIE_CA` from
-`/etc/xdebbie/xdebbie_env`. See docs/capi-contract.md in the source tree.
+`/etc/xdebbie/xdebbie_env`. See [Run Kubernetes with Cluster API](getting-started/cluster-api.md).
 
 ## Troubleshooting
 
-### Bootstrap fails with "not running as root"
+See [Troubleshooting](troubleshooting.md). Two bootstrap-specific cases:
 
-If not root, bootstrap cannot install dependencies or start services. Either:
+- **"Permission denied" on files in `/etc/xdebbie`.** `token`,
+  `token.previous` and `api-key.pem` should be root:root 0400;
+  `xdebbied.toml`, `xdebbie_env`, `api-ca.pem` and `api-cert.pem`
+  root:xdebbie 0440; the directory and `peers/` root:xdebbie 0750.
+  Re-running `sudo xdebbied bootstrap` (without `--force`) repairs ownership
+  without touching content.
+- **A libvirt network with the same bridge already exists.** Use it
+  (`--network NAME`), choose another name, or remove the conflicting
+  bridge.
 
-- Run `sudo xdebbied bootstrap`
-- Manually install dependencies first, then run as non-root user in libvirt group
+## See also
 
-### Bootstrap fails with "Failed to connect to libvirt"
-
-Ensure libvirtd is running:
-
-```bash
-sudo systemctl status libvirtd
-sudo systemctl start libvirtd
-```
-
-### Network creation fails with "bridge already exists"
-
-An existing bridge may conflict. Options:
-
-- Use existing network: `xdebbied bootstrap --network default`
-- Choose different name: `xdebbied bootstrap --network mynet`
-- Remove conflicting bridge: `sudo ip link delete virbr-xdebbie`
-
-### "Permission denied" when starting xdebbied
-
-Token file or state directory permissions may be wrong. Check:
-
-```bash
-ls -la /etc/xdebbie/
-ls -la /var/lib/xdebbie/
-```
-
-`token`, `token.previous` and `api-key.pem` should be root:root 0400;
-`xdebbied.toml`, `xdebbie_env`, `api-ca.pem` and `api-cert.pem`
-root:xdebbie 0440; the directory and `peers/` root:xdebbie 0750.
-Re-running `xdebbied bootstrap` (without `--force`) repairs ownership
-without touching content.
-
-## See Also
-
-- [README.md](README.md): install, join, use
-- mesh.md and network.md, installed alongside this file
-- In the source tree: docs/autodiscovery.md, docs/capi-contract.md,
-  docs/operations.md
+- [Install the first box](getting-started/install.md) and
+  [Join a second box](getting-started/join.md)
+- [Configuration reference](reference/configuration.md)
+- [Geneve mesh](mesh.md), [Overlay addressing and DHCP](network.md),
+  [Discovery and election](autodiscovery.md)
