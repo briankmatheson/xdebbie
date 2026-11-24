@@ -73,7 +73,7 @@ public ones.
 | GET | `/v1/enroll/{id}` | *Public.* The enrolment; once `approved` it carries `cert` and `ca` (PEM) |
 | GET | `/v1/enroll?all=true` | Pending enrolments (`all`: approved and denied too) |
 | POST | `/v1/enroll/{id-or-host}/approve` | Sign the CSR with the cluster CA |
-| POST | `/v1/enroll/{id-or-host}/deny` | Refuse |
+| POST | `/v1/enroll/{id-or-host}/deny` | Refuse a pending request. An approved box cannot be denied afterwards: its certificate stays valid (there is no revocation) and so does its hold on its box id |
 | GET | `/v1/enroll/token` | Local. `{current, previous}` for a caller with a **client certificate** (403 for a bearer token) |
 
 ## Hosts

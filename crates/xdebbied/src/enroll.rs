@@ -279,6 +279,16 @@ impl Enrollments {
                 r.view.status = EnrollStatus::Approved;
             }
             Decision::Deny => {
+                // The box has its certificate and runs with its id; there is
+                // no revocation, so "denied" would only free that id for the
+                // next joiner while this box still uses it.
+                if r.view.status == EnrollStatus::Approved && r.view.kind == EnrollKind::Box {
+                    bail!(
+                        "{} is already approved as box {}: its certificate stays valid and the id stays taken",
+                        r.view.hostname,
+                        r.view.box_id
+                    );
+                }
                 r.view.cert = None;
                 r.view.ca = None;
                 r.view.status = EnrollStatus::Denied;

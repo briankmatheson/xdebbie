@@ -152,14 +152,18 @@ async fn denied_requests_free_their_id_approved_ones_never_do() {
 /// `xdctl enroll deny` on a box that is already approved must not free its
 /// id: the box is still out there with a valid certificate (there is no
 /// revocation) and still uses `10.22.<box>.1` and its bridge MAC.
-#[ignore = "bug: deny on an approved box frees its id while the box still runs"]
 #[tokio::test]
 async fn denying_an_approved_box_does_not_free_its_id() {
     let dir = tempfile::tempdir().unwrap();
     let e = queue(dir.path(), vec![0]);
     let a = e.submit(box_req("a", None).0).await.unwrap();
     e.decide("a", Decision::Approve).await.unwrap();
-    let _ = e.decide("a", Decision::Deny).await;
+    let err = e
+        .decide("a", Decision::Deny)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("already approved"), "{err}");
     let still = e.get(&a.id).await.unwrap();
     assert_eq!(still.status, EnrollStatus::Approved, "deny is refused");
     assert!(still.cert.is_some());
