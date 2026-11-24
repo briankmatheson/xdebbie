@@ -228,8 +228,10 @@ xdctl ca                        # CA PEM + fingerprint, to check against --join
 ```
 
 On approval the CA box signs the CSR and **assigns the box id** (lowest
-free `0-253`, counting its own `[mesh]` box and peers plus every pending or
-approved enrolment; `enroll ls` shows it in the BOX column). The joiner
+free `0-253`, counting its own `[mesh]` box, peers and clients (the TOML
+ones and those added through the API) plus every pending or approved
+enrolment; an approved box keeps its id for good, a denied request frees
+its id; `enroll ls` shows it in the BOX column). The joiner
 picks up the certificate within seconds, installs `api-cert.pem` +
 `api-ca.pem`, writes the id to `[mesh] box` and creates its bridge with the
 matching MAC, then fetches the
