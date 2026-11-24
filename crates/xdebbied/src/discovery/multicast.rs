@@ -6,6 +6,25 @@ use tracing::debug;
 pub const DEFAULT_MULTICAST_ADDR: &str = "239.0.0.42:23442";
 const MAX_PACKET_SIZE: usize = 65536;
 
+/// Where discovery datagrams go and come from: the multicast group in the
+/// daemon, a simulated LAN in tests (`discovery/sim.rs`).
+pub trait Transport: Send + Sync {
+    /// Send one datagram (built by [`super::wire::seal`]) to every box.
+    fn send(&self, bytes: &[u8]) -> Result<()>;
+    /// One received datagram, unparsed, or `None` when nothing is waiting.
+    /// Never blocks.
+    fn recv(&self) -> Result<Option<(Vec<u8>, SocketAddr)>>;
+}
+
+impl Transport for MulticastSocket {
+    fn send(&self, bytes: &[u8]) -> Result<()> {
+        MulticastSocket::send(self, bytes)
+    }
+    fn recv(&self) -> Result<Option<(Vec<u8>, SocketAddr)>> {
+        MulticastSocket::recv(self)
+    }
+}
+
 /// Multicast socket for discovery messages
 pub struct MulticastSocket {
     socket: UdpSocket,

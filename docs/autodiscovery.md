@@ -114,6 +114,10 @@ signs every datagram and drops any that do not verify
 - **Replay.** `ts` is Unix seconds; a datagram more than 30 s from the
   receiver's clock is dropped. Boxes need clocks within 30 s of each
   other (NTP), or they stop hearing each other and each leads alone.
+  Inside that window every message carries the sender's `sequence`, which
+  rises with each one it sends; a datagram whose sequence does not exceed
+  the last one heard from that `node_id` is a replay (or a duplicate) and
+  is dropped. Senders are remembered for 75 s after they fall silent.
 - **Dropped datagrams.** The first from each source address logs a
   warning naming the reason (bad signature, out of the clock window,
   unsigned); the rest are at debug.
@@ -130,11 +134,18 @@ signs every datagram and drops any that do not verify
 ## Election
 
 Bully, by score. A follower that misses leader heartbeats for 5 s proposes
-itself; boxes with a lower score vote for it; a majority of the peers it
-knows about makes it leader, and so does a 10 s election timeout with no
-better proposal. A leader that hears a heartbeat from a higher-scored
-leader steps down; a follower that hears a lower-scored leader starts an
-election. A lone box therefore leads about 15 s after start.
+itself; boxes with a lower score vote for it; a box with a higher score
+proposes itself in turn (unless it has heard a leader in the last 5 s),
+and a candidate that hears a better proposal stands down and votes for
+it. A majority of the peers it knows about makes a candidate leader,
+unless a box it heard from in the last 5 s outranks it; so does a 10 s
+election timeout with no better proposal. A leader that hears a heartbeat
+from a higher-scored leader steps down; a follower that hears a
+lower-scored leader proposes itself. Scores are compared fresh, leader
+bonus included. A lone box therefore leads 15 to 17 s after start (the
+timeouts are checked on the 1 s heartbeat tick), and so does the
+survivor of a two-box cluster after the leader goes; with three or more
+boxes the next best takes over about 6 s after the last heartbeat.
 
 Score = state (0 or 2000–4000) + uptime (0–1000) + capacity (0–1000) +
 free resources (0–1000) + incumbent bonus (500) + UUID tiebreak (0–1).
@@ -144,6 +155,19 @@ the box that holds the cluster's VMs leads, even straight after a restart,
 and an empty box only ever leads an empty cluster. Among boxes with state,
 or without, longer-running, larger, less loaded ones win and the incumbent
 keeps its job unless clearly beaten.
+
+## Tests
+
+`crates/xdebbied/src/discovery/sim.rs` runs real engines on a simulated
+LAN (in-memory bus, paused clock); `sim_tests.rs` holds the scenarios:
+signing, replay and clock skew, election outcomes and timings, partitions,
+discovery switched on and off, and bootstrap's listen fed a running
+cluster's traffic. `XDEBBIE_SIM_TRACE=1` (or a filter such as `debug`)
+prints every box's log stamped with simulated time. Tests that need the
+real network are `#[ignore]`d and opt in by environment:
+`XDEBBIE_TEST_MULTICAST=1` (multicast loopback, 23442/udp open) and
+`XDEBBIE_TEST_DNS=1` (a resolver without a wildcard `search` domain), run
+with `cargo test -p xdebbied -- --ignored`.
 
 ## Network requirements
 

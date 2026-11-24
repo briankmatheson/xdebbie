@@ -80,5 +80,7 @@ tower = "0.5"
 hmac = "0.12"
 
 [dev-dependencies]
+# Paused, hand-advanced clock for the simulated-LAN discovery tests.
+tokio = { version = "1.54.1", features = ["test-util"] }
 http-body-util = "0.1"
 walkdir = "2.5"

@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-use std::time::{Duration, Instant};
+use std::time::Duration;
+// tokio's clock: the real one in the daemon, a paused, hand-advanced one in
+// the simulated-LAN tests (discovery/sim.rs).
+use tokio::time::Instant;
 use uuid::Uuid;
 
 /// Election state for the Bully algorithm
@@ -169,22 +172,36 @@ impl ElectionStateMachine {
                 self.score
             );
 
-            // Step down if we're leader
+            // Step down if we're leader; stop campaigning if we are a
+            // candidate. Otherwise votes from boxes weaker than both of us
+            // can give us a majority too, and two leaders come out of one
+            // election.
             if self.state == ElectionState::Leader {
                 self.step_down();
+            } else if self.state == ElectionState::Election {
+                self.transition(ElectionState::Follower);
             }
+            // Give the better candidate a heartbeat timeout to win and say
+            // so before we call another election.
+            self.last_leader_heartbeat = Some(Instant::now());
 
             true // Vote for them
         } else {
-            // We have higher score, reject their proposal and start our own election
+            // We have the higher score: no vote. Run ourselves unless a
+            // leader or a better candidate has been heard within the
+            // heartbeat timeout; then the proposer will hear from them, and
+            // a campaign of ours would only split the votes (a box needs
+            // only to outrank half the cluster to collect a majority).
+            let quiet = !self.heard_leader_recently();
             tracing::debug!(
-                "Rejecting election proposal from {} (score {:.1} < {:.1}), starting own election",
+                "Rejecting election proposal from {} (score {:.1} < {:.1}){}",
                 proposer_id,
                 proposer_score,
-                self.score
+                self.score,
+                if quiet { ", starting own election" } else { "" }
             );
 
-            if self.state != ElectionState::Election && self.state != ElectionState::Leader {
+            if self.state == ElectionState::Follower && quiet {
                 self.start_election();
             }
 
@@ -212,6 +229,18 @@ impl ElectionStateMachine {
 
         let required_votes = (total_nodes / 2) + 1;
         self.votes_received.len() >= required_votes
+    }
+
+    /// Has a leader (or a better candidate we voted for) been heard within
+    /// the heartbeat timeout?
+    pub fn heard_leader_recently(&self) -> bool {
+        self.last_leader_heartbeat
+            .is_some_and(|t| t.elapsed() <= self.heartbeat_timeout)
+    }
+
+    /// Our score and id, as peers compare them.
+    pub fn outranked_by(&self, score: f64, id: Uuid) -> bool {
+        score > self.score || (score == self.score && id > self.node_id)
     }
 
     /// Check if leader heartbeat has timed out
@@ -277,5 +306,130 @@ mod tests {
         assert_eq!(sm.votes_received.len(), 3);
         assert!(sm.has_majority(5)); // 3 out of 5 is majority
         assert!(!sm.has_majority(10)); // 3 out of 10 is not majority
+    }
+
+    fn sm(rank: u8) -> ElectionStateMachine {
+        let mut b = [0u8; 16];
+        b[0] = rank;
+        let mut sm = ElectionStateMachine::new(
+            Uuid::from_bytes(b),
+            Duration::from_secs(10),
+            Duration::from_secs(5),
+        );
+        sm.update_score(100.0);
+        sm.activate();
+        sm
+    }
+
+    fn id(rank: u8) -> Uuid {
+        let mut b = [0u8; 16];
+        b[0] = rank;
+        Uuid::from_bytes(b)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn equal_scores_break_ties_by_node_id() {
+        let mut lo = sm(1);
+        assert!(lo.received_election_propose(id(2), 100.0), "votes up");
+        let mut hi = sm(3);
+        assert!(!hi.received_election_propose(id(2), 100.0), "not down");
+        assert!(hi.outranked_by(100.0, id(4)));
+        assert!(!hi.outranked_by(100.0, id(2)));
+        assert!(hi.outranked_by(100.5, id(1)));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn candidate_stands_down_for_a_better_one() {
+        let mut c = sm(2);
+        c.start_election();
+        c.received_vote(id(1));
+        assert!(c.received_election_propose(id(3), 200.0));
+        assert_eq!(c.state(), ElectionState::Follower);
+        // Votes that arrive late count for nothing now.
+        c.received_vote(id(1));
+        assert!(!c.has_majority(3));
+        // And it gives the better candidate a heartbeat timeout.
+        assert!(c.heard_leader_recently());
+        assert!(!c.leader_heartbeat_timeout());
+        tokio::time::advance(Duration::from_secs(6)).await;
+        assert!(c.leader_heartbeat_timeout());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn leader_steps_down_for_a_better_proposal_or_leader() {
+        let mut l = sm(2);
+        l.become_leader();
+        assert!(l.received_election_propose(id(3), 1e6));
+        assert_eq!(l.state(), ElectionState::Follower);
+
+        let mut l = sm(2);
+        l.become_leader();
+        l.received_leader_heartbeat(id(3), 1e6);
+        assert_eq!(l.state(), ElectionState::Follower);
+        assert_eq!(l.current_leader(), Some(id(3)));
+
+        // A weaker leader is ignored by a leader...
+        let mut l = sm(2);
+        l.become_leader();
+        l.received_leader_heartbeat(id(1), 1.0);
+        assert!(l.is_leader());
+        // ...and challenged by a follower.
+        let mut f = sm(2);
+        f.received_leader_heartbeat(id(1), 1.0);
+        assert_eq!(f.state(), ElectionState::Election);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn weaker_proposal_starts_a_campaign_only_without_a_leader() {
+        // Nobody heard: the better box runs.
+        let mut f = sm(2);
+        assert!(!f.received_election_propose(id(1), 1.0));
+        assert_eq!(f.state(), ElectionState::Election);
+        // A live leader: no campaign; the proposer will hear the leader.
+        let mut f = sm(2);
+        f.received_leader_heartbeat(id(3), 1e6);
+        assert!(!f.received_election_propose(id(1), 1.0));
+        assert_eq!(f.state(), ElectionState::Follower);
+        // That leader went quiet: run.
+        tokio::time::advance(Duration::from_secs(6)).await;
+        assert!(!f.received_election_propose(id(1), 1.0));
+        assert_eq!(f.state(), ElectionState::Election);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn timeouts() {
+        let mut f = sm(1);
+        assert!(!f.leader_heartbeat_timeout());
+        tokio::time::advance(Duration::from_millis(5001)).await;
+        assert!(f.leader_heartbeat_timeout(), "no leader since activation");
+        f.start_election();
+        assert!(!f.election_timeout());
+        tokio::time::advance(Duration::from_millis(10001)).await;
+        assert!(f.election_timeout());
+        // An inactive machine never times out into an election.
+        let i = ElectionStateMachine::new(id(1), Duration::from_secs(1), Duration::from_secs(1));
+        tokio::time::advance(Duration::from_secs(60)).await;
+        assert!(!i.leader_heartbeat_timeout());
+    }
+
+    #[test]
+    fn majority_needs_an_election_and_half_plus_one() {
+        let mut c = sm(1);
+        assert!(!c.has_majority(1), "not campaigning");
+        c.start_election();
+        assert!(c.has_majority(1), "alone");
+        assert!(!c.has_majority(2));
+        c.received_vote(id(5));
+        c.received_vote(id(5));
+        assert!(c.has_majority(2) && c.has_majority(3) && !c.has_majority(4));
+        c.become_leader();
+        assert!(!c.has_majority(1));
+    }
+
+    #[test]
+    fn sequence_rises() {
+        let mut c = sm(1);
+        let a = c.next_sequence();
+        assert!(c.next_sequence() > a);
     }
 }

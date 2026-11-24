@@ -140,6 +140,13 @@ impl SettingsCtl {
         }
     }
 
+    /// Drive `engine` as the daemon's does (discovery/sim_tests.rs).
+    #[cfg(test)]
+    pub fn with_engine(mut self, engine: Arc<DiscoveryEngine>) -> Self {
+        self.engine = Some(engine);
+        self
+    }
+
     pub async fn get(&self) -> Settings {
         *self.now.lock().await
     }
