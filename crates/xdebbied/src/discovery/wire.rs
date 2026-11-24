@@ -86,7 +86,9 @@ pub enum Opened {
     Unsigned(DiscoveryMessage),
 }
 
-fn now() -> u64 {
+/// The wall clock, Unix seconds: what `ts` is stamped with and checked
+/// against. The engine reads it through its host so tests can skew it.
+pub fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -94,15 +96,23 @@ fn now() -> u64 {
 }
 
 /// Bytes to send: signed with `key`, or the plain message without one.
+/// On the wall clock; the daemon stamps with its host's clock
+/// ([`seal_at`]).
+#[cfg(test)]
 pub fn seal(msg: &DiscoveryMessage, key: Option<&Key>) -> Result<Vec<u8>> {
+    seal_at(msg, key, now())
+}
+
+/// [`seal`] stamped with `ts` instead of the wall clock.
+pub fn seal_at(msg: &DiscoveryMessage, key: Option<&Key>, ts: u64) -> Result<Vec<u8>> {
     let json = msg.to_json()?;
     let Some(key) = key else {
         return Ok(json.into_bytes());
     };
-    seal_at(json, key, now())
+    seal_json_at(json, key, ts)
 }
 
-fn seal_at(msg: String, key: &Key, ts: u64) -> Result<Vec<u8>> {
+fn seal_json_at(msg: String, key: &Key, ts: u64) -> Result<Vec<u8>> {
     let mac = hex::encode(key.mac(ts, &msg).finalize().into_bytes());
     Ok(serde_json::to_vec(&Envelope {
         v: VERSION,
@@ -116,11 +126,13 @@ fn seal_at(msg: String, key: &Key, ts: u64) -> Result<Vec<u8>> {
 /// previous one during a rotation). An envelope that fails verification is
 /// an error; a plain message comes back as [`Opened::Unsigned`] and the
 /// caller decides whether it is welcome.
+#[cfg(test)]
 pub fn open(bytes: &[u8], keys: &[Key]) -> Result<Opened> {
     open_at(bytes, keys, now())
 }
 
-fn open_at(bytes: &[u8], keys: &[Key], now: u64) -> Result<Opened> {
+/// [`open`] against `now` (Unix seconds) instead of the wall clock.
+pub fn open_at(bytes: &[u8], keys: &[Key], now: u64) -> Result<Opened> {
     let Some(env) = envelope(bytes)? else {
         return Ok(Opened::Unsigned(plain(bytes)?));
     };
@@ -187,7 +199,7 @@ mod tests {
     }
 
     fn signed(key: &Key, ts: u64) -> Vec<u8> {
-        seal_at(hb().to_json().unwrap(), key, ts).unwrap()
+        seal_json_at(hb().to_json().unwrap(), key, ts).unwrap()
     }
 
     #[test]
@@ -277,5 +289,118 @@ mod tests {
         let k = Key::from_token("tok");
         assert_ne!(&k.0[..3], b"tok");
         assert_eq!(format!("{k:?}"), "Key(..)");
+    }
+
+    #[test]
+    fn skew_window_is_symmetric_and_inclusive() {
+        let k = Key::from_token("tok");
+        let skew = MAX_SKEW.as_secs();
+        let at = |sent: u64, now: u64| open_at(&signed(&k, sent), std::slice::from_ref(&k), now);
+        assert!(at(1000, 1000 - skew).is_ok(), "sender {skew}s ahead");
+        assert!(at(1000, 1000 + skew).is_ok(), "sender {skew}s behind");
+        let e = at(1000, 1000 - skew - 1).unwrap_err().to_string();
+        assert!(e.contains("from our clock"), "{e}");
+        assert!(at(1000, 1000 + skew + 1).is_err());
+    }
+
+    #[test]
+    fn tampered_mac_rejected() {
+        let k = Key::from_token("tok");
+        let mut env: serde_json::Value = serde_json::from_slice(&signed(&k, 1000)).unwrap();
+        let mac = env["mac"].as_str().unwrap().to_string();
+        let flipped = format!(
+            "{}{}",
+            if mac.starts_with('0') { "1" } else { "0" },
+            &mac[1..]
+        );
+        env["mac"] = flipped.into();
+        let b = serde_json::to_vec(&env).unwrap();
+        assert!(open_at(&b, std::slice::from_ref(&k), 1000).is_err());
+        env["mac"] = "not hex".into();
+        let b = serde_json::to_vec(&env).unwrap();
+        assert!(open_at(&b, std::slice::from_ref(&k), 1000).is_err());
+        env["mac"] = "".into();
+        let b = serde_json::to_vec(&env).unwrap();
+        assert!(open_at(&b, &[k], 1000).is_err(), "empty mac");
+    }
+
+    #[test]
+    fn unknown_version_and_garbage_rejected() {
+        let k = Key::from_token("tok");
+        let mut env: serde_json::Value = serde_json::from_slice(&signed(&k, 1000)).unwrap();
+        env["v"] = 2.into();
+        let b = serde_json::to_vec(&env).unwrap();
+        assert!(open_at(&b, std::slice::from_ref(&k), 1000).is_err());
+        assert!(open_at(b"not json", std::slice::from_ref(&k), 1000).is_err());
+        assert!(open_at(br#"{"mac":"00"}"#, std::slice::from_ref(&k), 1000).is_err());
+        // A signed envelope around something that is not a message.
+        let b = seal_json_at("{\"type\":\"NOPE\"}".into(), &k, 1000).unwrap();
+        assert!(open_at(&b, &[k], 1000).is_err());
+    }
+
+    /// The key travels nowhere; a box that only has the derived key of a
+    /// different cluster cannot sign for this one, and every message type
+    /// round-trips.
+    #[test]
+    fn every_message_type_round_trips() {
+        use super::super::messages::NodeCapacity;
+        let k = Key::from_token("tok");
+        let id = Uuid::new_v4();
+        let msgs = [
+            hb(),
+            DiscoveryMessage::Announce {
+                node_id: id,
+                hostname: "h".into(),
+                api_url: "https://h:23443".into(),
+                addrs: vec!["192.0.2.1".parse().unwrap()],
+                capacity: NodeCapacity {
+                    total_cpus: 1,
+                    total_memory_mib: 1,
+                    available_cpus: 1.0,
+                    available_memory_mib: 1,
+                    vm_count: 0,
+                    control_plane_eligible: true,
+                },
+                score: 1.5,
+                sequence: 3,
+            },
+            DiscoveryMessage::ElectionPropose {
+                node_id: id,
+                score: 2.0,
+                sequence: 4,
+            },
+            DiscoveryMessage::ElectionVote {
+                node_id: id,
+                voted_for: Uuid::new_v4(),
+                sequence: 5,
+            },
+        ];
+        for m in msgs {
+            let b = seal_at(&m, Some(&k), 1000).unwrap();
+            let Opened::Verified(back) = open_at(&b, std::slice::from_ref(&k), 1000).unwrap()
+            else {
+                panic!("not verified");
+            };
+            assert_eq!(back.to_json().unwrap(), m.to_json().unwrap());
+            assert_eq!(back.sequence(), m.sequence());
+            assert!(open_at(&b, &[Key::from_token("other")], 1000).is_err());
+            // No key: plain JSON.
+            let plain = seal_at(&m, None, 1000).unwrap();
+            assert!(matches!(
+                open_at(&plain, &[], 1000).unwrap(),
+                Opened::Unsigned(_)
+            ));
+        }
+    }
+
+    /// An announce from a daemon before 0.15 has no `addrs`; it still parses.
+    #[test]
+    fn announce_without_addrs_parses() {
+        let j = r#"{"type":"ANNOUNCE","node_id":"00000000-0000-0000-0000-000000000001","hostname":"h","api_url":"https://h:23443","capacity":{"total_cpus":1,"total_memory_mib":1,"available_cpus":1.0,"available_memory_mib":1,"vm_count":0,"control_plane_eligible":true},"score":1.0,"sequence":1}"#;
+        let DiscoveryMessage::Announce { addrs, .. } = DiscoveryMessage::from_json(j).unwrap()
+        else {
+            panic!()
+        };
+        assert!(addrs.is_empty());
     }
 }

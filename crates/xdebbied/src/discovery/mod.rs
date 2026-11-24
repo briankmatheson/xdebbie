@@ -12,3 +12,8 @@ pub mod reach;
 pub mod wire;
 
 pub use engine::{DiscoveryConfig, DiscoveryEngine};
+
+#[cfg(test)]
+pub(crate) mod sim;
+#[cfg(test)]
+mod sim_tests;

@@ -62,6 +62,17 @@ impl DiscoveryMessage {
         }
     }
 
+    /// The sender's message counter: one per process, rising with every
+    /// message it sends.
+    pub fn sequence(&self) -> u64 {
+        match self {
+            Self::Announce { sequence, .. }
+            | Self::Heartbeat { sequence, .. }
+            | Self::ElectionPropose { sequence, .. }
+            | Self::ElectionVote { sequence, .. } => *sequence,
+        }
+    }
+
     pub fn to_json(&self) -> anyhow::Result<String> {
         Ok(serde_json::to_string(self)?)
     }

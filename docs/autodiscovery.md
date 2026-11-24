@@ -145,6 +145,19 @@ and an empty box only ever leads an empty cluster. Among boxes with state,
 or without, longer-running, larger, less loaded ones win and the incumbent
 keeps its job unless clearly beaten.
 
+## Tests
+
+`crates/xdebbied/src/discovery/sim.rs` runs real engines on a simulated
+LAN (in-memory bus, paused clock); `sim_tests.rs` holds the scenarios:
+signing, replay and clock skew, election outcomes and timings, partitions,
+discovery switched on and off, and bootstrap's listen fed a running
+cluster's traffic. `XDEBBIE_SIM_TRACE=1` (or a filter such as `debug`)
+prints every box's log stamped with simulated time. Tests that need the
+real network are `#[ignore]`d and opt in by environment:
+`XDEBBIE_TEST_MULTICAST=1` (multicast loopback, 23442/udp open) and
+`XDEBBIE_TEST_DNS=1` (a resolver without a wildcard `search` domain), run
+with `cargo test -p xdebbied -- --ignored`.
+
 ## Network requirements
 
 - One L2 segment (TTL 1), with multicast allowed. `xdebbied bootstrap`

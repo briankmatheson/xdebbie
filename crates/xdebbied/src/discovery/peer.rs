@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-use std::time::{Duration, Instant};
+use std::time::Duration;
+// tokio's clock: the real one in the daemon, a paused, hand-advanced one in
+// the simulated-LAN tests (discovery/sim.rs).
+use tokio::time::Instant;
 use uuid::Uuid;
 
 /// Information about a discovered peer node

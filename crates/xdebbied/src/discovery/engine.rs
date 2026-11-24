@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use anyhow::Result;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::RwLock;
+// tokio's clock, so the simulated-LAN tests (sim.rs) can run it paused.
+use tokio::time::Instant;
 use tracing::{info, warn};
 use uuid::Uuid;
 
 use super::{
     messages::{DiscoveryMessage, NodeCapacity},
-    multicast::{DEFAULT_MULTICAST_ADDR, MulticastSocket},
+    multicast::{DEFAULT_MULTICAST_ADDR, MulticastSocket, Transport},
     peer::{PeerInfo, PeerTable},
     wire,
 };
@@ -17,11 +19,65 @@ use crate::election::{
     state::{ElectionState, ElectionStateMachine},
 };
 
-const ANNOUNCE_INTERVAL: Duration = Duration::from_secs(5);
-const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
-const PEER_TIMEOUT: Duration = Duration::from_secs(15);
-const ELECTION_TIMEOUT: Duration = Duration::from_secs(10);
-const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(5);
+pub const ANNOUNCE_INTERVAL: Duration = Duration::from_secs(5);
+pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
+pub const PEER_TIMEOUT: Duration = Duration::from_secs(15);
+pub const ELECTION_TIMEOUT: Duration = Duration::from_secs(10);
+pub const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// What the engine reads from the box it runs on. [`DiscoveryEngine::new`]
+/// uses the real box ([`RealHost`]); the simulated-LAN tests substitute
+/// their own clocks and hardware.
+pub trait Host: Send + Sync {
+    /// How long the box has been up (feeds the election score).
+    fn uptime(&self) -> Duration;
+    /// This box's capacity, with `vm_count` VMs in its store.
+    fn capacity(&self, vm_count: usize) -> NodeCapacity;
+    /// The wall clock in Unix seconds: signing timestamps and the replay
+    /// window (wire.rs).
+    fn wall_secs(&self) -> u64;
+    /// Does a peer's hostname resolve here? May block on DNS.
+    fn resolves(&self, host: &str) -> bool;
+}
+
+/// The box the daemon runs on.
+pub struct RealHost;
+
+impl Host for RealHost {
+    fn uptime(&self) -> Duration {
+        get_uptime()
+    }
+
+    /// Placeholder - should integrate with actual scheduler
+    fn capacity(&self, vm_count: usize) -> NodeCapacity {
+        // TODO: Get real capacity from scheduler/store
+        NodeCapacity {
+            total_cpus: num_cpus::get() as u32,
+            total_memory_mib: 65536, // Placeholder
+            available_cpus: num_cpus::get() as f32,
+            available_memory_mib: 32768, // Placeholder
+            vm_count,
+            control_plane_eligible: true,
+        }
+    }
+
+    fn wall_secs(&self) -> u64 {
+        wire::now()
+    }
+
+    fn resolves(&self, host: &str) -> bool {
+        super::reach::resolves(host)
+    }
+}
+
+/// The engine's ties to the outside world, for
+/// [`DiscoveryEngine::with_parts`].
+pub struct Parts {
+    /// Fresh per process in the daemon.
+    pub node_id: Uuid,
+    pub transport: Box<dyn Transport>,
+    pub host: Arc<dyn Host>,
+}
 
 pub struct DiscoveryConfig {
     pub multicast_addr: String,
@@ -68,7 +124,8 @@ impl Default for DiscoveryConfig {
 pub struct DiscoveryEngine {
     node_id: Uuid,
     config: DiscoveryConfig,
-    socket: MulticastSocket,
+    transport: Box<dyn Transport>,
+    host: Arc<dyn Host>,
     peers: Arc<RwLock<PeerTable>>,
     election: Arc<RwLock<ElectionStateMachine>>,
     start_time: Instant,
@@ -80,11 +137,7 @@ pub struct DiscoveryEngine {
 }
 
 impl DiscoveryEngine {
-    pub fn new(mut config: DiscoveryConfig) -> Result<Self> {
-        let node_id = Uuid::new_v4();
-        if config.addrs.is_empty() {
-            config.addrs = super::reach::local_addrs(&config.multicast_addr);
-        }
+    pub fn new(config: DiscoveryConfig) -> Result<Self> {
         let bind_addr = match &config.bind_addr {
             Some(b) => b.clone(),
             None => {
@@ -93,6 +146,26 @@ impl DiscoveryEngine {
             }
         };
         let socket = MulticastSocket::new(&config.multicast_addr, &bind_addr)?;
+        Ok(Self::with_parts(
+            config,
+            Parts {
+                node_id: Uuid::new_v4(),
+                transport: Box::new(socket),
+                host: Arc::new(RealHost),
+            },
+        ))
+    }
+
+    /// An engine on the given transport and host.
+    pub fn with_parts(mut config: DiscoveryConfig, parts: Parts) -> Self {
+        let Parts {
+            node_id,
+            transport,
+            host,
+        } = parts;
+        if config.addrs.is_empty() {
+            config.addrs = super::reach::local_addrs(&config.multicast_addr);
+        }
         let peers = Arc::new(RwLock::new(PeerTable::new()));
         let election = Arc::new(RwLock::new(ElectionStateMachine::new(
             node_id,
@@ -105,16 +178,17 @@ impl DiscoveryEngine {
             node_id, config.multicast_addr
         );
 
-        Ok(Self {
+        Self {
             node_id,
             enabled: std::sync::atomic::AtomicBool::new(config.enable_discovery),
             config,
-            socket,
+            transport,
+            host,
             peers,
             election,
             start_time: Instant::now(),
             warned: Default::default(),
-        })
+        }
     }
 
     pub fn set_enabled(&self, on: bool) {
@@ -159,15 +233,19 @@ impl DiscoveryEngine {
     }
 
     async fn send(&self, msg: &DiscoveryMessage) -> Result<()> {
-        let bytes = wire::seal(msg, self.signing_key().await.as_ref())?;
-        self.socket.send(&bytes)
+        let bytes = wire::seal_at(
+            msg,
+            self.signing_key().await.as_ref(),
+            self.host.wall_secs(),
+        )?;
+        self.transport.send(&bytes)
     }
 
     /// The message in a datagram if it is welcome here: signed with our
     /// token, or unsigned where that is allowed.
     async fn admit(&self, bytes: &[u8], src: std::net::SocketAddr) -> Option<DiscoveryMessage> {
         let keys = self.verify_keys().await;
-        let why = match wire::open(bytes, &keys) {
+        let why = match wire::open_at(bytes, &keys, self.host.wall_secs()) {
             Ok(wire::Opened::Verified(m)) => return Some(m),
             Ok(wire::Opened::Unsigned(m)) => {
                 if keys.is_empty() || self.config.accept_unsigned {
@@ -192,26 +270,18 @@ impl DiscoveryEngine {
         None
     }
 
-    /// Get current node capacity (placeholder - should integrate with actual scheduler)
     fn get_capacity(&self) -> NodeCapacity {
-        // TODO: Get real capacity from scheduler/store
-        NodeCapacity {
-            total_cpus: num_cpus::get() as u32,
-            total_memory_mib: 65536, // Placeholder
-            available_cpus: num_cpus::get() as f32,
-            available_memory_mib: 32768, // Placeholder
-            vm_count: self
-                .config
+        self.host.capacity(
+            self.config
                 .vm_count
                 .load(std::sync::atomic::Ordering::Relaxed),
-            control_plane_eligible: true,
-        }
+        )
     }
 
     /// Calculate our current score
     async fn calculate_our_score(&self) -> f64 {
         let capacity = self.get_capacity();
-        let uptime = get_uptime().max(self.start_time.elapsed());
+        let uptime = self.host.uptime().max(self.start_time.elapsed());
         let was_leader = self.election.read().await.is_leader();
 
         calculate_score(&capacity, uptime, was_leader, self.node_id)
@@ -323,7 +393,13 @@ impl DiscoveryEngine {
                         .into_iter()
                         .chain(addrs)
                         .collect();
-                    let api_url = super::reach::reachable_url_async(api_url, candidates).await;
+                    let host = self.host.clone();
+                    let api_url = super::reach::reachable_url_async(
+                        api_url,
+                        candidates,
+                        Arc::new(move |h: &str| host.resolves(h)),
+                    )
+                    .await;
                     let mut peers = self.peers.write().await;
                     if peers.get_mut(&node_id).is_some() {
                         return Ok(());
@@ -412,7 +488,7 @@ impl DiscoveryEngine {
                 // Paused: lead alone, hear nobody. Checked every tick, so a
                 // switch back on rejoins within a second.
                 heartbeat_ticker.tick().await;
-                while let Ok(Some(_)) = self.socket.recv() {}
+                while let Ok(Some(_)) = self.transport.recv() {}
                 let mut election = self.election.write().await;
                 if !election.is_leader() {
                     info!("discovery off: leading alone");
@@ -463,7 +539,7 @@ impl DiscoveryEngine {
 
                 _ = tokio::time::sleep(Duration::from_millis(100)) => {
                     // Process incoming messages
-                    while let Ok(Some((bytes, addr))) = self.socket.recv() {
+                    while let Ok(Some((bytes, addr))) = self.transport.recv() {
                         let Some(msg) = self.admit(&bytes, addr).await else {
                             continue;
                         };

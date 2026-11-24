@@ -81,7 +81,18 @@ fn usable(ip: IpAddr) -> bool {
 /// then the same URL with the host replaced by the first usable candidate.
 /// Candidates are tried in order: pass the packet's source address first,
 /// then what the peer announced.
+#[cfg(test)]
 pub fn reachable_url(url: &str, candidates: impl IntoIterator<Item = IpAddr>) -> String {
+    reachable_url_with(url, candidates, resolves)
+}
+
+/// [`reachable_url`] asking `resolves` whether a name resolves here, in
+/// place of the system resolver.
+pub fn reachable_url_with(
+    url: &str,
+    candidates: impl IntoIterator<Item = IpAddr>,
+    resolves: impl Fn(&str) -> bool,
+) -> String {
     let Some(parts) = split_url(url) else {
         return url.to_string();
     };
@@ -100,8 +111,18 @@ pub fn reachable_url(url: &str, candidates: impl IntoIterator<Item = IpAddr>) ->
 
 /// Same as [`reachable_url`] for the daemon: the resolver call runs off the
 /// async runtime so a slow DNS timeout does not stall announces.
-pub async fn reachable_url_async(url: String, candidates: Vec<IpAddr>) -> String {
-    match tokio::task::spawn_blocking(move || reachable_url(&url, candidates)).await {
+/// `resolves` is the resolver to ask ([`resolves`] in the daemon).
+pub async fn reachable_url_async(
+    url: String,
+    candidates: Vec<IpAddr>,
+    resolves: std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync>,
+) -> String {
+    if !needs_lookup(&url) {
+        return reachable_url_with(&url, candidates, |_| false);
+    }
+    match tokio::task::spawn_blocking(move || reachable_url_with(&url, candidates, &*resolves))
+        .await
+    {
         Ok(u) => u,
         Err(e) => {
             warn!(error = %e, "resolver task failed");
@@ -110,7 +131,14 @@ pub async fn reachable_url_async(url: String, candidates: Vec<IpAddr>) -> String
     }
 }
 
-fn resolves(host: &str) -> bool {
+/// Does `url` name its host (rather than give an address), so that
+/// [`reachable_url`] has to ask a resolver?
+pub fn needs_lookup(url: &str) -> bool {
+    split_url(url).is_some_and(|p| p.host.parse::<IpAddr>().is_err())
+}
+
+/// The system resolver: does `host` resolve to anything at all?
+pub fn resolves(host: &str) -> bool {
     (host, 0u16)
         .to_socket_addrs()
         .map(|mut a| a.next().is_some())
@@ -123,16 +151,25 @@ fn resolves(host: &str) -> bool {
 /// spent. Link-local and loopback results do not count: a name that only
 /// yields `fe80::…` is no use to another box.
 pub fn resolves_within(host: &str, budget: std::time::Duration) -> bool {
+    resolves_within_with(host, budget, system_lookup)
+}
+
+/// The system resolver's addresses for `host` (`getaddrinfo`).
+pub fn system_lookup(host: &str) -> std::io::Result<Vec<IpAddr>> {
+    Ok((host, 0u16).to_socket_addrs()?.map(|a| a.ip()).collect())
+}
+
+/// [`resolves_within`] with `lookup` in place of the system resolver.
+pub fn resolves_within_with(
+    host: &str,
+    budget: std::time::Duration,
+    lookup: impl FnOnce(&str) -> std::io::Result<Vec<IpAddr>> + Send + 'static,
+) -> bool {
     let (tx, rx) = std::sync::mpsc::channel();
     let host = host.to_string();
     std::thread::spawn(move || {
-        let ok = (host.as_str(), 0u16)
-            .to_socket_addrs()
-            .map(|addrs| {
-                addrs
-                    .map(|a| a.ip())
-                    .any(|ip| usable(ip) && !is_link_local(ip))
-            })
+        let ok = lookup(&host)
+            .map(|ips| ips.into_iter().any(|ip| usable(ip) && !is_link_local(ip)))
             .unwrap_or(false);
         let _ = tx.send(ok);
     });
@@ -220,65 +257,141 @@ fn split_url(url: &str) -> Option<UrlParts<'_>> {
 mod tests {
     use super::*;
     use std::net::Ipv4Addr;
+    use std::time::Duration;
 
     const IP: IpAddr = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 7));
 
+    /// A resolver that knows exactly one name. The system one is no use in
+    /// a test: a `search` domain with a wildcard record (or a container
+    /// with no DNS at all) changes what "unresolvable" means.
+    fn known(host: &str) -> bool {
+        host == "known.example"
+    }
+
+    /// The same as a `getaddrinfo` stand-in: literals parse, a few names
+    /// have fixed answers, one never answers, the rest fail.
+    fn lookup(host: &str) -> std::io::Result<Vec<IpAddr>> {
+        if let Ok(ip) = host.parse() {
+            return Ok(vec![ip]);
+        }
+        let ips = |v: &[&str]| Ok(v.iter().map(|s| s.parse().unwrap()).collect());
+        match host {
+            "known.example" => ips(&["192.0.2.9"]),
+            "loopback.example" => ips(&["127.0.1.1"]),
+            "linklocal.example" => ips(&["fe80::1", "169.254.0.1"]),
+            "mixed.example" => ips(&["fe80::1", "192.0.2.10"]),
+            "slow.example" => {
+                std::thread::sleep(Duration::from_secs(5));
+                ips(&["192.0.2.11"])
+            }
+            _ => Err(std::io::Error::other("no such host")),
+        }
+    }
+
+    fn within(host: &str) -> bool {
+        resolves_within_with(host, Duration::from_millis(500), lookup)
+    }
+
     #[test]
     fn resolves_within_budget() {
-        let b = std::time::Duration::from_secs(2);
-        assert!(resolves_within("192.0.2.7", b));
+        assert!(within("192.0.2.7"));
+        assert!(within("known.example"));
         assert!(
-            !resolves_within("127.0.0.1", b),
+            within("mixed.example"),
+            "one usable address among link-local ones is enough"
+        );
+        assert!(
+            !within("127.0.0.1"),
             "loopback is not reachable from elsewhere"
         );
+        assert!(!within("loopback.example"));
         assert!(
-            !resolves_within("fe80::1", b),
+            !within("fe80::1"),
             "link-local is not reachable from elsewhere"
         );
-        assert!(!resolves_within("no-such-host.invalid", b));
-        assert!(!resolves_within("", b));
+        assert!(!within("linklocal.example"));
+        assert!(!within("no-such-host.invalid"));
+        assert!(!within(""));
+    }
+
+    #[test]
+    fn slow_resolver_is_abandoned() {
+        let t = std::time::Instant::now();
+        assert!(!within("slow.example"), "answer came after the budget");
+        assert!(t.elapsed() < Duration::from_secs(3), "{:?}", t.elapsed());
     }
 
     #[test]
     fn unresolvable_name_becomes_address() {
-        let u = reachable_url("https://no-such-host.invalid:23443", [IP]);
-        assert_eq!(u, "https://192.0.2.7:23443");
-        let u = reachable_url("https://no-such-host.invalid:23443/v1/x", [IP]);
-        assert_eq!(u, "https://192.0.2.7:23443/v1/x");
-        let u = reachable_url("http://no-such-host.invalid", [IP]);
-        assert_eq!(u, "http://192.0.2.7");
+        let r = |u| reachable_url_with(u, [IP], known);
+        assert_eq!(
+            r("https://no-such-host.invalid:23443"),
+            "https://192.0.2.7:23443"
+        );
+        assert_eq!(
+            r("https://no-such-host.invalid:23443/v1/x"),
+            "https://192.0.2.7:23443/v1/x"
+        );
+        assert_eq!(r("http://no-such-host.invalid"), "http://192.0.2.7");
+        assert_eq!(
+            r("https://user@no-such-host.invalid:23443"),
+            "https://192.0.2.7:23443"
+        );
     }
 
     #[test]
     fn resolvable_and_literal_hosts_untouched() {
+        let r = |u| reachable_url_with(u, [IP], known);
         assert_eq!(
-            reachable_url("https://localhost:23443", [IP]),
-            "https://localhost:23443"
+            r("https://known.example:23443"),
+            "https://known.example:23443"
         );
-        assert_eq!(
-            reachable_url("https://10.0.0.1:23443", [IP]),
-            "https://10.0.0.1:23443"
-        );
-        assert_eq!(
-            reachable_url("https://[::1]:23443", [IP]),
-            "https://[::1]:23443"
-        );
+        assert_eq!(r("https://10.0.0.1:23443"), "https://10.0.0.1:23443");
+        assert_eq!(r("https://[::1]:23443"), "https://[::1]:23443");
+        assert_eq!(r("not a url"), "not a url");
+    }
+
+    #[test]
+    fn literals_never_ask_the_resolver() {
+        let asked = std::cell::Cell::new(false);
+        let r = |u| {
+            reachable_url_with(u, [IP], |_| {
+                asked.set(true);
+                false
+            })
+        };
+        r("https://10.0.0.1:23443");
+        r("https://[2001:db8::1]:23443");
+        assert!(!asked.get());
+        assert!(!needs_lookup("https://10.0.0.1:23443"));
+        assert!(!needs_lookup("https://[2001:db8::1]:23443"));
+        assert!(needs_lookup("https://node0.example.net:23443"));
+        assert!(!needs_lookup("garbage"));
     }
 
     #[test]
     fn unusable_candidates_skipped() {
         let lo = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let ll = IpAddr::V4(Ipv4Addr::new(169, 254, 1, 1));
+        let mc = IpAddr::V4(Ipv4Addr::new(239, 0, 0, 42));
+        let any = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
+        let u = "https://no-such-host.invalid:23443";
         assert_eq!(
-            reachable_url("https://no-such-host.invalid:23443", [lo, IP]),
+            reachable_url_with(u, [lo, ll, mc, any, IP], known),
             "https://192.0.2.7:23443"
         );
+        assert_eq!(reachable_url_with(u, [lo], known), u);
+        assert_eq!(reachable_url_with(u, [], known), u);
+    }
+
+    #[test]
+    fn source_address_wins_over_announced() {
+        let announced = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1));
+        let src: SocketAddr = "192.0.2.7:23442".parse().unwrap();
+        let candidates = source_ip(src).into_iter().chain([announced]);
         assert_eq!(
-            reachable_url("https://no-such-host.invalid:23443", [lo]),
-            "https://no-such-host.invalid:23443"
-        );
-        assert_eq!(
-            reachable_url("https://no-such-host.invalid:23443", []),
-            "https://no-such-host.invalid:23443"
+            reachable_url_with("https://n.invalid:23443", candidates, known),
+            "https://192.0.2.7:23443"
         );
     }
 
@@ -286,8 +399,27 @@ mod tests {
     fn v6_rewrite_is_bracketed() {
         let v6: IpAddr = "2001:db8::1".parse().unwrap();
         assert_eq!(
-            reachable_url("https://no-such-host.invalid:23443", [v6]),
+            reachable_url_with("https://no-such-host.invalid:23443", [v6], known),
             "https://[2001:db8::1]:23443"
+        );
+    }
+
+    #[tokio::test]
+    async fn async_variant_matches_and_skips_lookup_for_literals() {
+        let r: std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync> = std::sync::Arc::new(known);
+        assert_eq!(
+            reachable_url_async("https://nope.invalid:23443".into(), vec![IP], r.clone()).await,
+            "https://192.0.2.7:23443"
+        );
+        assert_eq!(
+            reachable_url_async("https://known.example:23443".into(), vec![IP], r).await,
+            "https://known.example:23443"
+        );
+        let panics: std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync> =
+            std::sync::Arc::new(|h| panic!("asked about {h}"));
+        assert_eq!(
+            reachable_url_async("https://10.0.0.1:23443".into(), vec![IP], panics).await,
+            "https://10.0.0.1:23443"
         );
     }
 
@@ -301,6 +433,8 @@ mod tests {
         let p = split_url("https://[::1]:23443").unwrap();
         assert_eq!((p.host, p.port, p.rest), ("::1", Some("23443"), ""));
         assert!(split_url("not a url").is_none());
+        assert!(split_url("https://:23443").is_none());
+        assert!(split_url("https://[::1").is_none());
     }
 
     #[test]
@@ -316,5 +450,29 @@ mod tests {
         for ip in local_addrs("239.0.0.42:23442") {
             assert!(usable(ip), "{ip}");
         }
+    }
+
+    /// The system resolver, for a box whose DNS is known to behave: no
+    /// wildcard `search` domain, `localhost` in /etc/hosts.
+    /// `XDEBBIE_TEST_DNS=1 cargo test -p xdebbied -- --ignored system_resolver`
+    #[test]
+    #[ignore = "needs a real resolver; XDEBBIE_TEST_DNS=1"]
+    fn system_resolver() {
+        if std::env::var_os("XDEBBIE_TEST_DNS").is_none() {
+            eprintln!("XDEBBIE_TEST_DNS unset; skipping");
+            return;
+        }
+        let b = Duration::from_secs(2);
+        assert!(resolves_within("192.0.2.7", b));
+        assert!(!resolves_within("127.0.0.1", b));
+        assert!(!resolves_within("no-such-host.invalid", b));
+        assert_eq!(
+            reachable_url("https://no-such-host.invalid:23443", [IP]),
+            "https://192.0.2.7:23443"
+        );
+        assert_eq!(
+            reachable_url("https://localhost:23443", [IP]),
+            "https://localhost:23443"
+        );
     }
 }
