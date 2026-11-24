@@ -218,7 +218,7 @@ Installed with the package, in `/usr/share/doc/xdebbied/`: this README,
 
 ## Status
 
-**0.21.0.** The scheduler and reconciler are unit-tested against a fake
+**0.21.1.** The scheduler and reconciler are unit-tested against a fake
 hypervisor; the mesh, enrolment and Cluster API provider run the author's
 own clusters. Known gaps are listed in
 [docs/limits.md](docs/limits.md); releases are in
