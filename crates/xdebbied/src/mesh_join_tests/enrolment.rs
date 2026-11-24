@@ -265,7 +265,6 @@ async fn deny_is_final_for_that_key() {
 
 /// Denied once, re-asked with a new key and approved: `xdctl approve HOST`
 /// run again later answers the approved enrolment, not the old denial.
-#[ignore = "bug: approve by hostname falls back to the oldest record (a stale denial)"]
 #[tokio::test]
 async fn approve_by_hostname_answers_the_latest_enrolment() {
     let dir = tempfile::tempdir().unwrap();

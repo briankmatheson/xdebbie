@@ -223,8 +223,8 @@ impl Enrollments {
             .map(|r| r.view.clone())
     }
 
-    /// Approve or deny by id or hostname (pending ones first; an exact id
-    /// always wins).
+    /// Approve or deny by id or hostname (pending ones first, then the
+    /// host's latest; an exact id always wins).
     #[allow(dead_code)] // the API decides by kind (decide_kind); tests and callers by key
     pub async fn decide(&self, key: &str, d: Decision) -> Result<Enrollment> {
         self.decide_kind(key, d, None).await
@@ -254,7 +254,9 @@ impl Enrollments {
                 recs.iter()
                     .position(|r| r.view.hostname == key && r.view.status == EnrollStatus::Pending)
             })
-            .or_else(|| recs.iter().position(|r| r.view.hostname == key))
+            // no pending one: the host's latest enrolment, not a stale
+            // denial from before it asked again
+            .or_else(|| recs.iter().rposition(|r| r.view.hostname == key))
             .ok_or_else(|| anyhow::anyhow!("no enrolment {key:?}"))?;
         let r = &mut recs[idx];
         if only.is_some_and(|k| k != r.view.kind) {
