@@ -241,11 +241,28 @@ impl CaSigner {
         Ok((pem, name))
     }
 
+    #[cfg(test)]
     pub fn sign_csr(&self, csr_pem: &str) -> Result<String> {
+        self.sign_csr_with_ips(csr_pem, &[])
+    }
+
+    /// `sign_csr`, adding `ips` as IP SANs the request lacks. The CA box
+    /// passes the addresses of the box id it assigned (`10.22.<box>.1`,
+    /// `10.23.<box>.1`): a joiner makes its request before its bridge
+    /// exists, so a request alone never names the bridge address libvirtd
+    /// listens on (2026-11-25: simplyaviary, box 5, needed a second
+    /// `--force` enrolment for 10.23.5.1).
+    pub fn sign_csr_with_ips(&self, csr_pem: &str, ips: &[std::net::IpAddr]) -> Result<String> {
         let csr =
             rcgen::CertificateSigningRequestParams::from_pem(csr_pem).context("parsing CSR")?;
         let hostname = csr_hostname(&csr).unwrap_or_default();
-        let sans = csr.params.subject_alt_names.clone();
+        let mut sans = csr.params.subject_alt_names.clone();
+        for ip in ips {
+            let s = SanType::IpAddress(*ip);
+            if !sans.contains(&s) {
+                sans.push(s);
+            }
+        }
         self.issue(&hostname, &sans, &csr.public_key)
     }
 

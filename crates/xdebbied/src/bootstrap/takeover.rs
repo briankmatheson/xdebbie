@@ -174,7 +174,12 @@ pub fn decide(
         );
     }
     match prior {
-        Some(p) if p.ca_url.trim_end_matches('/') == ca_url => Ok(JoinStart::Reuse),
+        Some(p)
+            if super::join::normalize_join_url(&p.ca_url)
+                == super::join::normalize_join_url(ca_url) =>
+        {
+            Ok(JoinStart::Reuse)
+        }
         Some(p) => bail!(
             "this box is enrolled with {} already, not {ca_url}; re-run with --force to enrol with {ca_url} instead",
             p.ca_url

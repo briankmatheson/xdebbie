@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (joining a box that was set up before; found joining simplyaviary, 2026-11-25)
+- A renumbered box drops its old underlay address: the mesh removes every
+  address on its own WireGuard link but `10.22.BOX.1` (new action
+  `addr_del`). Box 5, first set up as box 0, kept `10.22.0.1` and refused
+  the hub as a peer ("is one of this host's own addresses").
+- New blocking condition `BridgeAddressMismatch`: the bridge holds an
+  overlay address outside `10.23.BOX.0/24` (box 5's bridge still had the
+  hub's `10.23.0.1`). The mesh changes nothing until the bridge is fixed.
+- The cluster CA adds the assigned box's `10.22.BOX.1` and `10.23.BOX.1`
+  to a joiner's certificate. The request is made before the bridge exists,
+  so a first join lacked the address libvirtd listens on and needed a
+  second `--join --force`.
+- Bootstrap moves libvirtd's `listen_addr` to the current bridge address
+  when libvirtd was configured for TLS before (it kept `10.23.0.1`, so
+  `libvirtd-tls.socket` could not start and the box registered as
+  `qemu+tls://10.23.0.1`).
+- `--join timesink` is `--join https://timesink:23443`: a missing scheme
+  and port are filled in, and an earlier enrolment is matched on the
+  normalized URL instead of being refused as another cluster.
+
+### Docs
+- New how-to, Run a cloud server as a mesh client: a Terraform example
+  (`examples/do-mesh-client`: droplet, firewall, WireGuard key, wg-quick)
+  for a client the hub dials because the hub is not reachable from the
+  internet.
+- Join a second box: compare the CA fingerprint before answering, check
+  both ends (`Ready true AllPeersUp`, fresh handshakes), and a new
+  "Start over on a box" section.
+
 ### Added
 - `POST /v1/volumes/{id}/grow` and `xdctl volume grow ID --gib N`: grow a volume on its
   ABE (abe >= 0.7.2), never shrinking it. An attached VM's host passes the new

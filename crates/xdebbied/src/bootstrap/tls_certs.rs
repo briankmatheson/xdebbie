@@ -126,6 +126,36 @@ pub fn ensure_tls_certificates(api: &ApiTlsPaths) -> Result<LibvirtTls> {
     })
 }
 
+/// `content` (libvirtd.conf) with every active `listen_addr` set to `ip`,
+/// or None when they already say `ip` (or there is none: libvirtd then
+/// listens everywhere, which we leave as the operator chose).
+pub fn retarget_listen_addr(content: &str, ip: &str) -> Option<String> {
+    let want = format!("listen_addr = \"{ip}\"");
+    let mut changed = false;
+    let mut out: Vec<String> = content
+        .lines()
+        .map(|l| {
+            let t = l.trim_start();
+            let is_listen = t
+                .strip_prefix("listen_addr")
+                .is_some_and(|rest| rest.trim_start().starts_with('='));
+            if is_listen && t.trim_end() != want {
+                changed = true;
+                want.clone()
+            } else {
+                l.to_string()
+            }
+        })
+        .collect();
+    if !changed {
+        return None;
+    }
+    if content.ends_with('\n') {
+        out.push(String::new());
+    }
+    Some(out.join("\n"))
+}
+
 /// Address libvirtd listens on for TLS, per `listen_addr` in libvirtd.conf.
 pub fn libvirtd_listen_addr() -> Option<String> {
     let conf = fs::read_to_string(LIBVIRTD_CONF).ok()?;
@@ -240,6 +270,17 @@ pub fn configure_libvirtd_tls() -> Result<bool> {
     if Path::new(LIBVIRTD_CONF).exists() {
         let content = fs::read_to_string(LIBVIRTD_CONF)?;
         if content.contains("listen_tls = 1") {
+            // Configured before, maybe for another bridge address: a box
+            // first bootstrapped as box 0 kept listen_addr = "10.23.0.1"
+            // as box 5, so libvirtd-tls.socket could not bind and the box
+            // registered as qemu+tls://10.23.0.1 (2026-11-25).
+            if let Some(ip) = get_mesh_ip()
+                && let Some(updated) = retarget_listen_addr(&content, &ip)
+            {
+                info!("  libvirtd listen_addr moved to the overlay bridge address {ip}");
+                fs::write(LIBVIRTD_CONF, updated).context("writing libvirtd.conf")?;
+                return Ok(true);
+            }
             info!("  ✓ libvirtd already configured for TLS");
             return Ok(false);
         }
@@ -284,6 +325,22 @@ auth_tls = "none"
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_listen_addr_from_another_box_number_is_moved_to_this_bridge() {
+        let conf = "# libvirtd.conf\n#listen_addr = \"192.168.0.1\"\nlisten_tls = 1\nlisten_addr = \"10.23.0.1\"\ntls_port = \"16514\"\n";
+        let out = retarget_listen_addr(conf, "10.23.5.1").expect("changed");
+        assert!(out.contains("\nlisten_addr = \"10.23.5.1\"\n"), "{out}");
+        assert!(!out.contains("\"10.23.0.1\""), "{out}");
+        assert!(
+            out.contains("#listen_addr = \"192.168.0.1\""),
+            "comments are left alone: {out}"
+        );
+        assert!(out.ends_with('\n'));
+        // right already, or no listen_addr at all: nothing to write
+        assert_eq!(retarget_listen_addr(&out, "10.23.5.1"), None);
+        assert_eq!(retarget_listen_addr("listen_tls = 1\n", "10.23.5.1"), None);
+    }
 
     #[test]
     fn uri_prefers_listen_addr() {

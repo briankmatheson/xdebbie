@@ -15,6 +15,7 @@
 - [Use ABE volumes](how-to/abe-volumes.md)
 - [Drain a host and move VMs](how-to/drain-and-migrate.md)
 - [Connect a laptop with xdj](how-to/mesh-clients.md)
+- [Run a cloud server as a mesh client](how-to/cloud-mesh-client.md)
 - [Reserve addresses through DNS](how-to/dns-reserved-addresses.md)
 - [Give VMs NTP servers](how-to/ntp.md)
 - [Rotate the API token](how-to/rotate-token.md)

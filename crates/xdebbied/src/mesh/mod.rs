@@ -773,8 +773,36 @@ impl MeshManager {
                 .is_none()
                 .then(|| format!("underlay interface {} does not exist", spec.underlay)),
         );
-        let (Some(bridge_link), Some(underlay_link), true) =
-            (bridge_link, underlay_link, module_ok)
+        // The bridge's overlay addresses: any in 10.23.0.0/16 outside this
+        // box's /24 belongs to another box (2026-11-25: simplyaviary, box 5,
+        // first bootstrapped as box 0, kept 10.23.0.1 -- the hub's -- on
+        // its bridge). A bridge with no overlay address is left alone.
+        let foreign: Vec<String> = bridge_link
+            .and_then(|_| self.ops.link_addrs(&bridge).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|a| {
+                let o = a.addr.octets();
+                o[0] == 10 && o[1] == 23 && o[2] != spec.box_id
+            })
+            .map(|a| format!("{}/{}", a.addr, a.prefix))
+            .collect();
+        set_condition(
+            &mut st.conditions,
+            ConditionType::BridgeAddressMismatch,
+            !foreign.is_empty(),
+            Some("OtherBoxAddress"),
+            (!foreign.is_empty()).then(|| {
+                format!(
+                    "{bridge} has {}, but box {b} owns 10.23.{b}.0/24 (bridge 10.23.{b}.1): \
+                     start over on this box (docs/getting-started/join.md, \"Start over on a box\")",
+                    foreign.join(", "),
+                    b = spec.box_id
+                )
+            }),
+        );
+        let (Some(bridge_link), Some(underlay_link), true, true) =
+            (bridge_link, underlay_link, module_ok, foreign.is_empty())
         else {
             set_condition(
                 &mut st.conditions,
@@ -1729,6 +1757,123 @@ mod tests {
         assert_eq!(f.snapshot().keys_generated, 1, "key must be reused");
         let (_, st) = m2.get().await;
         assert_eq!(st.wireguard.unwrap().pubkey, kernel::fake_pubkey("PRIV1"));
+    }
+
+    /// 2026-11-25, simplyaviary: bootstrapped as box 0, then made box 5.
+    /// Its underlay kept 10.22.0.1 (the hub's) next to 10.22.5.1, so adding
+    /// the hub as a peer was refused: "10.22.0.1 is one of this host's own
+    /// addresses". A renumbered box must drop the old address by itself.
+    #[tokio::test]
+    async fn a_renumbered_box_drops_its_old_underlay_address_and_can_peer_with_the_hub() {
+        let f = wg_fake();
+        let dir = tempfile::tempdir().unwrap();
+        let m = MeshManager::new_for_test(f.clone(), dir.path().into(), None).unwrap();
+        let as_box = |b: u8, peers: Vec<PeerSpec>| MeshSpec {
+            box_id: b,
+            peers,
+            ..wg_spec()
+        };
+        let (_, st) = m.put(as_box(0, vec![]), None).await.ok().unwrap();
+        assert_eq!(st.wireguard.unwrap().address, "10.22.0.1/16");
+
+        let (_, st) = m.put(as_box(5, vec![]), None).await.ok().unwrap();
+        assert_eq!(st.wireguard.as_ref().unwrap().address, "10.22.5.1/16");
+        let on_link: Vec<String> = f.snapshot().addrs["wg-flock"]
+            .iter()
+            .map(|a| format!("{}/{}", a.addr, a.prefix))
+            .collect();
+        assert_eq!(on_link, vec!["10.22.5.1/16"], "the box-0 address must go");
+
+        // now the hub (box 0) can be added as a peer
+        let hub = PeerSpec {
+            pubkey: Some(K1.into()),
+            ..PeerSpec::new(0, Ipv4Addr::UNSPECIFIED)
+        };
+        if let Err(PutError::Validation(errs)) = m.put(as_box(5, vec![hub]), None).await {
+            let why: Vec<String> = errs.iter().map(|e| e.message.clone()).collect();
+            panic!("adding the hub was refused: {why:?}");
+        }
+    }
+
+    /// 2026-11-25, simplyaviary again: box 5's libvirt network still had
+    /// the box-0 bridge address 10.23.0.1 -- the hub's own. Meshed like
+    /// that it would answer for the hub on the shared overlay. The mesh
+    /// must refuse (a blocking condition, kernel untouched) until the
+    /// bridge has this box's address, then proceed.
+    #[tokio::test]
+    async fn a_bridge_holding_another_boxs_overlay_address_blocks_the_mesh() {
+        let f = wg_fake();
+        f.set_link_addrs("br-int", &[(Ipv4Addr::new(10, 23, 0, 1), 16)]);
+        let dir = tempfile::tempdir().unwrap();
+        let m = MeshManager::new_for_test(f.clone(), dir.path().into(), None).unwrap();
+        let hub = PeerSpec {
+            pubkey: Some(K1.into()),
+            ..PeerSpec::new(0, Ipv4Addr::UNSPECIFIED)
+        };
+        let spec = MeshSpec {
+            box_id: 5,
+            peers: vec![hub],
+            ..wg_spec()
+        };
+        let (_, st) = m.put(spec, None).await.ok().unwrap();
+        let c = st.condition(ConditionType::BridgeAddressMismatch).unwrap();
+        assert!(
+            st.is(ConditionType::BridgeAddressMismatch),
+            "{:?}",
+            st.conditions
+        );
+        assert!(
+            c.message.as_deref().unwrap_or("").contains("10.23.0.1/16"),
+            "{c:?}"
+        );
+        assert_eq!(
+            st.condition(ConditionType::Ready)
+                .unwrap()
+                .reason
+                .as_deref(),
+            Some("Blocked")
+        );
+        assert!(
+            !f.snapshot().links.contains_key("gnv-b0"),
+            "no tunnel while blocked"
+        );
+
+        // the bridge renumbered to box 5's address: the mesh goes ahead
+        f.set_link_addrs("br-int", &[(Ipv4Addr::new(10, 23, 5, 1), 16)]);
+        m.reconcile_once(false).await;
+        let (_, st) = m.get().await;
+        assert!(
+            !st.is(ConditionType::BridgeAddressMismatch),
+            "{:?}",
+            st.conditions
+        );
+        assert!(f.snapshot().links.contains_key("gnv-b0"));
+    }
+
+    /// A bridge with no overlay address at all (mesh-only test rigs, L2-only
+    /// bridges) is not a mismatch.
+    #[tokio::test]
+    async fn a_bridge_without_an_overlay_address_is_not_a_mismatch() {
+        let f = wg_fake();
+        f.set_link_addrs("br-int", &[(Ipv4Addr::new(192, 168, 122, 1), 24)]);
+        let dir = tempfile::tempdir().unwrap();
+        let m = MeshManager::new_for_test(f.clone(), dir.path().into(), None).unwrap();
+        let (_, st) = m
+            .put(
+                MeshSpec {
+                    box_id: 5,
+                    ..wg_spec()
+                },
+                None,
+            )
+            .await
+            .ok()
+            .unwrap();
+        assert!(
+            !st.is(ConditionType::BridgeAddressMismatch),
+            "{:?}",
+            st.conditions
+        );
     }
 
     #[tokio::test]

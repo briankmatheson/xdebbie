@@ -1,0 +1,20 @@
+#cloud-config
+# docs/how-to/cloud-mesh-client.md, "How it works": WireGuard up at boot
+# with wg-quick, ufw allowing only ssh and WireGuard from the hub's address.
+package_update: true
+packages:
+  - wireguard-tools
+  - ufw
+write_files:
+  - path: /etc/wireguard/wg-flock.conf
+    permissions: "0600"
+    owner: root:root
+    content: |
+      ${indent(6, wg_conf)}
+runcmd:
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow from ${hub_public_ip} to any port 22 proto tcp comment "ssh from the hub's line"
+  - ufw allow from ${hub_public_ip} to any port ${listen_port} proto udp comment "wireguard from the hub"
+  - ufw --force enable
+  - systemctl enable --now wg-quick@wg-flock

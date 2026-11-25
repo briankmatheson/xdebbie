@@ -455,6 +455,9 @@ pub enum ConditionType {
     BridgeMissing,
     BridgeStpEnabled,
     BridgeMacMismatch,
+    /// The bridge holds an overlay address of another box (10.23.<other>.x):
+    /// it would answer for that box on the shared overlay. Blocking.
+    BridgeAddressMismatch,
     NameConflict,
     /// `/sys/module/wireguard` missing while `wireguard` is configured.
     WireguardModuleMissing,
@@ -470,11 +473,12 @@ impl ConditionType {
             ConditionType::GeneveModuleMissing
                 | ConditionType::UnderlayMissing
                 | ConditionType::BridgeMissing
+                | ConditionType::BridgeAddressMismatch
                 | ConditionType::WireguardModuleMissing
                 | ConditionType::WireguardConflict
         )
     }
-    pub const ALL: [ConditionType; 10] = [
+    pub const ALL: [ConditionType; 11] = [
         ConditionType::GeneveModuleMissing,
         ConditionType::WireguardModuleMissing,
         ConditionType::WireguardConflict,
@@ -482,6 +486,7 @@ impl ConditionType {
         ConditionType::BridgeMissing,
         ConditionType::BridgeStpEnabled,
         ConditionType::BridgeMacMismatch,
+        ConditionType::BridgeAddressMismatch,
         ConditionType::NameConflict,
         ConditionType::Degraded,
         ConditionType::Ready,

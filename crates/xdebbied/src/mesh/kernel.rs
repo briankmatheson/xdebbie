@@ -248,6 +248,13 @@ pub enum Action {
         addr: Ipv4Addr,
         prefix: u8,
     },
+    /// Remove an address from a link we own (the WireGuard underlay): one
+    /// that is not this box's, e.g. left from an earlier box number.
+    AddrDel {
+        dev: String,
+        addr: Ipv4Addr,
+        prefix: u8,
+    },
     /// Delete a non-Geneve link we own (the WireGuard device).
     DeleteLink {
         dev: String,
@@ -275,6 +282,7 @@ impl Action {
             Action::WgPeerSet { .. } => "wg_peer_set",
             Action::WgPeerDel { .. } => "wg_peer_del",
             Action::AddrAdd { .. } => "addr_add",
+            Action::AddrDel { .. } => "addr_del",
             Action::DeleteLink { .. } => "delete_link",
         }
     }
@@ -296,6 +304,7 @@ impl Action {
             | Action::WgPeerSet { dev, .. }
             | Action::WgPeerDel { dev, .. }
             | Action::AddrAdd { dev, .. }
+            | Action::AddrDel { dev, .. }
             | Action::DeleteLink { dev } => dev,
             Action::SetBridgeMtu { bridge, .. } | Action::SetBridgeStpOff { bridge } => bridge,
         }
@@ -851,6 +860,9 @@ impl NetOps for IpCliNetOps {
             Action::WgPeerDel { dev, pubkey } => {
                 run(&self.wg, &["set", dev, "peer", pubkey, "remove"], None)?;
             }
+            Action::AddrDel { dev, addr, prefix } => {
+                self.ip(&["addr", "del", &format!("{addr}/{prefix}"), "dev", dev])?;
+            }
             Action::AddrAdd { dev, addr, prefix } => {
                 self.ip(&["addr", "replace", &format!("{addr}/{prefix}"), "dev", dev])?;
             }
@@ -1010,6 +1022,16 @@ impl FakeNetOps {
         st.local_addrs.push(addr);
         st.default_route_dev = Some(name.into());
     }
+    /// Set a link's IPv4 addresses (a bridge's overlay address, say).
+    pub fn set_link_addrs(&self, dev: &str, addrs: &[(Ipv4Addr, u8)]) {
+        self.state.lock().unwrap().addrs.insert(
+            dev.into(),
+            addrs
+                .iter()
+                .map(|&(addr, prefix)| LinkAddr { addr, prefix })
+                .collect(),
+        );
+    }
     pub fn set_route(&self, dst: Ipv4Addr, dev: &str) {
         self.state.lock().unwrap().routes.insert(
             dst,
@@ -1096,7 +1118,11 @@ impl NetOps for FakeNetOps {
         }
     }
     fn local_addrs(&self) -> Result<Vec<Ipv4Addr>> {
-        Ok(self.state.lock().unwrap().local_addrs.clone())
+        // as the kernel does: an address on any link is one of the host's
+        let st = self.state.lock().unwrap();
+        let mut v = st.local_addrs.clone();
+        v.extend(st.addrs.values().flatten().map(|a| a.addr));
+        Ok(v)
     }
     fn geneve_module_present(&self) -> bool {
         self.state.lock().unwrap().geneve_module
@@ -1294,6 +1320,14 @@ impl NetOps for FakeNetOps {
                     .get_mut(dev)
                     .ok_or_else(|| anyhow!("Unable to access interface: No such device"))?;
                 w.peers.retain(|p| &p.pubkey != pubkey);
+            }
+            Action::AddrDel { dev, addr, prefix } => {
+                let v = st.addrs.entry(dev.clone()).or_default();
+                let before = v.len();
+                v.retain(|a| !(a.addr == *addr && a.prefix == *prefix));
+                if v.len() == before {
+                    bail!("RTNETLINK answers: Cannot assign requested address");
+                }
             }
             Action::AddrAdd { dev, addr, prefix } => {
                 if !st.links.contains_key(dev) {

@@ -141,7 +141,7 @@ fn main() -> anyhow::Result<()> {
                 pool_name: pool.clone(),
                 pool_path: pool_path.clone(),
                 box_id: *r#box,
-                join: join.clone(),
+                join: join.as_deref().map(bootstrap::join::normalize_join_url),
                 ca_fingerprint: ca_fingerprint.clone(),
                 standalone: *standalone,
                 discover_secs: *discover_secs,

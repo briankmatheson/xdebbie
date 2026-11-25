@@ -1,0 +1,7 @@
+# Copy to terraform.tfvars (not committed) and fill in:
+# docs/how-to/cloud-mesh-client.md, "1. Fill in the variables".
+name          = "backup2"
+box           = 3
+hub_pubkey    = "HUB_PUBKEY="        # xdctl mesh wg, on the hub
+hub_public_ip = "203.0.113.7"        # the hub's internet address
+ssh_key_ids   = ["aa:bb:cc:..."]
