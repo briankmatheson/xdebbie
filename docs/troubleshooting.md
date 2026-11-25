@@ -66,6 +66,7 @@ xdctl mesh wg
 | A peer is `Down` and `xdctl mesh wg` shows no handshake | WireGuard cannot connect. Check each box has the other's public key, the `endpoint` is right, and 51820/udp is reachable. |
 | Handshakes work, the peer stays `Down`, `gnv-bN` TX climbs but the far side's RX stays 0 | The far box drops Geneve. `sudo ufw status` there must show `6081/udp on wg-flock ... ALLOW IN`. Re-run `sudo xdebbied bootstrap` on it. |
 | Peer reason `UnderlayRouteMismatch` | The route to the peer's underlay address leaves by another interface. Look for an overlapping route to `10.22.0.0/16`. |
+| Condition `BridgeAddressMismatch` | The bridge has another box's overlay address (set up under another box id). The mesh stays down until it is fixed: [Start over on a box](getting-started/join.md#start-over-on-a-box). |
 | Condition `BridgeMacMismatch` | The bridge MAC is not `52:54:00:23:BOX:fe`, so peers cannot reach this box's gateway address. Fix with the `virsh net-edit` the warning prints. |
 | Condition `GeneveModuleMissing` or `WireguardModuleMissing` | `sudo modprobe geneve wireguard`. |
 | Condition `NameConflict` | Something else owns a `gnv-bN` link or the `wg-flock` name. xdebbied never touches it; remove it yourself. |

@@ -268,7 +268,11 @@ xdctl mesh delete --yes               # tear down; falls back to [mesh] TOML
 
 Conditions: `Ready`, `Degraded` (some peer not Up), and blocking ones that
 stop all kernel writes: `GeneveModuleMissing`, `UnderlayMissing`,
-`BridgeMissing`, `WireguardModuleMissing`, `WireguardConflict`. Warnings:
+`BridgeMissing`, `BridgeAddressMismatch` (the bridge holds an overlay
+address outside this box's `10.23.BOX.0/24`, e.g. `10.23.0.1` on box 5: it
+would answer for another box; see
+[Start over on a box](getting-started/join.md#start-over-on-a-box)),
+`WireguardModuleMissing`, `WireguardConflict`. Warnings:
 `BridgeMacMismatch` (the bridge is not `52:54:00:23:BOX:fe`, so in
 `derived` mode *peers* cannot reach this box's bridge address — its gateway
 and DNS — fix with `virsh net-edit` on the `<mac>` element and

@@ -302,7 +302,7 @@ impl Enrollments {
                     bail!("enrolment {key:?} was denied (or ran out of time): ask again");
                 }
                 let cert = match r.view.kind {
-                    EnrollKind::Box => signer.sign_csr(&r.csr)?,
+                    EnrollKind::Box => signer.sign_csr_with_ips(&r.csr, &box_ips(r.view.box_id))?,
                     EnrollKind::Client => signer.sign_client_csr(&r.csr)?.0,
                 };
                 r.view.cert = Some(cert);
@@ -357,6 +357,16 @@ impl Enrollments {
             .with_context(|| format!("renaming to {}", self.path.display()))?;
         Ok(())
     }
+}
+
+/// The addresses a box's certificate must carry whatever its request
+/// said: its mesh underlay (`10.22.<box>.1`) and its overlay bridge
+/// (`10.23.<box>.1`, where libvirtd listens and peers probe it).
+fn box_ips(box_id: u8) -> Vec<std::net::IpAddr> {
+    vec![
+        crate::mesh::model::underlay_addr(box_id).into(),
+        std::net::Ipv4Addr::new(10, 23, box_id, 1).into(),
+    ]
 }
 
 #[cfg(test)]

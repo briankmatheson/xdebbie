@@ -49,9 +49,15 @@ sudo xdebbied bootstrap --join https://box0.example.org:23443 \
      --ca-fingerprint sha256:FINGERPRINT
 ```
 
-Bootstrap fetches the cluster CA, checks the fingerprint, makes a key and a
-certificate request, sends it, and waits. It prints the request's key
-fingerprint. Leave it running.
+`--join box0.example.org` means the same: a missing `https://` and port
+`23443` are filled in.
+
+Bootstrap fetches the cluster CA and checks the fingerprint. Without
+`--ca-fingerprint` it prints the CA's fingerprint and asks
+`Trust this CA ...? [y/N]`: compare it with `xdctl ca` on the first box
+**before** you answer. Then it makes a key and a certificate request,
+sends it, and waits. It prints the request's key fingerprint. Leave it
+running.
 
 ## 4. Approve it
 
@@ -71,7 +77,9 @@ free one (`1` for the second box). Within seconds, bootstrap on the new box:
 - installs the certificate and fetches the cluster token;
 - copies the overlay settings and takes its own `/24`: bridge `10.23.1.1`,
   VMs `10.23.1.2` to `10.23.1.254`;
-- creates its bridge and writes its config;
+- creates its bridge and writes its config (its certificate already names
+  the bridge and underlay addresses of the box id it was given, so libvirt
+  over TLS works without a second enrolment);
 - registers the box as a host with the cluster.
 
 Then start the service on the new box:
@@ -103,11 +111,26 @@ On box 1, add box 0:
 xdctl mesh peer add 0 --pubkey BOX0_PUBKEY --endpoint box0.example.org:51820
 ```
 
-Within a few seconds both boxes show the peer `Up`:
+The endpoint is any address the other box reaches on UDP 51820: on one
+LAN, its LAN address works as well as its name.
+
+Within a few seconds both boxes show the peer `Up`. Check both ends:
 
 ```bash
 xdctl mesh ls
 ```
+
+On each box you want:
+
+- the peer's row `Up`, with an RTT;
+- under `WIREGUARD`, the peer's handshake a few seconds old (`never` means
+  the other box does not have this one as a peer yet, or UDP 51820 does
+  not get through);
+- under `CONDITIONS`, `Ready true AllPeersUp` and no blocking condition.
+
+`BridgeAddressMismatch` means the box's bridge has another box's overlay
+address (it was set up under another box id): see
+[Start over on a box](#start-over-on-a-box).
 
 ## 6. Check the cluster
 
@@ -124,6 +147,27 @@ a leader and fail over, turn discovery on; see
 
 If something goes wrong, see
 [Troubleshooting](../troubleshooting.md#a-box-will-not-join).
+
+## Start over on a box
+
+To join a box again from scratch, for instance one that was set up on its
+own under another box id first. Only on a box whose VMs and volumes you
+do not need: `sudo virsh list --all` must be empty.
+
+```bash
+sudo systemctl stop xdebbied
+sudo ip link del wg-flock 2>/dev/null
+for l in $(ip -o link | grep -o 'gnv-b[0-9]*'); do sudo ip link del "$l"; done
+sudo nft delete table inet xdebbie_mesh 2>/dev/null
+sudo virsh net-destroy xdebbie 2>/dev/null; sudo virsh net-undefine xdebbie
+sudo virsh pool-destroy xdebbie 2>/dev/null; sudo virsh pool-undefine xdebbie
+sudo rm -rf /etc/xdebbie /var/lib/xdebbie
+```
+
+That removes the box's config, token, certificates, mesh state and
+WireGuard key (it gets a new one). On the box that had it as a peer, remove
+the old entry: `xdctl mesh peer rm BOX`. Then join as in step 3. Bootstrap
+moves libvirtd's `listen_addr` to the new bridge address by itself.
 
 ## Next
 

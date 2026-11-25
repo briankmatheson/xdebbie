@@ -51,6 +51,38 @@ pub struct JoinOptions<'a> {
     pub state_dir: &'a Path,
 }
 
+/// The cluster API's port: what `--join HOST` means when no port is given.
+pub const API_PORT: u16 = 23443;
+
+/// `--join` as typed, as the URL bootstrap uses and remembers: `https://`
+/// when no scheme is given and the API port when no port is, so
+/// `--join timesink`, `--join timesink:23443` and
+/// `--join https://timesink:23443` are one cluster (2026-11-25: a box
+/// enrolled as `https://timesink:23443` refused `--join timesink` as
+/// another cluster). A trailing `/` is dropped.
+pub fn normalize_join_url(s: &str) -> String {
+    let s = s.trim().trim_end_matches('/');
+    let (scheme, rest) = match s.split_once("://") {
+        Some((sch, rest)) => (sch.to_ascii_lowercase(), rest),
+        None => ("https".to_string(), s),
+    };
+    let (host_port, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, ""),
+    };
+    // a port: digits after the last ':' (after the ']' of an IPv6 literal)
+    let has_port = host_port.rsplit_once(':').is_some_and(|(h, p)| {
+        !p.is_empty()
+            && p.bytes().all(|b| b.is_ascii_digit())
+            && (!h.starts_with('[') || h.ends_with(']'))
+    });
+    if has_port {
+        format!("{scheme}://{host_port}{path}")
+    } else {
+        format!("{scheme}://{host_port}:{API_PORT}{path}")
+    }
+}
+
 fn norm_fp(s: &str) -> String {
     s.trim().trim_start_matches("sha256:").to_ascii_lowercase()
 }

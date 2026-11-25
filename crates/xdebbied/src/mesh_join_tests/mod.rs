@@ -14,4 +14,5 @@ mod force;
 mod join_flow;
 mod joiner_config;
 mod own_cluster;
+mod rejoin;
 mod support;

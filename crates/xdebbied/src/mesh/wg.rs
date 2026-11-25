@@ -104,6 +104,22 @@ pub fn diff(input: WgInput<'_>) -> Vec<Action> {
             prefix: w.prefix,
         });
     }
+    // Any other address on our underlay goes: a box renumbered from 0 to 5
+    // kept 10.22.0.1 next to 10.22.5.1, so it claimed the hub's address and
+    // refused the hub as a peer ("is one of this host's own addresses").
+    if !fresh {
+        for a in observed
+            .wg_addrs
+            .iter()
+            .filter(|a| !(a.addr == addr && a.prefix == w.prefix))
+        {
+            out.push(Action::AddrDel {
+                dev: dev.clone(),
+                addr: a.addr,
+                prefix: a.prefix,
+            });
+        }
+    }
 
     // MTU and admin state.
     if fresh || link.map(|l| l.mtu != w.mtu as u32).unwrap_or(true) {
