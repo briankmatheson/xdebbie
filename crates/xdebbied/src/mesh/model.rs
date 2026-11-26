@@ -3,7 +3,7 @@
 //! (`MeshStatus`), and the `[mesh]` TOML section that seeds the spec.
 //! These types are also the API JSON.
 
-use std::net::Ipv4Addr;
+use std::{collections::BTreeSet, net::Ipv4Addr};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -26,6 +26,10 @@ pub const DEFAULT_WG_PORT: u16 = 51820;
 pub const DEFAULT_WG_MTU: u16 = 1420;
 /// Private key file inside the state directory.
 pub const WG_KEY_FILE: &str = "wg.key";
+/// Mesh networks blackholed when `blackholes` is absent (docs/mesh.md,
+/// "Blackhole routes for the mesh networks"): the WireGuard underlay, the
+/// VM overlay and the planned storage mesh.
+pub const DEFAULT_BLACKHOLES: [&str; 3] = ["10.22.0.0/16", "10.23.0.0/16", "10.24.0.0/16"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -268,6 +272,37 @@ pub struct MeshSpec {
     /// xdj clients: WireGuard-only peers (needs `wireguard`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clients: Vec<ClientSpec>,
+    /// CIDRs to blackhole at the worst metric so a vanished connected
+    /// route drops traffic instead of leaking it (docs/mesh.md, "Blackhole
+    /// routes for the mesh networks"). `[]` turns this off.
+    #[serde(default = "d_blackholes")]
+    pub blackholes: Vec<String>,
+}
+
+fn d_blackholes() -> Vec<String> {
+    DEFAULT_BLACKHOLES.iter().map(|s| (*s).to_owned()).collect()
+}
+
+/// `a.b.c.d/n` with 1 <= n <= 32 and no host bits set; `None` otherwise.
+/// A /0 is refused: blackholing everything is never what a mesh wants.
+pub fn parse_net(cidr: &str) -> Option<(Ipv4Addr, u8)> {
+    let (addr, prefix) = cidr.split_once('/')?;
+    let addr: Ipv4Addr = addr.parse().ok()?;
+    let prefix: u8 = prefix.parse().ok().filter(|p| (1..=32).contains(p))?;
+    (u32::from(addr) & !prefix_mask(prefix) == 0).then_some((addr, prefix))
+}
+
+/// Netmask for a prefix length, as a host-order `u32`.
+pub fn prefix_mask(prefix: u8) -> u32 {
+    match prefix {
+        0 => 0,
+        p => u32::MAX << (32 - u32::from(p.min(32))),
+    }
+}
+
+/// Whether `ip` lies inside `net`/`prefix`.
+pub fn net_contains((net, prefix): (Ipv4Addr, u8), ip: Ipv4Addr) -> bool {
+    u32::from(ip) & prefix_mask(prefix) == u32::from(net)
 }
 
 impl Default for MeshSpec {
@@ -289,11 +324,25 @@ impl Default for MeshSpec {
             wireguard: None,
             peers: vec![],
             clients: vec![],
+            blackholes: d_blackholes(),
         }
     }
 }
 
 impl MeshSpec {
+    /// The blackhole routes this spec wants (docs/mesh.md, "Blackhole
+    /// routes for the mesh networks"): every valid `blackholes` entry.
+    /// Without managed WireGuard the underlay is the operator's, so a net
+    /// holding a peer's `remote` is skipped: our blackhole could beat the
+    /// operator's route to that peer (a default or gateway route).
+    pub fn blackhole_nets(&self) -> BTreeSet<(Ipv4Addr, u8)> {
+        let underlay_ours = self.wireguard.is_some();
+        self.blackholes
+            .iter()
+            .filter_map(|c| parse_net(c))
+            .filter(|&n| underlay_ours || !self.peers.iter().any(|p| net_contains(n, p.remote)))
+            .collect()
+    }
     /// Fill derivable fields: with managed WireGuard a peer's `remote`
     /// defaults to `10.22.<box>.1`. Run before validation.
     pub fn normalize(mut self) -> Self {
@@ -606,6 +655,10 @@ pub struct MeshConfig {
     /// `[[mesh.clients]]`
     #[serde(default)]
     pub clients: Vec<ClientSpec>,
+    /// Mesh networks to blackhole (docs/mesh.md, "Blackhole routes for the
+    /// mesh networks"). Absent = `DEFAULT_BLACKHOLES`; `[]` = none.
+    #[serde(default = "d_blackholes")]
+    pub blackholes: Vec<String>,
 }
 
 impl Default for MeshConfig {
@@ -628,6 +681,7 @@ impl Default for MeshConfig {
             wireguard: None,
             peers: vec![],
             clients: vec![],
+            blackholes: d_blackholes(),
         }
     }
 }
@@ -665,6 +719,7 @@ impl MeshConfig {
                 .or_else(|| (!self.allow_plain_underlay).then(WireguardSpec::default)),
             peers: self.peers.clone(),
             clients: self.clients.clone(),
+            blackholes: self.blackholes.clone(),
         }
         .normalize()
     }

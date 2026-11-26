@@ -131,6 +131,7 @@ pub fn validate(spec: &MeshSpec, env: &Env) -> Vec<FieldError> {
     if spec.probe.up_after == 0 {
         err(&mut e, "probe.up_after", "must be ≥ 1");
     }
+    validate_blackholes(spec, &mut e);
 
     if let Some(w) = &spec.wireguard {
         if w.listen_port == 0 {
@@ -360,6 +361,23 @@ pub fn validate(spec: &MeshSpec, env: &Env) -> Vec<FieldError> {
     e
 }
 
+/// Each `blackholes` entry must be an IPv4 network (docs/mesh.md,
+/// "Blackhole routes for the mesh networks"): `a.b.c.d/n`, n 1–32, no
+/// host bits, since that is what `ip route add blackhole` accepts.
+fn validate_blackholes(spec: &MeshSpec, e: &mut Vec<FieldError>) {
+    for (i, c) in spec.blackholes.iter().enumerate() {
+        if parse_net(c).is_none() {
+            err(
+                e,
+                format!("blackholes[{i}]"),
+                format!(
+                    "must be an IPv4 network like 10.23.0.0/16 (prefix 1–32, no host bits), got {c:?}"
+                ),
+            );
+        }
+    }
+}
+
 /// Client names: `[A-Za-z0-9._-]{1,63}`, not all digits (so a name never
 /// reads as a box number in `xdctl mesh client rm`).
 pub fn valid_client_name(n: &str) -> bool {
@@ -526,6 +544,32 @@ mod tests {
         let mut s = base();
         s.underlay = "".into();
         assert_eq!(fields(&validate(&s, &env())), vec!["underlay"]);
+    }
+
+    #[test]
+    fn blackholes_must_be_networks() {
+        let mut s = base();
+        assert_eq!(s.blackholes, DEFAULT_BLACKHOLES);
+        s.blackholes = vec![
+            "10.23.0.0/16".into(),
+            "garbage".into(),
+            "10.23.1.5/16".into(),
+            "10.0.0.0/0".into(),
+            "10.0.0.0/33".into(),
+            "10.23.0.0".into(),
+        ];
+        assert_eq!(
+            fields(&validate(&s, &env())),
+            vec![
+                "blackholes[1]",
+                "blackholes[2]",
+                "blackholes[3]",
+                "blackholes[4]",
+                "blackholes[5]"
+            ]
+        );
+        s.blackholes = vec![];
+        assert!(validate(&s, &env()).is_empty(), "[] turns the feature off");
     }
 
     #[test]

@@ -22,6 +22,7 @@ one. `enabled = false` turns it off.
 | MTU | mesh | underlay MTU − 50 (`auto`) or a fixed value ≥ 1280; applied to tunnels, the bridge, and new VM NICs (`<mtu size=…/>`) |
 | `nft table inet xdebbie_mesh` | mesh | drops UDP `dstport` arriving on any interface other than `underlay` |
 | `/var/lib/xdebbie/mesh.json` | mesh | persisted spec when set through the API |
+| `blackhole 10.2x.0.0/16 metric 4294967295` | mesh | worst-metric routes so a lost connected route drops mesh traffic; see [Blackhole routes](#blackhole-routes-for-the-mesh-networks) |
 
 Ownership is strict: a link is ours only if its name matches `^gnv-b\d{1,3}$`
 **and** its alias is `xdebbie-mesh/v1`. Anything else — including a stray
@@ -201,6 +202,62 @@ They carry `proto 230` (`ip route show proto 230`), are converged every
 reconcile and removed on teardown (`mesh/routes.rs`). A hub (a box with
 clients) adds none.
 
+## Blackhole routes for the mesh networks
+
+While the mesh is reconciled, every box installs a blackhole route at the
+worst possible metric for each mesh network:
+
+```text
+blackhole 10.22.0.0/16 metric 4294967295   # WireGuard underlay
+blackhole 10.23.0.0/16 metric 4294967295   # VM overlay (the bridges)
+blackhole 10.24.0.0/16 metric 4294967295   # storage mesh (planned)
+```
+
+**Why.** These networks are normally reached through connected routes
+(metric 0): `10.22.0.0/16` on `wg-flock`, `10.23.0.0/16` on the overlay
+bridge. If that link or its address disappears (the bridge is deleted, the
+WireGuard link is torn down, the mesh is disabled) the connected route goes
+with it, and without a blackhole the traffic follows the default route out
+to the LAN or the internet. With it, the packets are silently dropped
+(a local sender gets `EINVAL`, a forwarded packet no ICMP).
+
+**Metric.** The kernel's route priority is a 32-bit number and lower wins,
+so `4294967295` (`u32::MAX`) loses to every other route to the same
+network: the connected route always wins while it exists, and a more
+specific route wins by prefix length anyway. The metric is also how the
+daemon recognises its own blackholes: one at any other metric is never
+touched.
+
+**Config.** `blackholes` in `[mesh]` (or the API spec) lists the
+networks; absent means the three above, `[]` turns the feature off (and
+removes the ones the daemon installed). Each entry must be an IPv4 network,
+`a.b.c.d/n` with no host bits set and n 1–32. Reconcile adds the missing
+ones and removes its own that are no longer listed.
+
+**Plain underlay.** Without a managed `wireguard` section the underlay is
+yours, so a listed network that holds any peer's `remote` is skipped: a
+blackhole there could beat your route to that peer (a gateway or the
+default route). With the managed underlay `10.22.0.0/16` is always
+installed; the `wg-flock` address (prefix 16) gives the connected route
+that wins over it.
+
+**Teardown keeps them.** Disabling the mesh (`enabled = false`) removes
+the tunnels and the WireGuard link but leaves the blackholes, which is the point: the mesh
+networks stay unreachable instead of leaking. To remove one by hand:
+
+```bash
+ip route del blackhole 10.23.0.0/16 metric 4294967295
+```
+
+A running, enabled mesh puts it back on the next reconcile unless it is
+removed from `blackholes`. `ip route show type blackhole` lists them.
+
+**Client routes.** The routes of [Clients behind another
+box](#clients-behind-another-box) (`proto 230`) are more specific (`/32`,
+`/17`) and win by prefix length; when the bridge goes and takes the `/17`s
+with it, the `10.22.0.0/16` blackhole catches what they carried. The
+blackholes are not `proto 230`, so syncing those routes never touches them.
+
 ## Configuration
 
 Two sources, API wins:
@@ -227,6 +284,7 @@ probe_interval_ms = 1000
 probe_timeout_ms = 800
 probe_down_after = 3
 probe_up_after = 3
+blackholes = ["10.22.0.0/16", "10.23.0.0/16", "10.24.0.0/16"]  # default; [] = none
 
 [mesh.wireguard]             # the managed underlay; these are the defaults
 listen_port = 51820

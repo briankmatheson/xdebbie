@@ -467,6 +467,9 @@ impl MeshManager {
                 return "error";
             }
         };
+        // Blackhole routes are kept on purpose: with the mesh gone, traffic
+        // to its networks must still be dropped, not sent out the default
+        // route (docs/mesh.md, "Blackhole routes for the mesh networks").
         let mut actions = plan::teardown(&observed);
         // The WireGuard link goes last: Geneve tunnels reference it via routes.
         actions.extend(self.wg_teardown_actions(&observed, &d.spec));
@@ -895,13 +898,16 @@ impl MeshManager {
             }
         }
 
-        // 7. plan
-        let plan = plan::diff(plan::PlanInput {
+        // 7. plan. Blackholes for the mesh networks go first, so the safety
+        // net is in place before any tunnel exists (docs/mesh.md,
+        // "Blackhole routes for the mesh networks").
+        let mut plan = plan::diff(plan::PlanInput {
             spec,
             observed: &observed,
             mtu,
             route_bad: &route_bad,
         });
+        plan.actions.splice(0..0, plan::blackholes(spec, &observed));
 
         // 8. apply
         let mut failed: BTreeMap<u8, String> = BTreeMap::new();
@@ -1939,6 +1945,12 @@ mod tests {
         assert!(
             dir.path().join(WG_KEY_FILE).exists(),
             "identity survives teardown"
+        );
+        assert_eq!(
+            snap.blackholes.len(),
+            3,
+            "blackholes survive teardown: {:?}",
+            snap.blackholes
         );
     }
 

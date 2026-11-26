@@ -409,6 +409,33 @@ storage_pool = "boot"
         assert_eq!(s.bridge(), "virbr-xdebbie");
     }
 
+    /// docs/mesh.md, "Blackhole routes for the mesh networks".
+    #[test]
+    fn mesh_blackholes_default_override_and_validation() {
+        use crate::mesh::{
+            model::DEFAULT_BLACKHOLES,
+            validate::{Env, validate_or_err},
+        };
+        let spec = |extra: &str| {
+            let c: Config = toml::from_str(&format!("state_file = 'x'\n[mesh]\n{extra}")).unwrap();
+            c.mesh_config().to_spec()
+        };
+        assert_eq!(spec("").blackholes, DEFAULT_BLACKHOLES, "key absent");
+        assert!(spec("blackholes = []").blackholes.is_empty(), "[] = off");
+        assert_eq!(
+            spec("blackholes = [\"10.23.0.0/16\"]").blackholes,
+            vec!["10.23.0.0/16"]
+        );
+        let bad = spec("blackholes = [\"10.23.0.0/16\", \"10.23.0.1/16\"]");
+        let e = validate_or_err(&bad, &Env::default())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("blackholes[1]") && e.contains("10.23.0.1/16"),
+            "{e}"
+        );
+    }
+
     #[test]
     fn advertise_url_follows_listen_unless_set() {
         let c: Config = toml::from_str("state_file = 'x'").unwrap();
