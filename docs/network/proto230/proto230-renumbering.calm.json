@@ -1,0 +1,294 @@
+{
+  "$schema": "https://calm.finos.org/release/1.1/meta/calm.json",
+  "unique-id": "proto230-renumbering",
+  "name": "Proto 230: Renumbering a box",
+  "description": "A box changes number during an upgrade; learn mode keeps VM traffic flowing because VM MACs have no box number in them.",
+  "metadata": [
+    {
+      "source": "xdebbie docs/network/proto230/make.py"
+    },
+    {
+      "checked-live": "2026-11-27"
+    }
+  ],
+  "nodes": [
+    {
+      "unique-id": "sa",
+      "node-type": "system",
+      "name": "simplyaviary, box 0 to box 5",
+      "description": "Bootstrapped as box 0, then made box 5 (2026-11-25)."
+    },
+    {
+      "unique-id": "wg-old",
+      "node-type": "network",
+      "name": "10.22.0.1 (old)",
+      "description": "The hub's address: a renumbered box must drop it or the hub is refused as a peer."
+    },
+    {
+      "unique-id": "wg-new",
+      "node-type": "network",
+      "name": "10.22.5.1 (new)",
+      "description": "Its underlay address from now on."
+    },
+    {
+      "unique-id": "br",
+      "node-type": "network",
+      "name": "virbr-xdebbie 10.23.5.1",
+      "description": "The bridge must move too; until it does the mesh blocks and builds no tunnel."
+    },
+    {
+      "unique-id": "pass",
+      "node-type": "service",
+      "name": "Mesh pass",
+      "description": "Adds the new address, deletes every other one on wg-flock, checks the bridge."
+    },
+    {
+      "unique-id": "learned",
+      "node-type": "network",
+      "name": "Learned FDB (fdb = learn)",
+      "description": "VM MACs come from VM ids, so nothing in it depends on the box number."
+    },
+    {
+      "unique-id": "static",
+      "node-type": "network",
+      "name": "Static FDB (fdb = derived)",
+      "description": "Keyed on 52:54:00:23:BB: every peer's entries must change with the number."
+    },
+    {
+      "unique-id": "hub",
+      "node-type": "system",
+      "name": "timesink (hub)",
+      "description": "Sees box 5 as a new peer once the old address is gone."
+    },
+    {
+      "unique-id": "p230",
+      "node-type": "network",
+      "name": "proto 230 routes on box 5",
+      "description": "Re-derived: 10.22.0.1/32 on wg-flock, the /17s via 10.23.0.1."
+    },
+    {
+      "unique-id": "overlap",
+      "node-type": "service",
+      "name": "Old and new both answering (planned)",
+      "description": "Not in xdebbie yet: a window where both numbers work, for zero-drop upgrades."
+    }
+  ],
+  "relationships": [
+    {
+      "unique-id": "sa-has-wg-old",
+      "description": "simplyaviary, box 0 to box 5 has 10.22.0.1 (old).",
+      "relationship-type": {
+        "composed-of": {
+          "container": "sa",
+          "nodes": [
+            "wg-old"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "sa-has-wg-new",
+      "description": "simplyaviary, box 0 to box 5 has 10.22.5.1 (new).",
+      "relationship-type": {
+        "composed-of": {
+          "container": "sa",
+          "nodes": [
+            "wg-new"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "sa-has-br",
+      "description": "simplyaviary, box 0 to box 5 has virbr-xdebbie 10.23.5.1.",
+      "relationship-type": {
+        "composed-of": {
+          "container": "sa",
+          "nodes": [
+            "br"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "sa-has-pass",
+      "description": "simplyaviary, box 0 to box 5 has Mesh pass.",
+      "relationship-type": {
+        "composed-of": {
+          "container": "sa",
+          "nodes": [
+            "pass"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "sa-has-learned",
+      "description": "simplyaviary, box 0 to box 5 has Learned FDB (fdb = learn).",
+      "relationship-type": {
+        "composed-of": {
+          "container": "sa",
+          "nodes": [
+            "learned"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "add-new",
+      "description": "The pass adds 10.22.5.1.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "pass"
+          },
+          "destination": {
+            "node": "wg-new"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "drop-old",
+      "description": "Then deletes 10.22.0.1, and any other stray address.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "pass"
+          },
+          "destination": {
+            "node": "wg-old"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "check-br",
+      "description": "Blocked until the bridge has 10.23.5.1; then the tunnel to box 0 comes up.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "pass"
+          },
+          "destination": {
+            "node": "br"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "peer-hub",
+      "description": "WireGuard to the hub, as box 5.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "wg-new"
+          },
+          "destination": {
+            "node": "hub"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "routes",
+      "description": "The proto 230 routes follow the new number.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "pass"
+          },
+          "destination": {
+            "node": "p230"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "learn",
+      "description": "The tunnel ports relearn VM MACs as soon as VMs talk.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "br"
+          },
+          "destination": {
+            "node": "learned"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "static-stale",
+      "description": "In derived mode the peers' entries still say box 0 until they are redone.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "static"
+          },
+          "destination": {
+            "node": "br"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "planned",
+      "description": "Planned: keep the old number answering while traffic moves.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "overlap"
+          },
+          "destination": {
+            "node": "wg-old"
+          }
+        }
+      }
+    }
+  ],
+  "flows": [
+    {
+      "unique-id": "upgrade",
+      "name": "An upgrade that renumbers a box",
+      "description": "Box 0 becomes box 5 and its VMs keep talking.",
+      "transitions": [
+        {
+          "relationship-unique-id": "add-new",
+          "sequence-number": 1,
+          "description": "The new underlay address goes on."
+        },
+        {
+          "relationship-unique-id": "drop-old",
+          "sequence-number": 2,
+          "description": "The old one comes off, so the hub can be a peer."
+        },
+        {
+          "relationship-unique-id": "check-br",
+          "sequence-number": 3,
+          "description": "The bridge moves; the mesh waits for it."
+        },
+        {
+          "relationship-unique-id": "peer-hub",
+          "sequence-number": 4,
+          "description": "The box rejoins the hub under its new number."
+        },
+        {
+          "relationship-unique-id": "routes",
+          "sequence-number": 5,
+          "description": "proto 230 routes are worked out again."
+        },
+        {
+          "relationship-unique-id": "learn",
+          "sequence-number": 6,
+          "description": "Learn mode picks the VM MACs back up; there was nothing to rewrite."
+        },
+        {
+          "relationship-unique-id": "planned",
+          "sequence-number": 7,
+          "description": "Still to build: both numbers answering during the change."
+        }
+      ]
+    }
+  ]
+}

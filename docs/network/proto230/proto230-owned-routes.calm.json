@@ -1,0 +1,274 @@
+{
+  "$schema": "https://calm.finos.org/release/1.1/meta/calm.json",
+  "unique-id": "proto230-owned-routes",
+  "name": "Proto 230: How a route gets owned",
+  "description": "xdebbied marks its routes with proto 230 and its blackholes with the worst metric, and touches nothing else.",
+  "metadata": [
+    {
+      "source": "xdebbie docs/network/proto230/make.py"
+    },
+    {
+      "checked-live": "2026-11-27"
+    }
+  ],
+  "nodes": [
+    {
+      "unique-id": "spec",
+      "node-type": "data-asset",
+      "name": "Mesh spec",
+      "description": "Peers, clients and blackholes, from the config or the API."
+    },
+    {
+      "unique-id": "xdebbied",
+      "node-type": "service",
+      "name": "xdebbied",
+      "description": "The daemon on each box; its mesh pass runs every few seconds."
+    },
+    {
+      "unique-id": "reconcile",
+      "node-type": "service",
+      "name": "Mesh pass",
+      "description": "Works out the wanted routes, compares, and fixes the difference."
+    },
+    {
+      "unique-id": "table",
+      "node-type": "network",
+      "name": "Kernel routing table (simplyaviary)",
+      "description": "What `ip route` shows on box 5."
+    },
+    {
+      "unique-id": "p230-peer",
+      "node-type": "network",
+      "name": "10.22.0.1/32 dev wg-flock",
+      "description": "proto 230: each peer's underlay stays in WireGuard, for Geneve and probes."
+    },
+    {
+      "unique-id": "p230-halves",
+      "node-type": "network",
+      "name": "10.22.0.0/17, 10.22.128.0/17 via 10.23.0.1",
+      "description": "proto 230: everything else on the underlay (clients) goes via the hub's bridge address."
+    },
+    {
+      "unique-id": "blackholes",
+      "node-type": "network",
+      "name": "Blackholes, metric 4294967295",
+      "description": "10.22, 10.23, 10.24 /16: the worst metric, which is also how xdebbied knows they are its own."
+    },
+    {
+      "unique-id": "connected",
+      "node-type": "network",
+      "name": "Connected routes (proto kernel)",
+      "description": "10.22.0.0/16 on wg-flock, 10.23.0.0/16 on the bridge: the kernel's, not ours."
+    },
+    {
+      "unique-id": "others",
+      "node-type": "network",
+      "name": "Everyone else's routes",
+      "description": "The default route, DHCP's, yours: xdebbied never lists or changes them."
+    }
+  ],
+  "relationships": [
+    {
+      "unique-id": "table-has-p230-peer",
+      "description": "Kernel routing table (simplyaviary) has 10.22.0.1/32 dev wg-flock.",
+      "relationship-type": {
+        "composed-of": {
+          "container": "table",
+          "nodes": [
+            "p230-peer"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "table-has-p230-halves",
+      "description": "Kernel routing table (simplyaviary) has 10.22.0.0/17, 10.22.128.0/17 via 10.23.0.1.",
+      "relationship-type": {
+        "composed-of": {
+          "container": "table",
+          "nodes": [
+            "p230-halves"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "table-has-blackholes",
+      "description": "Kernel routing table (simplyaviary) has Blackholes, metric 4294967295.",
+      "relationship-type": {
+        "composed-of": {
+          "container": "table",
+          "nodes": [
+            "blackholes"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "table-has-connected",
+      "description": "Kernel routing table (simplyaviary) has Connected routes (proto kernel).",
+      "relationship-type": {
+        "composed-of": {
+          "container": "table",
+          "nodes": [
+            "connected"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "table-has-others",
+      "description": "Kernel routing table (simplyaviary) has Everyone else's routes.",
+      "relationship-type": {
+        "composed-of": {
+          "container": "table",
+          "nodes": [
+            "others"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "read-spec",
+      "description": "xdebbied reads the mesh spec each pass.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "xdebbied"
+          },
+          "destination": {
+            "node": "spec"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "run-pass",
+      "description": "Each pass computes the wanted routes from the spec.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "xdebbied"
+          },
+          "destination": {
+            "node": "reconcile"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "list-ours",
+      "description": "It lists only `ip -j route show proto 230`.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "reconcile"
+          },
+          "destination": {
+            "node": "table"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "del-unwanted",
+      "description": "A proto 230 route no longer wanted is deleted.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "reconcile"
+          },
+          "destination": {
+            "node": "p230-halves"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "replace-wanted",
+      "description": "A wanted route that is missing or different is set with `ip route replace ... proto 230`.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "reconcile"
+          },
+          "destination": {
+            "node": "p230-peer"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "blackhole-add",
+      "description": "Missing blackholes are added (plan action BlackholeAdd); unlisted ones of ours removed (BlackholeDel).",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "reconcile"
+          },
+          "destination": {
+            "node": "blackholes"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "connected-wins",
+      "description": "Any real route beats a blackhole: metric 0 against 4294967295.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "connected"
+          },
+          "destination": {
+            "node": "blackholes"
+          }
+        }
+      }
+    }
+  ],
+  "flows": [
+    {
+      "unique-id": "owned",
+      "name": "One mesh pass",
+      "description": "How box 5 ends up with exactly its own routes, and nobody else's are touched.",
+      "transitions": [
+        {
+          "relationship-unique-id": "read-spec",
+          "sequence-number": 1,
+          "description": "Read the spec: one peer (box 0), no clients."
+        },
+        {
+          "relationship-unique-id": "run-pass",
+          "sequence-number": 2,
+          "description": "Wanted: the peer's /32 and the two /17 halves."
+        },
+        {
+          "relationship-unique-id": "list-ours",
+          "sequence-number": 3,
+          "description": "Have: whatever carries proto 230, and nothing more."
+        },
+        {
+          "relationship-unique-id": "del-unwanted",
+          "sequence-number": 4,
+          "description": "Remove ours that are no longer wanted."
+        },
+        {
+          "relationship-unique-id": "replace-wanted",
+          "sequence-number": 5,
+          "description": "Set the missing ones; a failure is logged and retried next pass."
+        },
+        {
+          "relationship-unique-id": "blackhole-add",
+          "sequence-number": 6,
+          "description": "Make sure the blackholes are there, at the worst metric."
+        },
+        {
+          "relationship-unique-id": "connected-wins",
+          "sequence-number": 7,
+          "description": "While the links are up, the real routes win."
+        }
+      ]
+    }
+  ]
+}
