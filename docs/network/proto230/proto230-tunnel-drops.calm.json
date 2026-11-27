@@ -1,0 +1,243 @@
+{
+  "$schema": "https://calm.finos.org/release/1.1/meta/calm.json",
+  "unique-id": "proto230-tunnel-drops",
+  "name": "Proto 230: A tunnel drops",
+  "description": "When wg-flock or the bridge goes away, the blackholes hold and nothing leaks to the default route.",
+  "metadata": [
+    {
+      "source": "xdebbie docs/network/proto230/make.py"
+    },
+    {
+      "checked-live": "2026-11-27"
+    }
+  ],
+  "nodes": [
+    {
+      "unique-id": "sender",
+      "node-type": "service",
+      "name": "Something on the box",
+      "description": "A VM, abe, or anything sending to a mesh address."
+    },
+    {
+      "unique-id": "link",
+      "node-type": "network",
+      "name": "wg-flock / virbr-xdebbie",
+      "description": "The link that just went away: torn down, deleted, mesh disabled."
+    },
+    {
+      "unique-id": "table",
+      "node-type": "network",
+      "name": "Kernel routing table",
+      "description": "What is left once the link is gone."
+    },
+    {
+      "unique-id": "connected",
+      "node-type": "network",
+      "name": "10.22.0.0/16 dev wg-flock",
+      "description": "Gone: the kernel removes a connected route with its link."
+    },
+    {
+      "unique-id": "p230",
+      "node-type": "network",
+      "name": "proto 230 /17s via 10.23.0.1",
+      "description": "Gone too: they go through the bridge, and the bridge is gone."
+    },
+    {
+      "unique-id": "blackhole",
+      "node-type": "network",
+      "name": "blackhole 10.22.0.0/16 metric 4294967295",
+      "description": "Still there: teardown keeps it on purpose."
+    },
+    {
+      "unique-id": "default",
+      "node-type": "network",
+      "name": "default via the LAN router",
+      "description": "0.0.0.0/0, the shortest prefix there is."
+    },
+    {
+      "unique-id": "internet",
+      "node-type": "network",
+      "name": "LAN and internet",
+      "description": "Where mesh traffic would leak without the blackhole."
+    },
+    {
+      "unique-id": "dropped",
+      "node-type": "service",
+      "name": "Dropped",
+      "description": "A local sender gets EINVAL; a forwarded packet just disappears, no ICMP."
+    }
+  ],
+  "relationships": [
+    {
+      "unique-id": "table-has-connected",
+      "description": "Kernel routing table has 10.22.0.0/16 dev wg-flock.",
+      "relationship-type": {
+        "composed-of": {
+          "container": "table",
+          "nodes": [
+            "connected"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "table-has-p230",
+      "description": "Kernel routing table has proto 230 /17s via 10.23.0.1.",
+      "relationship-type": {
+        "composed-of": {
+          "container": "table",
+          "nodes": [
+            "p230"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "table-has-blackhole",
+      "description": "Kernel routing table has blackhole 10.22.0.0/16 metric 4294967295.",
+      "relationship-type": {
+        "composed-of": {
+          "container": "table",
+          "nodes": [
+            "blackhole"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "table-has-default",
+      "description": "Kernel routing table has default via the LAN router.",
+      "relationship-type": {
+        "composed-of": {
+          "container": "table",
+          "nodes": [
+            "default"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "link-carried",
+      "description": "The link held the connected route.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "link"
+          },
+          "destination": {
+            "node": "connected"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "bridge-carried",
+      "description": "The bridge held the proto 230 /17s.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "link"
+          },
+          "destination": {
+            "node": "p230"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "sends",
+      "description": "Something sends to 10.22.1.1 after the link is gone.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "sender"
+          },
+          "destination": {
+            "node": "table"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "lookup",
+      "description": "Longest prefix wins: the /16 blackhole beats the default /0.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "table"
+          },
+          "destination": {
+            "node": "blackhole"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "drop",
+      "description": "The blackhole drops it.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "blackhole"
+          },
+          "destination": {
+            "node": "dropped"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "never",
+      "description": "The default route only ever sees traffic that is not for the mesh.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "default"
+          },
+          "destination": {
+            "node": "internet"
+          }
+        }
+      }
+    }
+  ],
+  "flows": [
+    {
+      "unique-id": "drops",
+      "name": "A tunnel drops",
+      "description": "What happens to mesh traffic the moment its link goes.",
+      "transitions": [
+        {
+          "relationship-unique-id": "link-carried",
+          "sequence-number": 1,
+          "description": "The link goes, and its connected route with it."
+        },
+        {
+          "relationship-unique-id": "bridge-carried",
+          "sequence-number": 2,
+          "description": "The proto 230 routes through the bridge go too."
+        },
+        {
+          "relationship-unique-id": "sends",
+          "sequence-number": 3,
+          "description": "Traffic for the mesh keeps coming."
+        },
+        {
+          "relationship-unique-id": "lookup",
+          "sequence-number": 4,
+          "description": "The kernel looks up the route: the blackhole is the best match left."
+        },
+        {
+          "relationship-unique-id": "drop",
+          "sequence-number": 5,
+          "description": "Dropped, right here."
+        },
+        {
+          "relationship-unique-id": "never",
+          "sequence-number": 6,
+          "description": "Nothing for the mesh reaches the LAN or the internet."
+        }
+      ]
+    }
+  ]
+}

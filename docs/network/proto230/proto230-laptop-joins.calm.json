@@ -1,0 +1,321 @@
+{
+  "$schema": "https://calm.finos.org/release/1.1/meta/calm.json",
+  "unique-id": "proto230-laptop-joins",
+  "name": "Proto 230: A laptop joins with xdj",
+  "description": "gram joins through the hub, reaches a VM on box 5, and the reply finds its way back over a proto 230 route.",
+  "metadata": [
+    {
+      "source": "xdebbie docs/network/proto230/make.py"
+    },
+    {
+      "checked-live": "2026-11-27"
+    }
+  ],
+  "nodes": [
+    {
+      "unique-id": "you",
+      "node-type": "actor",
+      "name": "You",
+      "description": "The admin, at the hub and at the laptop."
+    },
+    {
+      "unique-id": "hub",
+      "node-type": "system",
+      "name": "timesink (the hub)",
+      "description": "Box 0; clients connect here."
+    },
+    {
+      "unique-id": "xdctl",
+      "node-type": "service",
+      "name": "xdctl mesh client add",
+      "description": "Gives the laptop a number (1) and prints its `xdj join` line."
+    },
+    {
+      "unique-id": "hub-wg",
+      "node-type": "network",
+      "name": "wg-flock (box 0)",
+      "description": "The hub's WireGuard; the laptop is a peer with allowed-ips 10.22.1.1/32."
+    },
+    {
+      "unique-id": "routed",
+      "node-type": "service",
+      "name": "mesh_routed",
+      "description": "One nftables accept on the hub: from 10.22.0.0/16 on wg-flock into the bridge."
+    },
+    {
+      "unique-id": "hub-br",
+      "node-type": "network",
+      "name": "virbr-xdebbie (box 0)",
+      "description": "10.23.0.1: where the hub meets the overlay."
+    },
+    {
+      "unique-id": "xdj",
+      "node-type": "service",
+      "name": "xdj (on gram)",
+      "description": "The mesh client: blackholes first, then the link, then routes via the hub."
+    },
+    {
+      "unique-id": "laptop-bh",
+      "node-type": "network",
+      "name": "Blackholes on gram",
+      "description": "10.22 and 10.23 /16 at metric 4294967295, before the link comes up."
+    },
+    {
+      "unique-id": "vm5",
+      "node-type": "system",
+      "name": "VM on box 5",
+      "description": "Any VM on simplyaviary, 10.23.5.x."
+    },
+    {
+      "unique-id": "sa-p230",
+      "node-type": "network",
+      "name": "proto 230 /17s on box 5",
+      "description": "10.22.0.0/17 and 10.22.128.0/17 via 10.23.0.1."
+    }
+  ],
+  "relationships": [
+    {
+      "unique-id": "hub-has-xdctl",
+      "description": "timesink (the hub) has xdctl mesh client add.",
+      "relationship-type": {
+        "composed-of": {
+          "container": "hub",
+          "nodes": [
+            "xdctl"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "hub-has-hub-wg",
+      "description": "timesink (the hub) has wg-flock (box 0).",
+      "relationship-type": {
+        "composed-of": {
+          "container": "hub",
+          "nodes": [
+            "hub-wg"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "hub-has-routed",
+      "description": "timesink (the hub) has mesh_routed.",
+      "relationship-type": {
+        "composed-of": {
+          "container": "hub",
+          "nodes": [
+            "routed"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "hub-has-hub-br",
+      "description": "timesink (the hub) has virbr-xdebbie (box 0).",
+      "relationship-type": {
+        "composed-of": {
+          "container": "hub",
+          "nodes": [
+            "hub-br"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "add-client",
+      "description": "You add the laptop's key on the hub.",
+      "relationship-type": {
+        "interacts": {
+          "actor": "you",
+          "nodes": [
+            "xdctl"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "join",
+      "description": "You run the printed `xdj join` line on the laptop.",
+      "relationship-type": {
+        "interacts": {
+          "actor": "you",
+          "nodes": [
+            "xdj"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "bh-first",
+      "description": "xdj puts the blackholes in before anything else, so nothing leaks while the link comes up.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "xdj"
+          },
+          "destination": {
+            "node": "laptop-bh"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "xdj-to-hub",
+      "description": "WireGuard to the hub; routes 10.23.0.0/16 via 10.22.0.1.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "xdj"
+          },
+          "destination": {
+            "node": "hub-wg"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "hub-forward",
+      "description": "The hub forwards the laptop's packet toward the bridge.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "hub-wg"
+          },
+          "destination": {
+            "node": "routed"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "into-bridge",
+      "description": "mesh_routed lets it onto the overlay.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "routed"
+          },
+          "destination": {
+            "node": "hub-br"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "to-vm",
+      "description": "Across Geneve to box 5's bridge and the VM.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "hub-br"
+          },
+          "destination": {
+            "node": "vm5"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "reply",
+      "description": "The VM answers 10.22.1.1; box 5 has no WireGuard peer for it.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "vm5"
+          },
+          "destination": {
+            "node": "sa-p230"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "back-via-hub",
+      "description": "proto 230 sends it back via 10.23.0.1, the way it came.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "sa-p230"
+          },
+          "destination": {
+            "node": "hub-br"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "home",
+      "description": "The hub hands it to WireGuard, and the laptop has its answer.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "hub-br"
+          },
+          "destination": {
+            "node": "hub-wg"
+          }
+        }
+      }
+    }
+  ],
+  "flows": [
+    {
+      "unique-id": "joins",
+      "name": "A laptop joins and talks to box 5",
+      "description": "From `client add` to a reply from a VM on another box.",
+      "transitions": [
+        {
+          "relationship-unique-id": "add-client",
+          "sequence-number": 1,
+          "description": "Add the client on the hub."
+        },
+        {
+          "relationship-unique-id": "join",
+          "sequence-number": 2,
+          "description": "Join on the laptop."
+        },
+        {
+          "relationship-unique-id": "bh-first",
+          "sequence-number": 3,
+          "description": "Blackholes first."
+        },
+        {
+          "relationship-unique-id": "xdj-to-hub",
+          "sequence-number": 4,
+          "description": "Up to the hub."
+        },
+        {
+          "relationship-unique-id": "hub-forward",
+          "sequence-number": 5,
+          "description": "The hub forwards it."
+        },
+        {
+          "relationship-unique-id": "into-bridge",
+          "sequence-number": 6,
+          "description": "Onto the overlay."
+        },
+        {
+          "relationship-unique-id": "to-vm",
+          "sequence-number": 7,
+          "description": "Over to box 5."
+        },
+        {
+          "relationship-unique-id": "reply",
+          "sequence-number": 8,
+          "description": "The VM answers."
+        },
+        {
+          "relationship-unique-id": "back-via-hub",
+          "sequence-number": 9,
+          "description": "Box 5's proto 230 route sends the reply to the hub."
+        },
+        {
+          "relationship-unique-id": "home",
+          "sequence-number": 10,
+          "description": "Back to the laptop."
+        }
+      ]
+    }
+  ]
+}

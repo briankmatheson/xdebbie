@@ -1,0 +1,262 @@
+{
+  "$schema": "https://calm.finos.org/release/1.1/meta/calm.json",
+  "unique-id": "proto230-vm-to-pod",
+  "name": "Proto 230: A packet from box 5 to box 0",
+  "description": "A VM on simplyaviary talks to a pod on timesink: one bridge across two boxes, and proto 230 only keeps the tunnel in WireGuard.",
+  "metadata": [
+    {
+      "source": "xdebbie docs/network/proto230/make.py"
+    },
+    {
+      "checked-live": "2026-11-27"
+    }
+  ],
+  "nodes": [
+    {
+      "unique-id": "box5",
+      "node-type": "system",
+      "name": "simplyaviary (box 5)",
+      "description": "Where the packet starts."
+    },
+    {
+      "unique-id": "vm5",
+      "node-type": "system",
+      "name": "VM on box 5",
+      "description": "A w10 worker on simplyaviary, 10.23.5.x."
+    },
+    {
+      "unique-id": "br5",
+      "node-type": "network",
+      "name": "virbr-xdebbie",
+      "description": "The overlay bridge on simplyaviary, 10.23.5.1."
+    },
+    {
+      "unique-id": "gnv5",
+      "node-type": "network",
+      "name": "gnv-b0",
+      "description": "The Geneve tunnel from box 5 to box 0."
+    },
+    {
+      "unique-id": "wg5",
+      "node-type": "network",
+      "name": "wg-flock",
+      "description": "WireGuard on simplyaviary, 10.22.5.1."
+    },
+    {
+      "unique-id": "wg0",
+      "node-type": "network",
+      "name": "timesink wg-flock + gnv-b5",
+      "description": "WireGuard and Geneve on timesink, 10.22.0.1."
+    },
+    {
+      "unique-id": "br0",
+      "node-type": "network",
+      "name": "timesink virbr-xdebbie",
+      "description": "The same overlay bridge, on timesink, 10.23.0.1."
+    },
+    {
+      "unique-id": "worker0",
+      "node-type": "system",
+      "name": "w10 worker on box 0",
+      "description": "A VM on timesink, 10.23.0.x."
+    },
+    {
+      "unique-id": "pod",
+      "node-type": "service",
+      "name": "Pod",
+      "description": "Runs inside the worker; the cluster's own network takes it from here."
+    }
+  ],
+  "relationships": [
+    {
+      "unique-id": "box5-has-vm5",
+      "description": "simplyaviary (box 5) has VM on box 5.",
+      "relationship-type": {
+        "composed-of": {
+          "container": "box5",
+          "nodes": [
+            "vm5"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "box5-has-br5",
+      "description": "simplyaviary (box 5) has virbr-xdebbie.",
+      "relationship-type": {
+        "composed-of": {
+          "container": "box5",
+          "nodes": [
+            "br5"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "box5-has-gnv5",
+      "description": "simplyaviary (box 5) has gnv-b0.",
+      "relationship-type": {
+        "composed-of": {
+          "container": "box5",
+          "nodes": [
+            "gnv5"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "box5-has-wg5",
+      "description": "simplyaviary (box 5) has wg-flock.",
+      "relationship-type": {
+        "composed-of": {
+          "container": "box5",
+          "nodes": [
+            "wg5"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "vm-to-br",
+      "description": "The VM sends to a 10.23 address: same network, so straight onto the bridge.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "vm5"
+          },
+          "destination": {
+            "node": "br5"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "br-to-gnv",
+      "description": "The bridge's forwarding table says that address lives behind box 0's tunnel.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "br5"
+          },
+          "destination": {
+            "node": "gnv5"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "gnv-to-wg",
+      "description": "Geneve wraps the frame in udp 6081 to 10.22.0.1, and the proto 230 /32 keeps that in WireGuard.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "gnv5"
+          },
+          "destination": {
+            "node": "wg5"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "wg-to-wg",
+      "description": "WireGuard encrypts it to timesink, which unwraps WireGuard, then Geneve.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "wg5"
+          },
+          "destination": {
+            "node": "wg0"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "wg-to-br",
+      "description": "The frame lands on timesink's half of the bridge.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "wg0"
+          },
+          "destination": {
+            "node": "br0"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "br-to-worker",
+      "description": "The bridge delivers it to the worker VM.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "br0"
+          },
+          "destination": {
+            "node": "worker0"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "worker-to-pod",
+      "description": "The worker hands it to the pod.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "worker0"
+          },
+          "destination": {
+            "node": "pod"
+          }
+        }
+      }
+    }
+  ],
+  "flows": [
+    {
+      "unique-id": "vm-to-pod",
+      "name": "VM on box 5 to a pod on box 0",
+      "description": "Follow one packet out of a VM and into a pod on another box.",
+      "transitions": [
+        {
+          "relationship-unique-id": "vm-to-br",
+          "sequence-number": 1,
+          "description": "Onto the local bridge."
+        },
+        {
+          "relationship-unique-id": "br-to-gnv",
+          "sequence-number": 2,
+          "description": "Into the Geneve tunnel for box 0."
+        },
+        {
+          "relationship-unique-id": "gnv-to-wg",
+          "sequence-number": 3,
+          "description": "Into WireGuard: the one place proto 230 shows up, the peer's /32."
+        },
+        {
+          "relationship-unique-id": "wg-to-wg",
+          "sequence-number": 4,
+          "description": "Across the wire, encrypted, and unwrapped on timesink."
+        },
+        {
+          "relationship-unique-id": "wg-to-br",
+          "sequence-number": 5,
+          "description": "Onto timesink's bridge."
+        },
+        {
+          "relationship-unique-id": "br-to-worker",
+          "sequence-number": 6,
+          "description": "Into the worker."
+        },
+        {
+          "relationship-unique-id": "worker-to-pod",
+          "sequence-number": 7,
+          "description": "Into the pod."
+        }
+      ]
+    }
+  ]
+}

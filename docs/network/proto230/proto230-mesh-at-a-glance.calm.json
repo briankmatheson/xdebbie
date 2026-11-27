@@ -1,0 +1,312 @@
+{
+  "$schema": "https://calm.finos.org/release/1.1/meta/calm.json",
+  "unique-id": "proto230-mesh-at-a-glance",
+  "name": "Proto 230: The mesh at a glance",
+  "description": "Two boxes, three mesh networks, and the one laptop: who carries what.",
+  "metadata": [
+    {
+      "source": "xdebbie docs/network/proto230/make.py"
+    },
+    {
+      "checked-live": "2026-11-27"
+    }
+  ],
+  "nodes": [
+    {
+      "unique-id": "mesh",
+      "node-type": "system",
+      "name": "The mesh",
+      "description": "Every box xdebbied joins, tied together by WireGuard."
+    },
+    {
+      "unique-id": "timesink",
+      "node-type": "system",
+      "name": "timesink (box 0, the hub)",
+      "description": "The founding box: lowest number, so it is the hub, and clients connect here."
+    },
+    {
+      "unique-id": "simplyaviary",
+      "node-type": "system",
+      "name": "simplyaviary (box 5)",
+      "description": "A box with no clients of its own, so it keeps proto 230 routes back to the hub."
+    },
+    {
+      "unique-id": "underlay",
+      "node-type": "network",
+      "name": "Underlay 10.22.0.0/16",
+      "description": "WireGuard link wg-flock; box N is 10.22.N.1."
+    },
+    {
+      "unique-id": "overlay",
+      "node-type": "network",
+      "name": "Overlay 10.23.0.0/16",
+      "description": "One bridge, virbr-xdebbie, stretched across boxes by Geneve; box N is 10.23.N.1."
+    },
+    {
+      "unique-id": "storage",
+      "node-type": "network",
+      "name": "Storage 10.24.0.0/16",
+      "description": "The bridge virbr-abe, where VMs reach abe's disks."
+    },
+    {
+      "unique-id": "vms",
+      "node-type": "system",
+      "name": "VMs",
+      "description": "w10's nodes and eyrie, on the overlay bridge."
+    },
+    {
+      "unique-id": "laptop",
+      "node-type": "system",
+      "name": "gram (xdj client 1)",
+      "description": "A laptop on the mesh: one WireGuard link to the hub, 10.22.1.1."
+    },
+    {
+      "unique-id": "default",
+      "node-type": "network",
+      "name": "Default route",
+      "description": "The LAN and the internet: where mesh traffic must never go."
+    }
+  ],
+  "relationships": [
+    {
+      "unique-id": "mesh-has-timesink",
+      "description": "The mesh has timesink (box 0, the hub).",
+      "relationship-type": {
+        "composed-of": {
+          "container": "mesh",
+          "nodes": [
+            "timesink"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "mesh-has-simplyaviary",
+      "description": "The mesh has simplyaviary (box 5).",
+      "relationship-type": {
+        "composed-of": {
+          "container": "mesh",
+          "nodes": [
+            "simplyaviary"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "mesh-has-underlay",
+      "description": "The mesh has Underlay 10.22.0.0/16.",
+      "relationship-type": {
+        "composed-of": {
+          "container": "mesh",
+          "nodes": [
+            "underlay"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "mesh-has-overlay",
+      "description": "The mesh has Overlay 10.23.0.0/16.",
+      "relationship-type": {
+        "composed-of": {
+          "container": "mesh",
+          "nodes": [
+            "overlay"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "mesh-has-storage",
+      "description": "The mesh has Storage 10.24.0.0/16.",
+      "relationship-type": {
+        "composed-of": {
+          "container": "mesh",
+          "nodes": [
+            "storage"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "ts-underlay",
+      "description": "timesink is 10.22.0.1 on wg-flock.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "timesink"
+          },
+          "destination": {
+            "node": "underlay"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "sa-underlay",
+      "description": "simplyaviary is 10.22.5.1 on wg-flock.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "simplyaviary"
+          },
+          "destination": {
+            "node": "underlay"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "overlay-in-underlay",
+      "description": "Geneve (udp 6081) carries the bridge between boxes, inside WireGuard.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "overlay"
+          },
+          "destination": {
+            "node": "underlay"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "ts-overlay",
+      "description": "timesink's bridge address is 10.23.0.1.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "timesink"
+          },
+          "destination": {
+            "node": "overlay"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "sa-overlay",
+      "description": "simplyaviary's bridge address is 10.23.5.1.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "simplyaviary"
+          },
+          "destination": {
+            "node": "overlay"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "vms-overlay",
+      "description": "VMs get 10.23 addresses by DHCP from their box.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "vms"
+          },
+          "destination": {
+            "node": "overlay"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "vms-storage",
+      "description": "VMs reach their disks on 10.24.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "vms"
+          },
+          "destination": {
+            "node": "storage"
+          }
+        }
+      },
+      "protocol": "TCP"
+    },
+    {
+      "unique-id": "laptop-hub",
+      "description": "The laptop talks WireGuard to the hub only.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "laptop"
+          },
+          "destination": {
+            "node": "timesink"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "sa-routes-back",
+      "description": "proto 230: 10.22.0.0/17 and 10.22.128.0/17 via 10.23.0.1, so replies to clients go back through the hub.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "simplyaviary"
+          },
+          "destination": {
+            "node": "timesink"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "boxes-default",
+      "description": "Only non-mesh traffic leaves this way; blackholes catch the rest.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "mesh"
+          },
+          "destination": {
+            "node": "default"
+          }
+        }
+      }
+    }
+  ],
+  "flows": [
+    {
+      "unique-id": "glance",
+      "name": "Who routes what",
+      "description": "A tour of the mesh, network by network.",
+      "transitions": [
+        {
+          "relationship-unique-id": "ts-underlay",
+          "sequence-number": 1,
+          "description": "Every box has an underlay address on wg-flock."
+        },
+        {
+          "relationship-unique-id": "overlay-in-underlay",
+          "sequence-number": 2,
+          "description": "The overlay rides inside the underlay."
+        },
+        {
+          "relationship-unique-id": "vms-overlay",
+          "sequence-number": 3,
+          "description": "VMs live on the overlay."
+        },
+        {
+          "relationship-unique-id": "laptop-hub",
+          "sequence-number": 4,
+          "description": "A laptop joins through the hub."
+        },
+        {
+          "relationship-unique-id": "sa-routes-back",
+          "sequence-number": 5,
+          "description": "Other boxes route client replies back through the hub: proto 230."
+        },
+        {
+          "relationship-unique-id": "boxes-default",
+          "sequence-number": 6,
+          "description": "Nothing for 10.22, 10.23 or 10.24 ever takes the default route."
+        }
+      ]
+    }
+  ]
+}
