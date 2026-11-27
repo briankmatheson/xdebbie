@@ -25,7 +25,7 @@
 use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
 
-use super::model::{MeshSpec, underlay_addr};
+use super::model::{MeshSpec, bridge_addr, underlay_addr};
 
 /// `ip route ... proto 230`: marks the routes this module owns.
 pub const ROUTE_PROTO: &str = "230";
@@ -58,7 +58,10 @@ pub fn wanted(spec: &MeshSpec) -> Vec<HostRoute> {
         .collect();
     out.extend(halves().into_iter().map(|dst| HostRoute {
         dst,
-        via: Some(spec.probe_addr(hub)),
+        // the hub's bridge address, never its probe address: with
+        // `fdb = learn` that is the underlay 10.22.<hub>.1, not on the bridge
+        // (0.22.1 on box 5: the /17s were refused, reconcile stuck)
+        via: Some(bridge_addr(hub.box_id)),
         dev: spec.bridge(),
     }));
     out.sort();
@@ -134,7 +137,7 @@ pub fn replace_args(r: &HostRoute) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mesh::model::{ClientSpec, PeerSpec, WireguardSpec};
+    use crate::mesh::model::{ClientSpec, FdbMode, PeerSpec, WireguardSpec};
 
     fn box5() -> MeshSpec {
         MeshSpec {
@@ -191,6 +194,18 @@ mod tests {
             })
             .is_empty()
         );
+    }
+
+    #[test]
+    fn the_gateway_is_the_hubs_bridge_address_in_every_fdb_mode() {
+        for fdb in [FdbMode::Learn, FdbMode::Derived] {
+            let s = MeshSpec {
+                fdb: fdb.clone(),
+                ..box5()
+            };
+            let vias: Vec<_> = wanted(&s).iter().filter_map(|x| x.via).collect();
+            assert_eq!(vias, vec![Ipv4Addr::new(10, 23, 0, 1); 2], "{fdb:?}");
+        }
     }
 
     #[test]

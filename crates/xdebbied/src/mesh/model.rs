@@ -185,6 +185,11 @@ pub fn underlay_addr(box_id: u8) -> Ipv4Addr {
     Ipv4Addr::new(10, 22, box_id, 1)
 }
 
+/// A box's address on the shared overlay bridge: `10.23.<box>.1`.
+pub fn bridge_addr(box_id: u8) -> Ipv4Addr {
+    Ipv4Addr::new(10, 23, box_id, 1)
+}
+
 /// `[mesh.wireguard]` / `spec.wireguard`: when present the mesh owns the
 /// underlay interface named by `spec.underlay` and keeps its peers in sync.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -325,7 +330,7 @@ impl MeshSpec {
     pub fn probe_addr(&self, p: &PeerSpec) -> Ipv4Addr {
         match (p.probe, &self.fdb) {
             (Some(a), _) => a,
-            (None, FdbMode::Derived) => Ipv4Addr::new(10, 23, p.box_id, 1),
+            (None, FdbMode::Derived) => bridge_addr(p.box_id),
             (None, FdbMode::Learn) => p.remote,
         }
     }
