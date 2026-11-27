@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.2] - 2026-11-27
+
+### Fixed
+- Routes to clients behind another box (0.22.1) used the hub's probe
+  address as the gateway; with `fdb = learn` that is its underlay
+  `10.22.<hub>.1`, which is not on the bridge, so the kernel refused both
+  `/17`s and reconcile stayed at `Reconciling`. The gateway is now always
+  the hub's bridge address, `10.23.<hub>.1`.
+
 ## [0.22.1] - 2026-11-27
 
 ### Fixed
