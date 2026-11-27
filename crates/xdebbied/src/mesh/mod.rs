@@ -46,6 +46,7 @@ pub mod metrics;
 pub mod model;
 pub mod plan;
 pub mod probe;
+pub mod routes;
 pub mod validate;
 pub mod wg;
 
@@ -482,6 +483,7 @@ impl MeshManager {
             warn!("mesh: deleting nft table failed: {e:#}");
             ok = false;
         }
+        ok &= self.sync_routes(&[]);
         *self.last_nft.lock().unwrap() = None;
         let _ = std::fs::remove_file(self.state_dir.join(NFT_FILE));
         self.stop_all_probers();
@@ -511,6 +513,35 @@ impl MeshManager {
         } else {
             "error"
         }
+    }
+
+    /// Make this box's `proto 230` routes exactly `wanted`; false if any
+    /// change failed (logged; retried next round).
+    fn sync_routes(&self, wanted: &[routes::HostRoute]) -> bool {
+        let have = match self.ops.routes_ours() {
+            Ok(h) => h,
+            Err(e) => {
+                warn!("mesh: listing routes failed: {e:#}");
+                return false;
+            }
+        };
+        let (set, del) = routes::diff(wanted, &have);
+        let mut ok = true;
+        for r in &del {
+            info!(dst = %r.dst, dev = %r.dev, "mesh: route removed");
+            if let Err(e) = self.ops.route_del(r) {
+                warn!(dst = %r.dst, "mesh: removing route failed: {e:#}");
+                ok = false;
+            }
+        }
+        for r in &set {
+            info!(dst = %r.dst, via = ?r.via, dev = %r.dev, "mesh: route set");
+            if let Err(e) = self.ops.route_replace(r) {
+                warn!(dst = %r.dst, "mesh: setting route failed: {e:#}");
+                ok = false;
+            }
+        }
+        ok
     }
 
     /// Delete every WireGuard link we own among the names the mesh may have
@@ -896,6 +927,11 @@ impl MeshManager {
                 }
                 Err(e) => warn!("mesh: deleting nft table failed: {e:#}"),
             }
+        }
+
+        // 9b. routes back to other boxes' clients (routes.rs)
+        if !self.sync_routes(&routes::wanted(spec)) {
+            all_ok = false;
         }
 
         // 10. bridge checks. STP is forced off by the plan; the condition

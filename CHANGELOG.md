@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Clients reach VMs on every box, not just their hub's. A box with no
+  clients of its own routes the underlay back through its hub's bridge
+  (`10.22.0.0/17` and `10.22.128.0/17 via 10.23.<hub>.1`, each peer's
+  `/32` kept in WireGuard, all `proto 230`, converged every reconcile and
+  removed on teardown; `mesh/routes.rs`). VMs on box 5 answered gram into
+  WireGuard, where no peer carried it (2026-11-26).
+- VM egress masquerades the whole overlay `cidr`, not this box's /24: a VM
+  keeps its address wherever it runs (eyrie-4 holds 10.23.0.5 on box 5,
+  the w10 nodes 10.23.5.x on timesink).
+- A joining box whose cluster runs a resolver on its own bridge (dns = the
+  gateway, no `upstream_dns`) tells its VMs to ask that bridge, not its own,
+  which forwarded nowhere.
+
+### Added
+- `tests/regression/`: live, read-only pytest checks from a machine on the
+  mesh (VM reach from any box, client routes, per-box DHCP DNS, VM egress);
+  each names the day it broke.
+
 ### Added
 - Mesh clients (xdj): `spec.clients[]` (`{box, pubkey, name?, endpoint?}`,
   also `[[mesh.clients]]`) for laptops and servers that join with xdj. A
