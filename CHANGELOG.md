@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- VMs are named `CLUSTER-ROLE-HOST-ID` in libvirt: the cluster (capx's
+  `xdebbie.dev/cluster` without its namespace, or a hand-made VM's `role`
+  label), `cp` or `md`, the host's short name, and the VM's UUID in URL-safe
+  base64 (22 characters, never changes). A new VM gets it when defined, a
+  moved one on arrival (`virsh migrate --dname`), a shut-off one before it
+  starts (`virsh domrename`); a running VM keeps its old name until then
+  (libvirt renames only shut-off domains). xdebbied now finds domains by
+  UUID, so a rename never loses one. Disk and seed volumes keep their names.
+
 ## [0.22.3] - 2026-11-27
 
 ### Added

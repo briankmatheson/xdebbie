@@ -594,10 +594,110 @@ pub struct Vm {
     pub updated: DateTime<Utc>,
 }
 
+/// capx's label naming a VM's cluster, as `NAMESPACE.CLUSTER`.
+pub const CLUSTER_LABEL: &str = "xdebbie.dev/cluster";
+
+/// A part of a system name: lowercase letters, digits and `-` only, the
+/// rest dropped, never empty (`vm`).
+fn name_part(s: &str) -> String {
+    let p: String = s
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .collect();
+    let p = p.trim_matches('-');
+    if p.is_empty() {
+        "vm".into()
+    } else {
+        p.to_string()
+    }
+}
+
+/// A VM id as URL-safe base64 without padding: its 16 bytes in 22
+/// characters of `A-Z a-z 0-9 - _`.
+pub fn id_b64(id: &Uuid) -> String {
+    b64url(id.as_bytes())
+}
+
+/// RFC 4648 section 5 (URL- and filename-safe) base64, no padding.
+fn b64url(b: &[u8]) -> String {
+    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut out = String::with_capacity(b.len().div_ceil(3) * 4);
+    for c in b.chunks(3) {
+        let n = (u32::from(c[0]) << 16)
+            | (u32::from(*c.get(1).unwrap_or(&0)) << 8)
+            | u32::from(*c.get(2).unwrap_or(&0));
+        for i in 0..=c.len() {
+            out.push(A[((n >> (18 - 6 * i)) & 63) as usize] as char);
+        }
+    }
+    out
+}
+
 impl Vm {
-    /// libvirt domain name: stable, unique, human-readable.
+    /// The VM's stable name for what it owns on a host: its disk and seed
+    /// volumes, its LVM volumes, the agent's bookkeeping. Never changes, so
+    /// a rename never loses a disk. Not the libvirt domain's name any more:
+    /// see `system_name` and `domain_ref` (docs/compute.md, "VM names").
     pub fn domain_name(&self) -> String {
         self.spec.name.clone()
+    }
+    /// How xdebbied finds the VM's libvirt domain: its UUID, which is the
+    /// VM's id (`<uuid>` in the domain XML). Unlike the name, it never
+    /// changes, so `virsh` finds the domain whatever it is called.
+    pub fn domain_ref(&self) -> String {
+        self.id.to_string()
+    }
+    /// The libvirt name the domain should have on `host`:
+    /// `CLUSTER-ROLE-HOST-ID` (the user, 2026-11-27: "we'll (re) name vms
+    /// with CLUSTER_NAME-ROLE-CURRENT_HYPERVISOR_NAME", "vm uuid won't
+    /// change. base64 please"), e.g. `w10-md-timesink-BqJ8kDUXTV2kGm4jK1ixUg`.
+    /// The id part is unique and never changes; the rest follows the VM's
+    /// host, so it changes when the VM moves or its host is renamed.
+    pub fn system_name(&self, host: &str) -> String {
+        format!(
+            "{}-{}-{}-{}",
+            name_part(&self.cluster_name()),
+            self.role(),
+            name_part(host.split('.').next().unwrap_or(host)),
+            id_b64(&self.id)
+        )
+    }
+    /// The cluster the VM belongs to: capx's `xdebbie.dev/cluster` label
+    /// without its namespace (`default.w10` -> `w10`); for a VM made by hand,
+    /// its `role` label before `-control-plane`/`-worker`
+    /// (`eyrie-control-plane` -> `eyrie`); else its name up to the first `-`.
+    pub fn cluster_name(&self) -> String {
+        let l = &self.spec.labels;
+        if let Some(c) = l.get(CLUSTER_LABEL) {
+            return c
+                .rsplit_once('.')
+                .map_or(c.as_str(), |(_, n)| n)
+                .to_string();
+        }
+        if let Some(r) = l.get("role") {
+            for tail in ["-control-plane", "-worker"] {
+                if let Some(c) = r.strip_suffix(tail) {
+                    return c.to_string();
+                }
+            }
+        }
+        self.spec.name.split('-').next().unwrap_or("vm").to_string()
+    }
+    /// `cp` for a control-plane VM (capx's placement flag, or a `role` label
+    /// ending in `control-plane`), `md` for any other (a MachineDeployment's
+    /// worker, as Cluster API calls them).
+    pub fn role(&self) -> &'static str {
+        let labelled = self
+            .spec
+            .labels
+            .get("role")
+            .is_some_and(|r| r.ends_with("control-plane"));
+        if self.spec.placement.control_plane || labelled {
+            "cp"
+        } else {
+            "md"
+        }
     }
     /// Cluster API providerID.
     pub fn provider_id(&self) -> String {
@@ -1161,5 +1261,104 @@ mod compat_tests {
                 .get("deleting")
                 .is_none()
         );
+    }
+}
+
+/// VM names (docs/compute.md, "VM names").
+#[cfg(test)]
+mod name_tests {
+    use super::*;
+    use chrono::Utc;
+
+    fn vm(name: &str, id: &str, labels: &[(&str, &str)], cp: bool) -> Vm {
+        Vm {
+            id: id.parse().unwrap(),
+            spec: VmSpec {
+                name: name.into(),
+                vcpus: 2,
+                memory_mib: 4096,
+                disk_gib: 20,
+                data_disk_gib: None,
+                ip: None,
+                storage: Default::default(),
+                image: "debian-13".into(),
+                placement: Placement {
+                    control_plane: cp,
+                    ..Default::default()
+                },
+                user_data: None,
+                meta_data: Default::default(),
+                labels: labels
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+            },
+            phase: VmPhase::Running,
+            power: PowerIntent::On,
+            host: None,
+            addresses: vec![],
+            ip: None,
+            disks: Vec::new(),
+            message: None,
+            migrate_to: None,
+            reboot_generation: 0,
+            observed_reboot_generation: 0,
+            created: Utc::now(),
+            updated: Utc::now(),
+        }
+    }
+    const ID: &str = "06a27c90-3517-4d5d-a41a-6e232b58b152";
+
+    #[test]
+    fn the_id_is_its_uuid_in_url_safe_base64() {
+        assert_eq!(id_b64(&ID.parse().unwrap()), "BqJ8kDUXTV2kGm4jK1ixUg");
+        // both URL-safe characters, and no padding (checked with Python's
+        // base64.urlsafe_b64encode)
+        assert_eq!(
+            id_b64(&"fbffbf00-0000-4000-8000-0000000000ff".parse().unwrap()),
+            "-_-_AAAAQACAAAAAAAAA_w"
+        );
+    }
+
+    #[test]
+    fn a_capx_worker_and_control_plane() {
+        let l = [
+            (CLUSTER_LABEL, "default.w10"),
+            ("xdebbie.dev/machine", "default.w10-md-9nz9l-68r6p"),
+        ];
+        let w = vm("w10-md-9nz9l-68r6p", ID, &l, false);
+        assert_eq!(
+            w.system_name("timesink.bmath.nyc"),
+            "w10-md-timesink-BqJ8kDUXTV2kGm4jK1ixUg"
+        );
+        let c = vm("w10-cp-9mxps", ID, &l, true);
+        assert_eq!(
+            c.system_name("simplyaviary"),
+            "w10-cp-simplyaviary-BqJ8kDUXTV2kGm4jK1ixUg"
+        );
+    }
+
+    #[test]
+    fn a_vm_made_by_hand_goes_by_its_role_label() {
+        let e = vm("eyrie-4", ID, &[("role", "eyrie-control-plane")], false);
+        assert_eq!(
+            e.system_name("simplyaviary.bmath.nyc"),
+            "eyrie-cp-simplyaviary-BqJ8kDUXTV2kGm4jK1ixUg"
+        );
+        let bare = vm("scratch-1", ID, &[], false);
+        assert_eq!(
+            bare.system_name("Box_9"),
+            "scratch-md-box9-BqJ8kDUXTV2kGm4jK1ixUg"
+        );
+    }
+
+    #[test]
+    fn only_the_host_part_changes_when_it_moves() {
+        let w = vm("w10-md-a", ID, &[(CLUSTER_LABEL, "default.w10")], false);
+        let (a, b) = (w.system_name("timesink"), w.system_name("simplyaviary"));
+        assert_ne!(a, b);
+        assert_eq!(a.rsplit('-').next(), b.rsplit('-').next());
+        assert_eq!(w.domain_name(), "w10-md-a", "disks keep the stable name");
+        assert_eq!(w.domain_ref(), ID);
     }
 }

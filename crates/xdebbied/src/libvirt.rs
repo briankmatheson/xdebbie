@@ -315,6 +315,23 @@ impl Virsh {
             .is_ok()
     }
 
+    /// Give a shut-off domain its system name before it starts (docs/
+    /// compute.md, "VM names"): libvirt renames a domain only while it is
+    /// off, so a running VM keeps its old name until its next start or move.
+    async fn rename_if_off(&self, host: &Host, vm: &Vm) -> Result<()> {
+        if self.state(host, vm).await? != Some(DomState::Off) {
+            return Ok(());
+        }
+        let want = vm.system_name(&host.name);
+        let have = self.run(&host.uri, &["domname", &vm.domain_ref()]).await?;
+        if have.trim() == want {
+            return Ok(());
+        }
+        tracing::info!(vm = %vm.spec.name, from = %have.trim(), to = %want, "renaming domain");
+        self.run(&host.uri, &["domrename", &vm.domain_ref(), &want])
+            .await
+            .map(drop)
+    }
     fn disk_vol(vm: &Vm) -> String {
         format!("{}.qcow2", vm.domain_name())
     }
@@ -917,7 +934,7 @@ pub fn domain_xml(
   </devices>
 </domain>
 "#,
-        name = vm.domain_name(),
+        name = esc(&vm.system_name(&host.name)),
         uuid = vm.id,
         vmname = esc(&vm.spec.name),
         mem = vm.spec.memory_mib,
@@ -1223,7 +1240,7 @@ impl Hypervisor for Virsh {
     }
 
     async fn state(&self, host: &Host, vm: &Vm) -> Result<Option<DomState>> {
-        match self.run(&host.uri, &["domstate", &vm.domain_name()]).await {
+        match self.run(&host.uri, &["domstate", &vm.domain_ref()]).await {
             Ok(s) => Ok(Some(match s.trim() {
                 "running" => DomState::Running,
                 "shut off" => DomState::Off,
@@ -1372,7 +1389,7 @@ impl Hypervisor for Virsh {
             let storage = storage_nic(self.network.as_ref(), host, vm);
             tokio::fs::write(f.path(), domain_xml(host, vm, vg, mtu, storage.as_ref())).await?;
             self.run(&host.uri, &["define", p(f.path())]).await?;
-            self.run(&host.uri, &["autostart", &vm.domain_name()])
+            self.run(&host.uri, &["autostart", &vm.domain_ref()])
                 .await?;
         }
         Ok(())
@@ -1385,7 +1402,8 @@ impl Hypervisor for Virsh {
         // Idempotent: a VM that is already up (started by hand, by libvirt
         // autostart, or by a reconcile that lost its reply) must not wedge
         // in Provisioning with "Domain is already active".
-        match self.run(&host.uri, &["start", &vm.domain_name()]).await {
+        self.rename_if_off(host, vm).await?;
+        match self.run(&host.uri, &["start", &vm.domain_ref()]).await {
             Ok(_) => Ok(()),
             Err(e) if e.to_string().contains("already active") => Ok(()),
             Err(e) => Err(e),
@@ -1393,18 +1411,18 @@ impl Hypervisor for Virsh {
     }
     async fn shutdown(&self, host: &Host, vm: &Vm, force: bool) -> Result<()> {
         let cmd = if force { "destroy" } else { "shutdown" };
-        self.run(&host.uri, &[cmd, &vm.domain_name()])
+        self.run(&host.uri, &[cmd, &vm.domain_ref()])
             .await
             .map(drop)
     }
     async fn reboot(&self, host: &Host, vm: &Vm) -> Result<()> {
-        self.run(&host.uri, &["reboot", &vm.domain_name()])
+        self.run(&host.uri, &["reboot", &vm.domain_ref()])
             .await
             .map(drop)
     }
 
     async fn destroy(&self, host: &Host, vm: &Vm) -> Result<()> {
-        let d = vm.domain_name();
+        let d = vm.domain_ref();
         if self.state(host, vm).await?.is_some() {
             let _ = self.run(&host.uri, &["destroy", &d]).await;
             self.run(
@@ -1450,7 +1468,7 @@ impl Hypervisor for Virsh {
             .nvme
             .wait_dev(&d, std::time::Duration::from_secs(15))
             .await?;
-        let dom = vm.domain_name();
+        let dom = vm.domain_ref();
         let blk = parse_domblklist(&self.run(&host.uri, &["domblklist", &dom]).await?);
         if let Some((t, _)) = blk.iter().find(|(_, src)| *src == dev) {
             // Plugged in already: the guest sees the size the volume has now
@@ -1526,10 +1544,7 @@ impl Hypervisor for Virsh {
     async fn addresses(&self, host: &Host, vm: &Vm) -> Result<Vec<Address>> {
         for src in ["agent", "arp", "lease"] {
             if let Ok(out) = self
-                .run(
-                    &host.uri,
-                    &["domifaddr", &vm.domain_name(), "--source", src],
-                )
+                .run(&host.uri, &["domifaddr", &vm.domain_ref(), "--source", src])
                 .await
             {
                 let a = parse_domifaddr(&out);
@@ -1572,7 +1587,9 @@ impl Hypervisor for Virsh {
                 "--undefinesource",
                 "--copy-storage-inc",
                 "--verbose",
-                &vm.domain_name(),
+                "--dname",
+                &vm.system_name(&dst.name),
+                &vm.domain_ref(),
                 &dst.uri,
             ],
         )
