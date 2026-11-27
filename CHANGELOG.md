@@ -7,7 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.22.0] - 2026-11-27
+## [0.22.1] - 2026-11-27
+
+### Fixed
+- CI: the package step was OOM-killed at 1024MiB building the release, so
+  v0.22.0 was never published; back to 2048MiB. 0.22.1 is 0.22.0 as released.
+
+## [0.22.0] - 2026-11-27 (tagged, never published)
 
 ### Fixed (joining a box that was set up before; found joining simplyaviary, 2026-11-25)
 - A renumbered box drops its old underlay address: the mesh removes every
