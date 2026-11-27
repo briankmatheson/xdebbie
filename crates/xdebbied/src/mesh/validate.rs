@@ -361,7 +361,7 @@ pub fn validate(spec: &MeshSpec, env: &Env) -> Vec<FieldError> {
     e
 }
 
-/// Each `blackholes` entry must be an IPv4 network (docs/mesh.md,
+/// Each `blackholes` entry must be an IPv4 network (docs/network/routes-and-firewall.md,
 /// "Blackhole routes for the mesh networks"): `a.b.c.d/n`, n 1–32, no
 /// host bits, since that is what `ip route add blackhole` accepts.
 fn validate_blackholes(spec: &MeshSpec, e: &mut Vec<FieldError>) {

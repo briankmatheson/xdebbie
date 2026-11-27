@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Every box tells the leader about its own hypervisor.
 //!
-//! Stores are per box (docs/autodiscovery.md): a `[[hosts]]` entry seeds
+//! Stores are per box (docs/compute/leader.md): a `[[hosts]]` entry seeds
 //! the store of the daemon that read it, and nobody reads a follower's
 //! store. `bootstrap --join` registers once, with the CA box; that is not
 //! enough once leadership moves to a box that never saw the entry (the CA

@@ -26,7 +26,7 @@ pub const DEFAULT_WG_PORT: u16 = 51820;
 pub const DEFAULT_WG_MTU: u16 = 1420;
 /// Private key file inside the state directory.
 pub const WG_KEY_FILE: &str = "wg.key";
-/// Mesh networks blackholed when `blackholes` is absent (docs/mesh.md,
+/// Mesh networks blackholed when `blackholes` is absent (docs/network/routes-and-firewall.md,
 /// "Blackhole routes for the mesh networks"): the WireGuard underlay, the
 /// VM overlay and the planned storage mesh.
 pub const DEFAULT_BLACKHOLES: [&str; 3] = ["10.22.0.0/16", "10.23.0.0/16", "10.24.0.0/16"];
@@ -273,7 +273,7 @@ pub struct MeshSpec {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clients: Vec<ClientSpec>,
     /// CIDRs to blackhole at the worst metric so a vanished connected
-    /// route drops traffic instead of leaking it (docs/mesh.md, "Blackhole
+    /// route drops traffic instead of leaking it (docs/network/routes-and-firewall.md, "Blackhole
     /// routes for the mesh networks"). `[]` turns this off.
     #[serde(default = "d_blackholes")]
     pub blackholes: Vec<String>,
@@ -330,7 +330,7 @@ impl Default for MeshSpec {
 }
 
 impl MeshSpec {
-    /// The blackhole routes this spec wants (docs/mesh.md, "Blackhole
+    /// The blackhole routes this spec wants (docs/network/routes-and-firewall.md, "Blackhole
     /// routes for the mesh networks"): every valid `blackholes` entry.
     /// Without managed WireGuard the underlay is the operator's, so a net
     /// holding a peer's `remote` is skipped: our blackhole could beat the
@@ -655,7 +655,7 @@ pub struct MeshConfig {
     /// `[[mesh.clients]]`
     #[serde(default)]
     pub clients: Vec<ClientSpec>,
-    /// Mesh networks to blackhole (docs/mesh.md, "Blackhole routes for the
+    /// Mesh networks to blackhole (docs/network/routes-and-firewall.md, "Blackhole routes for the
     /// mesh networks"). Absent = `DEFAULT_BLACKHOLES`; `[]` = none.
     #[serde(default = "d_blackholes")]
     pub blackholes: Vec<String>,

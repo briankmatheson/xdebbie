@@ -1,5 +1,5 @@
 # Copy to terraform.tfvars (not committed) and fill in:
-# docs/how-to/cloud-mesh-client.md, "1. Fill in the variables".
+# docs/network/clients.md, "A cloud server as a client".
 name          = "backup2"
 box           = 3
 hub_pubkey    = "HUB_PUBKEY="        # xdctl mesh wg, on the hub

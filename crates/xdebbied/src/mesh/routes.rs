@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Routes back to xdj clients that are not this box's (docs/mesh.md,
+//! Routes back to xdj clients that are not this box's (docs/network/clients.md,
 //! "Clients behind another box").
 //!
 //! A client has one WireGuard link, to its hub. It reaches every box's VMs

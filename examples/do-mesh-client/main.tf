@@ -1,10 +1,10 @@
 # The server, its firewall and its WireGuard setup.
-# Design: docs/how-to/cloud-mesh-client.md, "How it works".
+# Design: docs/network/clients.md, "A cloud server as a client".
 
 resource "wireguard_asymmetric_key" "client" {}
 
 locals {
-  # docs/mesh.md, "Clients (xdj)": a client is 10.22.BOX.1 and talks to the
+  # docs/network/clients.md: a client is 10.22.BOX.1 and talks to the
   # hub (10.22.0.1) and, through it, the overlay (10.23.0.0/16).
   mesh_address = "10.22.${var.box}.1"
   wg_conf = templatefile("${path.module}/wg-flock.conf.tftpl", {
@@ -29,7 +29,7 @@ resource "digitalocean_droplet" "client" {
 }
 
 # First layer: DigitalOcean's firewall. Second: ufw on the server (cloud-init).
-# docs/how-to/cloud-mesh-client.md, "What is open".
+# docs/network/clients.md, "A cloud server as a client".
 resource "digitalocean_firewall" "client" {
   name        = "${var.name}-mesh-client"
   droplet_ids = [digitalocean_droplet.client.id]

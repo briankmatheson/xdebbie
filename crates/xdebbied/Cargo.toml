@@ -36,10 +36,10 @@ assets = [
     # docs live with the copyright file, in /usr/share/doc/xdebbied
     ["../../README.md", "usr/share/doc/xdebbied/", "644"],
     # keeps its old name: postinst and the unit point at BOOTSTRAP.md
-    ["../../docs/bootstrap.md", "usr/share/doc/xdebbied/BOOTSTRAP.md", "644"],
-    ["../../docs/mesh.md", "usr/share/doc/xdebbied/", "644"],
-    ["../../docs/network.md", "usr/share/doc/xdebbied/", "644"],
-    ["../../docs/troubleshooting.md", "usr/share/doc/xdebbied/", "644"],
+    ["../../docs/compute/boxes.md", "usr/share/doc/xdebbied/BOOTSTRAP.md", "644"],
+    ["../../docs/network/mesh.md", "usr/share/doc/xdebbied/", "644"],
+    ["../../docs/network/addresses-and-dhcp.md", "usr/share/doc/xdebbied/network.md", "644"],
+    ["../../docs/reference/troubleshooting.md", "usr/share/doc/xdebbied/", "644"],
     ["../../docs/reference/configuration.md", "usr/share/doc/xdebbied/", "644"],
     ["assets/modules-load.d/xdebbie-mesh.conf", "etc/modules-load.d/", "644"],
     ["assets/apparmor.d/local/wg", "etc/apparmor.d/local/", "644"],

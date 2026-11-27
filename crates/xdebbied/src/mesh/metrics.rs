@@ -55,7 +55,7 @@ impl Snapshot {
         self.peers.retain(|k, _| keep.contains(k));
     }
 
-    /// Prometheus text exposition, for a future `/metrics` (docs/mesh.md).
+    /// Prometheus text exposition, for a future `/metrics` (docs/network/mesh.md).
     #[allow(dead_code)]
     pub fn render_prometheus(&self) -> String {
         let mut o = String::new();

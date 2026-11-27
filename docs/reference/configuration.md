@@ -51,10 +51,10 @@ Rules that apply to the whole file:
 | `qemu_img` | string | `"qemu-img"` | not written | The `qemu-img` binary, for ABE disks. |
 | `nvme_sys` | string | `"/sys/class/nvme"` | not written | sysfs directory listing NVMe controllers. |
 | `seed_command` | array of strings | `["cloud-localds", "--network-config={net}", "--vendor-data={vendor}", "{out}", "{user}", "{meta}"]` | same | Builds the NoCloud seed ISO. `{out}`, `{user}`, `{meta}`, `{net}` and `{vendor}` are replaced with file paths. |
-| `enable_discovery` | boolean | `false` | `false` | Multicast discovery and leader election. See [Discovery, election and the leader](../autodiscovery.md). `PUT /v1/settings` changes it at runtime. |
+| `enable_discovery` | boolean | `false` | `false` | Multicast discovery and leader election. See [Discovery](../network/discovery.md) and [The leader](../compute/leader.md). `PUT /v1/settings` changes it at runtime. |
 | `multicast_addr` | address:port | `"239.0.0.42:23442"` | same | Discovery group and port. |
 | `discovery_accept_unsigned` | boolean | `false` | not written | Also hear unsigned discovery messages. Set it only while a rolling upgrade still has daemons older than signed discovery. |
-| `volume_group` | string | unset | not written | LVM volume group for VM disks. With `thin_pool`, disks are thin snapshots. Without, they are qcow2 overlays. |
+| `volume_group` | string | unset | not written | LVM volume group for VM disks. Unset: qcow2 files in the libvirt pool. Set it together with `thin_pool` ([Local disks](../storage/local.md)). |
 | `thin_pool` | string | unset | not written | Thin pool inside `volume_group`. |
 
 `policy = "binpack"` is not valid; the value is `"pack"`. (Releases up to
@@ -64,7 +64,7 @@ Rules that apply to the whole file:
 
 Overlay addressing and the built-in DHCP responder. Without this table, VMs
 get no address from xdebbied and another DHCP server must serve the bridge.
-See [Overlay addressing and DHCP](../network.md).
+See [Addresses and DHCP](../network/addresses-and-dhcp.md).
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -89,7 +89,7 @@ See [Overlay addressing and DHCP](../network.md).
 
 The Geneve overlay between boxes. On by default: a config with no `[mesh]`
 table behaves as if it had one with these defaults, with `bridge` taken from
-the first `[[hosts]]` entry. See [Geneve mesh over WireGuard](../mesh.md).
+the first `[[hosts]]` entry. See [The mesh](../network/mesh.md).
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -107,6 +107,7 @@ the first `[[hosts]]` entry. See [Geneve mesh over WireGuard](../mesh.md).
 | `probe_timeout_ms` | integer | `800` | Upper bound on a probe's wait. |
 | `probe_down_after` | integer | `3` | Failed probes before a peer is `Down`. |
 | `probe_up_after` | integer | `3` | Good probes before a peer is `Up`. |
+| `blackholes` | array of CIDRs | `["10.22.0.0/16", "10.23.0.0/16", "10.24.0.0/16"]` | Networks to blackhole at metric 4294967295, so traffic to them is dropped when their link goes away. `[]` turns it off. IPv4, no host bits set, prefix 1-32. See [Blackhole routes](../network/routes-and-firewall.md#blackhole-routes-for-the-mesh-networks). |
 
 ### `[mesh.wireguard]`
 

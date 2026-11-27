@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Who decides. One xdebbied per cluster is the leader (docs/autodiscovery.md):
+//! Who decides. One xdebbied per cluster is the leader (docs/compute/leader.md):
 //! it runs the reconciler and owns every `/v1` read and write. Followers
 //! forward those requests to it, so a client may point at any box and
 //! `xdctl` moves itself to the leader after one round trip. A box without

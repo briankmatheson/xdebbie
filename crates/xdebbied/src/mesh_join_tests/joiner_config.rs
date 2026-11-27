@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! The joiner's `[network]` (config_gen::network_block): the cluster's
 //! overlay copied whole, this box's own /24 as gateway and pool
-//! (BOOTSTRAP.md "Joining", docs/network.md).
+//! (BOOTSTRAP.md "Joining", docs/network/addresses-and-dhcp.md).
 
 use std::net::Ipv4Addr;
 

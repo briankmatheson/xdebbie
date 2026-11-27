@@ -72,7 +72,7 @@ pub struct Host {
     /// host's libvirt URI is remote from the leader and it has no `agent`,
     /// so nobody can run `nvme connect` there. `storage = abe` VMs are not
     /// placed on it. Hosts registered by a follower daemon carry an `agent`
-    /// and are driven through it (docs/autodiscovery.md).
+    /// and are driven through it (docs/compute/leader.md).
     #[serde(skip)]
     pub abe_remote: bool,
     /// Thin pools: the sum of volume sizes may reach `bytes × overcommit`.

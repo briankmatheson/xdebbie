@@ -2,49 +2,37 @@
 
 [Introduction](README.md)
 
-# Getting started
-
-- [Install the first box](getting-started/install.md)
-- [Join a second box](getting-started/join.md)
-- [Create your first VM](getting-started/first-vm.md)
-- [Run Kubernetes with Cluster API](getting-started/cluster-api.md)
-
-# How-to guides
-
-- [Use an LVM thin pool](how-to/lvm-thin-pool.md)
-- [Use ABE volumes](how-to/abe-volumes.md)
-- [Drain a host and move VMs](how-to/drain-and-migrate.md)
-- [Connect a laptop with xdj](how-to/mesh-clients.md)
-- [Run a cloud server as a mesh client](how-to/cloud-mesh-client.md)
-- [Reserve addresses through DNS](how-to/dns-reserved-addresses.md)
-- [Give VMs NTP servers](how-to/ntp.md)
-- [Rotate the API token](how-to/rotate-token.md)
-- [Upgrade xdebbied](how-to/upgrade.md)
-- [Back up and restore](how-to/backup-restore.md)
-
-# Reference
-
-- [Configuration file](reference/configuration.md)
-- [REST API](reference/api.md)
-- [xdctl commands](reference/xdctl.md)
-- [xdebbied commands](reference/xdebbied.md)
-- [Files, ports and interfaces](reference/files-and-ports.md)
-- [DHCP options](reference/dhcp-options.md)
-- [Cluster API contract](reference/capi-contract.md)
-- [The Debian package](reference/debian-package.md)
-
-# Explanation
-
-- [Architecture](architecture.md)
-- [Bootstrap](bootstrap.md)
-- [Discovery and election](autodiscovery.md)
-- [Geneve mesh over WireGuard](mesh.md)
-- [Overlay addressing and DHCP](network.md)
-- [VM storage](storage.md)
-- [Security model](security.md)
-
-# When things go wrong
-
-- [Troubleshooting](troubleshooting.md)
-- [Limits and known gaps](limits.md)
-- [Max values: every limit and default](max-values.md)
+- [Getting started](getting-started/README.md)
+  - [One box to a running VM](getting-started/first-box.md)
+  - [Join a second box](getting-started/second-box.md)
+  - [A Kubernetes cluster with capx](getting-started/kubernetes.md)
+  - [A laptop on the mesh with xdj](getting-started/laptop.md)
+- [Network](network/README.md)
+  - [The mesh: underlay, overlay, bridge](network/mesh.md)
+  - [Addresses and DHCP](network/addresses-and-dhcp.md)
+  - [Clients and the hub](network/clients.md)
+  - [Routes and firewall](network/routes-and-firewall.md)
+  - [Discovery](network/discovery.md)
+- [Storage](storage/README.md)
+  - [Local disks](storage/local.md)
+  - [abe-backed disks](storage/abe.md)
+  - [Volumes](storage/volumes.md)
+  - [Backups](storage/backups.md)
+- [Compute](compute/README.md)
+  - [VMs](compute/vms.md)
+  - [Scheduling](compute/scheduling.md)
+  - [Migration](compute/migration.md)
+  - [capx and Cluster API](compute/kubernetes.md)
+  - [The leader](compute/leader.md)
+  - [Boxes: bootstrap, join, enrol, approve](compute/boxes.md)
+  - [Security](compute/security.md)
+- [Reference](reference/README.md)
+  - [Configuration file](reference/configuration.md)
+  - [xdctl commands](reference/xdctl.md)
+  - [xdebbied commands](reference/xdebbied.md)
+  - [REST API](reference/api.md)
+  - [The mesh spec and status](reference/mesh-spec.md)
+  - [Files, ports and interfaces](reference/files-and-ports.md)
+  - [Limits and max values](reference/limits.md)
+  - [Troubleshooting](reference/troubleshooting.md)
+- [Glossary](glossary.md)

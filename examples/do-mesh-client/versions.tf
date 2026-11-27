@@ -1,5 +1,5 @@
 # A cloud server as a secure mesh client that the hub dials:
-# docs/how-to/cloud-mesh-client.md.
+# docs/network/clients.md.
 terraform {
   required_version = ">= 1.6"
   required_providers {

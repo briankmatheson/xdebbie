@@ -14,7 +14,7 @@ use crate::discovery::messages::NodeCapacity;
 /// 3. Load (0-1000): Inverse of current utilization (less loaded = higher score)
 /// 4. Was leader bonus (+500): Current leader gets preference to avoid churn
 /// 5. State (0-4000): VMs in this box's store. Stores are per box
-///    (docs/autodiscovery.md, "Known gap"), so the one holding the cluster's
+///    (docs/compute/leader.md, "Followers keep up"), so the one holding the cluster's
 ///    VMs must outrank an empty one whatever its uptime — otherwise a leader
 ///    restart hands the cluster to a box that knows nothing about it.
 /// 6. UUID tiebreaker: Deterministic ordering when scores are equal
