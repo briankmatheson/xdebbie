@@ -234,7 +234,85 @@ LAPTOP = view(
     ])],
 )
 
-VIEWS = [GLANCE, OWNED, PACKET, DROP, LAPTOP]
+# 6. Auto MAC addresses --------------------------------------------------------
+MACS = view(
+    "proto230-auto-macs", "Proto 230: Auto MAC addresses",
+    "Every MAC on the mesh is worked out from something that never changes, so there is no table to keep.",
+    ("scheme", ["vm-mac", "storage-mac", "bridge-mac", "slot-macs"]),
+    {
+        "scheme": ("system", "The MAC scheme (52:54:...)", "0x52 has the locally-administered bit set, so these never clash with real hardware."),
+        "vm-mac": ("data-asset", "VM MAC 52:54:00:II:II:II", "The first three bytes of the VM's id: same id, same MAC, wherever it runs."),
+        "storage-mac": ("data-asset", "Storage MAC 52:54:24:II:II:II", "The same three id bytes under 52:54:24, for the VM's NIC on 10.24."),
+        "bridge-mac": ("data-asset", "Bridge MAC 52:54:00:23:BB:fe", "Box BB's overlay bridge: bootstrap sets it from the box number."),
+        "slot-macs": ("data-asset", "Slot MACs 52:54:00:23:BB:00-0f", "16 per box, in the derived FDB today; VMs on them (and SLAAC from them) are planned for 3.0."),
+        "vm-id": ("data-asset", "VM id (UUID)", "Never changes: not on migration, not on rename (VMs were renamed 2026-11-27; their MACs stayed)."),
+        "box": ("data-asset", "Box number", "Given out by the cluster CA when a box joins."),
+        "libvirt": ("service", "libvirt domain XML", "xdebbied writes `<mac address=...>` into each VM's definition."),
+        "netcfg": ("service", "VM network config", "cloud-init matches the primary NIC by MAC and runs DHCP on it."),
+        "dhcp": ("service", "xdebbied DHCP responder", "Answers on the bridge: finds the VM whose MAC is the request's chaddr and gives it its 10.23 address."),
+        "fdb": ("network", "Bridge FDB", "Where each MAC lives: static entries for bridges in derived mode, learned ones for VMs."),
+    },
+    [
+        ("id-to-mac", "vm-id", "vm-mac", "xdebbied takes the id's first three bytes.", None),
+        ("id-to-smac", "vm-id", "storage-mac", "Same bytes, different prefix, so the two NICs never collide.", None),
+        ("box-to-bridge", "box", "bridge-mac", "The box number goes in the fifth byte.", None),
+        ("box-to-slots", "box", "slot-macs", "And in each slot MAC.", None),
+        ("mac-in-xml", "vm-mac", "libvirt", "The MAC goes into the domain XML.", None),
+        ("mac-in-netcfg", "vm-mac", "netcfg", "And into the VM's network config.", None),
+        ("dhcp-match", "netcfg", "dhcp", "The VM asks for an address from that MAC.", None),
+        ("dhcp-lookup", "dhcp", "vm-mac", "The responder knows the answer without a lease table: the MAC says which VM it is.", None),
+        ("bridge-static", "bridge-mac", "fdb", "Peers point a static entry at each box's bridge MAC (derived mode).", None),
+        ("vm-learned", "vm-mac", "fdb", "VM MACs are learned as they talk (learn mode, which the boxes run today).", None),
+    ],
+    [("vm-addresses", "A VM gets its addresses", "From an id to a working address, with nothing stored on the way.", [
+        ("id-to-mac", "The VM's id gives its MAC."),
+        ("mac-in-xml", "libvirt gets the MAC."),
+        ("mac-in-netcfg", "The VM's network config matches on it."),
+        ("dhcp-match", "The VM asks for an address."),
+        ("dhcp-lookup", "xdebbied answers from the MAC alone."),
+        ("vm-learned", "The other boxes learn where it lives as it talks."),
+    ])],
+)
+
+# 7. Renumbering a box, with learn mode ------------------------------------------
+RENUMBER = view(
+    "proto230-renumbering", "Proto 230: Renumbering a box",
+    "A box changes number during an upgrade; learn mode keeps VM traffic flowing because VM MACs have no box number in them.",
+    ("sa", ["wg-old", "wg-new", "br", "pass", "learned"]),
+    {
+        "sa": ("system", "simplyaviary, box 0 to box 5", "Bootstrapped as box 0, then made box 5 (2026-11-25)."),
+        "wg-old": ("network", "10.22.0.1 (old)", "The hub's address: a renumbered box must drop it or the hub is refused as a peer."),
+        "wg-new": ("network", "10.22.5.1 (new)", "Its underlay address from now on."),
+        "br": ("network", "virbr-xdebbie 10.23.5.1", "The bridge must move too; until it does the mesh blocks and builds no tunnel."),
+        "pass": ("service", "Mesh pass", "Adds the new address, deletes every other one on wg-flock, checks the bridge."),
+        "learned": ("network", "Learned FDB (fdb = learn)", "VM MACs come from VM ids, so nothing in it depends on the box number."),
+        "static": ("network", "Static FDB (fdb = derived)", "Keyed on 52:54:00:23:BB: every peer's entries must change with the number."),
+        "hub": ("system", "timesink (hub)", "Sees box 5 as a new peer once the old address is gone."),
+        "p230": ("network", "proto 230 routes on box 5", "Re-derived: 10.22.0.1/32 on wg-flock, the /17s via 10.23.0.1."),
+        "overlap": ("service", "Old and new both answering (planned)", "Not in xdebbie yet: a window where both numbers work, for zero-drop upgrades."),
+    },
+    [
+        ("add-new", "pass", "wg-new", "The pass adds 10.22.5.1.", None),
+        ("drop-old", "pass", "wg-old", "Then deletes 10.22.0.1, and any other stray address.", None),
+        ("check-br", "pass", "br", "Blocked until the bridge has 10.23.5.1; then the tunnel to box 0 comes up.", None),
+        ("peer-hub", "wg-new", "hub", "WireGuard to the hub, as box 5.", None),
+        ("routes", "pass", "p230", "The proto 230 routes follow the new number.", None),
+        ("learn", "br", "learned", "The tunnel ports relearn VM MACs as soon as VMs talk.", None),
+        ("static-stale", "static", "br", "In derived mode the peers' entries still say box 0 until they are redone.", None),
+        ("planned", "overlap", "wg-old", "Planned: keep the old number answering while traffic moves.", None),
+    ],
+    [("upgrade", "An upgrade that renumbers a box", "Box 0 becomes box 5 and its VMs keep talking.", [
+        ("add-new", "The new underlay address goes on."),
+        ("drop-old", "The old one comes off, so the hub can be a peer."),
+        ("check-br", "The bridge moves; the mesh waits for it."),
+        ("peer-hub", "The box rejoins the hub under its new number."),
+        ("routes", "proto 230 routes are worked out again."),
+        ("learn", "Learn mode picks the VM MACs back up; there was nothing to rewrite."),
+        ("planned", "Still to build: both numbers answering during the change."),
+    ])],
+)
+
+VIEWS = [GLANCE, OWNED, PACKET, DROP, LAPTOP, MACS, RENUMBER]
 
 if __name__ == "__main__":
     for v in VIEWS:

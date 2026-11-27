@@ -1,0 +1,311 @@
+{
+  "$schema": "https://calm.finos.org/release/1.1/meta/calm.json",
+  "unique-id": "proto230-auto-macs",
+  "name": "Proto 230: Auto MAC addresses",
+  "description": "Every MAC on the mesh is worked out from something that never changes, so there is no table to keep.",
+  "metadata": [
+    {
+      "source": "xdebbie docs/network/proto230/make.py"
+    },
+    {
+      "checked-live": "2026-11-27"
+    }
+  ],
+  "nodes": [
+    {
+      "unique-id": "scheme",
+      "node-type": "system",
+      "name": "The MAC scheme (52:54:...)",
+      "description": "0x52 has the locally-administered bit set, so these never clash with real hardware."
+    },
+    {
+      "unique-id": "vm-mac",
+      "node-type": "data-asset",
+      "name": "VM MAC 52:54:00:II:II:II",
+      "description": "The first three bytes of the VM's id: same id, same MAC, wherever it runs."
+    },
+    {
+      "unique-id": "storage-mac",
+      "node-type": "data-asset",
+      "name": "Storage MAC 52:54:24:II:II:II",
+      "description": "The same three id bytes under 52:54:24, for the VM's NIC on 10.24."
+    },
+    {
+      "unique-id": "bridge-mac",
+      "node-type": "data-asset",
+      "name": "Bridge MAC 52:54:00:23:BB:fe",
+      "description": "Box BB's overlay bridge: bootstrap sets it from the box number."
+    },
+    {
+      "unique-id": "slot-macs",
+      "node-type": "data-asset",
+      "name": "Slot MACs 52:54:00:23:BB:00-0f",
+      "description": "16 per box, in the derived FDB today; VMs on them (and SLAAC from them) are planned for 3.0."
+    },
+    {
+      "unique-id": "vm-id",
+      "node-type": "data-asset",
+      "name": "VM id (UUID)",
+      "description": "Never changes: not on migration, not on rename (VMs were renamed 2026-11-27; their MACs stayed)."
+    },
+    {
+      "unique-id": "box",
+      "node-type": "data-asset",
+      "name": "Box number",
+      "description": "Given out by the cluster CA when a box joins."
+    },
+    {
+      "unique-id": "libvirt",
+      "node-type": "service",
+      "name": "libvirt domain XML",
+      "description": "xdebbied writes `<mac address=...>` into each VM's definition."
+    },
+    {
+      "unique-id": "netcfg",
+      "node-type": "service",
+      "name": "VM network config",
+      "description": "cloud-init matches the primary NIC by MAC and runs DHCP on it."
+    },
+    {
+      "unique-id": "dhcp",
+      "node-type": "service",
+      "name": "xdebbied DHCP responder",
+      "description": "Answers on the bridge: finds the VM whose MAC is the request's chaddr and gives it its 10.23 address."
+    },
+    {
+      "unique-id": "fdb",
+      "node-type": "network",
+      "name": "Bridge FDB",
+      "description": "Where each MAC lives: static entries for bridges in derived mode, learned ones for VMs."
+    }
+  ],
+  "relationships": [
+    {
+      "unique-id": "scheme-has-vm-mac",
+      "description": "The MAC scheme (52:54:...) has VM MAC 52:54:00:II:II:II.",
+      "relationship-type": {
+        "composed-of": {
+          "container": "scheme",
+          "nodes": [
+            "vm-mac"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "scheme-has-storage-mac",
+      "description": "The MAC scheme (52:54:...) has Storage MAC 52:54:24:II:II:II.",
+      "relationship-type": {
+        "composed-of": {
+          "container": "scheme",
+          "nodes": [
+            "storage-mac"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "scheme-has-bridge-mac",
+      "description": "The MAC scheme (52:54:...) has Bridge MAC 52:54:00:23:BB:fe.",
+      "relationship-type": {
+        "composed-of": {
+          "container": "scheme",
+          "nodes": [
+            "bridge-mac"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "scheme-has-slot-macs",
+      "description": "The MAC scheme (52:54:...) has Slot MACs 52:54:00:23:BB:00-0f.",
+      "relationship-type": {
+        "composed-of": {
+          "container": "scheme",
+          "nodes": [
+            "slot-macs"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "id-to-mac",
+      "description": "xdebbied takes the id's first three bytes.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "vm-id"
+          },
+          "destination": {
+            "node": "vm-mac"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "id-to-smac",
+      "description": "Same bytes, different prefix, so the two NICs never collide.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "vm-id"
+          },
+          "destination": {
+            "node": "storage-mac"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "box-to-bridge",
+      "description": "The box number goes in the fifth byte.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "box"
+          },
+          "destination": {
+            "node": "bridge-mac"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "box-to-slots",
+      "description": "And in each slot MAC.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "box"
+          },
+          "destination": {
+            "node": "slot-macs"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "mac-in-xml",
+      "description": "The MAC goes into the domain XML.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "vm-mac"
+          },
+          "destination": {
+            "node": "libvirt"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "mac-in-netcfg",
+      "description": "And into the VM's network config.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "vm-mac"
+          },
+          "destination": {
+            "node": "netcfg"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "dhcp-match",
+      "description": "The VM asks for an address from that MAC.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "netcfg"
+          },
+          "destination": {
+            "node": "dhcp"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "dhcp-lookup",
+      "description": "The responder knows the answer without a lease table: the MAC says which VM it is.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "dhcp"
+          },
+          "destination": {
+            "node": "vm-mac"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "bridge-static",
+      "description": "Peers point a static entry at each box's bridge MAC (derived mode).",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "bridge-mac"
+          },
+          "destination": {
+            "node": "fdb"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "vm-learned",
+      "description": "VM MACs are learned as they talk (learn mode, which the boxes run today).",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "vm-mac"
+          },
+          "destination": {
+            "node": "fdb"
+          }
+        }
+      }
+    }
+  ],
+  "flows": [
+    {
+      "unique-id": "vm-addresses",
+      "name": "A VM gets its addresses",
+      "description": "From an id to a working address, with nothing stored on the way.",
+      "transitions": [
+        {
+          "relationship-unique-id": "id-to-mac",
+          "sequence-number": 1,
+          "description": "The VM's id gives its MAC."
+        },
+        {
+          "relationship-unique-id": "mac-in-xml",
+          "sequence-number": 2,
+          "description": "libvirt gets the MAC."
+        },
+        {
+          "relationship-unique-id": "mac-in-netcfg",
+          "sequence-number": 3,
+          "description": "The VM's network config matches on it."
+        },
+        {
+          "relationship-unique-id": "dhcp-match",
+          "sequence-number": 4,
+          "description": "The VM asks for an address."
+        },
+        {
+          "relationship-unique-id": "dhcp-lookup",
+          "sequence-number": 5,
+          "description": "xdebbied answers from the MAC alone."
+        },
+        {
+          "relationship-unique-id": "vm-learned",
+          "sequence-number": 6,
+          "description": "The other boxes learn where it lives as it talks."
+        }
+      ]
+    }
+  ]
+}
