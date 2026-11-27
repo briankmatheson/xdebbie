@@ -28,12 +28,14 @@
 //! `xdebbie_host` forward chain drops it too).
 //!
 //! **VM egress** (`[network]` + `[mesh] box`). Box *N* owns `<cidr>.N.0/24`
-//! (bootstrap/addr.rs) and forwards for exactly that: ufw's FORWARD lets
-//! the /24 out of the bridge (the libvirt network is `<forward mode='route'/>`,
+//! (bootstrap/addr.rs) for new VMs, but a VM keeps its address when it is
+//! placed or moved elsewhere (eyrie-4 on box 5 holds 10.23.0.5, 2026-11-26),
+//! so a box forwards for the whole overlay `cidr`: ufw's FORWARD lets
+//! it out of the bridge (the libvirt network is `<forward mode='route'/>`,
 //! so libvirt forwards too instead of rejecting), and the `xdebbie_host`
 //! nftables table
 //!
-//! - masquerades the /24 behind whatever interface the packet leaves by —
+//! - masquerades the overlay behind whatever interface the packet leaves by —
 //!   a timesink VM leaves as timesink, a gram VM as gram, VM-to-VM stays on
 //!   the mesh L2 and never gets here;
 //! - DNATs the VMs' DNS (they are told the bridge, `<cidr>.N.1`) to
@@ -106,7 +108,8 @@ pub struct Egress {
     pub bridge: String,
     /// The bridge's address: VMs' gateway and DNS.
     pub bridge_addr: Ipv4Addr,
-    /// This box's /24 of the overlay, `a.b.c.0/24`.
+    /// The whole overlay (`[network] cidr`), not just this box's /24: a VM
+    /// keeps its address wherever it runs (module docs).
     pub vm_net: String,
     /// Where VM DNS goes. Empty: no DNAT, VMs' DNS goes nowhere.
     pub upstream_dns: Vec<Ipv4Addr>,
@@ -138,11 +141,11 @@ impl FirewallSpec {
         }
         let egress = cfg.network.as_ref().and_then(|n| {
             let bridge = cfg.dhcp_bridge().unwrap_or_else(|| bridge.clone());
-            let block = super::addr::box_block(&n.cidr, mesh_cfg.box_id).ok()?;
+            super::addr::box_block(&n.cidr, mesh_cfg.box_id).ok()?;
             Some(Egress {
                 bridge,
                 bridge_addr: n.gateway(),
-                vm_net: format!("{}/24", block.network()),
+                vm_net: n.cidr.to_string(),
                 upstream_dns: n.upstream_dns.clone(),
                 routed_from: mesh
                     .as_ref()

@@ -519,10 +519,28 @@ pub fn regenerate(
     Ok(set_mesh_box(&c, box_id))
 }
 
+/// What a joining box tells its VMs to ask for DNS, given the cluster's
+/// `[network]` and this box's bridge `gw`:
+///
+/// | cluster | joiner's `dns` |
+/// |---|---|
+/// | none | its own bridge |
+/// | its bridge, forwarded to `upstream_dns` | its own bridge (forwarded the same way, `upstream_dns` is copied) |
+/// | its bridge, *not* forwarded: a resolver runs there (CoreDNS on timesink) | the cluster's bridge itself: this box's bridge would forward nowhere |
+/// | anything else | the same |
+///
+/// The third row was box 5's: VMs asked nothing that answered (2026-11-26).
+fn joiner_dns(n: &crate::dhcp::NetworkStatus, gw: Ipv4Addr) -> Vec<Ipv4Addr> {
+    match n.dns.as_slice() {
+        [] => vec![gw],
+        [d] if *d == n.gateway && !n.upstream_dns.is_empty() => vec![gw],
+        _ => n.dns.clone(),
+    }
+}
+
 /// A `[network]` for box `box_id` on the overlay the cluster already runs:
 /// same `cidr`, `domain` and lease; this box's own /24 of it (`addr.rs`) —
-/// its bridge as gateway, its VM range as pool. DNS is the cluster's unless
-/// that was just the CA box's bridge, then it is this box's bridge too.
+/// its bridge as gateway, its VM range as pool. DNS: [`joiner_dns`].
 /// Returns the block and any warnings: the cluster's pool overlapping this
 /// box's /24 means the other box was set up by hand on a different scheme
 /// and the operator has to narrow it, or two allocators will collide.
@@ -559,11 +577,7 @@ pub fn network_block(
             Ipv4Addr::from(u32::from(n.cidr.network) + 254),
         ));
     }
-    let dns_list: Vec<Ipv4Addr> = if n.dns.is_empty() || n.dns == [n.gateway] {
-        vec![gw]
-    } else {
-        n.dns.clone()
-    };
+    let dns_list = joiner_dns(n, gw);
     let dns = dns_list
         .iter()
         .map(|d| format!("\"{d}\""))
@@ -1046,6 +1060,17 @@ cpu_overcommit = 4.0
         assert_eq!(
             t["network"]["dns"].as_array().unwrap()[0].as_str(),
             Some("10.23.0.53")
+        );
+
+        // a resolver on the cluster's bridge itself (no forwarding there):
+        // ask it directly, not this box's bridge, which would forward nowhere
+        let mut served = cluster_net("10.23.0.0/16", ("10.23.0.2", "10.23.0.254"));
+        served.upstream_dns = vec![];
+        let (block, _) = network_block(&served, 5, "br");
+        let t: toml::Value = toml::from_str(&block).unwrap();
+        assert_eq!(
+            t["network"]["dns"].as_array().unwrap()[0].as_str(),
+            Some("10.23.0.1")
         );
 
         // the first box still allocating from the whole range is flagged

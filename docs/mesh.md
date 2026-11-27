@@ -184,6 +184,23 @@ it is not forwarded to the leader. Checked: zones and search domains are DNS
 names, each zone once, servers are IP addresses, the banner is printable
 text (tabs and newlines allowed) of at most 4 KiB.
 
+### Clients behind another box
+
+A client's hub forwards its traffic into the overlay, so it reaches VMs on
+every box; the replies are the problem. A VM's gateway is its own box, and
+that box's route for `10.22/16` points into WireGuard, where it has no peer
+for the client. So a box with **no clients of its own** and at least one
+peer routes the underlay through its hub (the lowest-numbered peer, box 0):
+
+| route | why |
+|---|---|
+| `10.22.<peer>.1/32 dev <underlay>` | each peer stays in WireGuard (Geneve, probes) |
+| `10.22.0.0/17`, `10.22.128.0/17 via 10.23.<hub>.1 dev <bridge>` | the rest (clients) back the way they came |
+
+They carry `proto 230` (`ip route show proto 230`), are converged every
+reconcile and removed on teardown (`mesh/routes.rs`). A hub (a box with
+clients) adds none.
+
 ## Configuration
 
 Two sources, API wins:
