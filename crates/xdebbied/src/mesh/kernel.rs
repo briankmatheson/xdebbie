@@ -324,6 +324,10 @@ pub trait NetOps: Send + Sync {
     fn nft_replace_table(&self, rendered: &str) -> Result<()>;
     fn nft_delete_table(&self) -> Result<()>;
     fn nft_table_exists(&self) -> bool;
+    /// Routes carrying `proto 230` (routes.rs), parsed.
+    fn routes_ours(&self) -> Result<Vec<super::routes::HostRoute>>;
+    fn route_replace(&self, r: &super::routes::HostRoute) -> Result<()>;
+    fn route_del(&self, r: &super::routes::HostRoute) -> Result<()>;
     /// rx/tx byte counters for a device (from sysfs). `None` if unavailable.
     fn link_stats(&self, dev: &str) -> Option<(u64, u64)>;
 
@@ -910,6 +914,33 @@ impl NetOps for IpCliNetOps {
     fn nft_table_exists(&self) -> bool {
         run(&self.nft, &["list", "table", "inet", NFT_TABLE], None).is_ok()
     }
+    fn routes_ours(&self) -> Result<Vec<super::routes::HostRoute>> {
+        super::routes::parse(&self.ip(&[
+            "-j",
+            "-4",
+            "route",
+            "show",
+            "proto",
+            super::routes::ROUTE_PROTO,
+        ])?)
+    }
+    fn route_replace(&self, r: &super::routes::HostRoute) -> Result<()> {
+        let a = super::routes::replace_args(r);
+        self.ip(&a.iter().map(String::as_str).collect::<Vec<_>>())
+            .map(|_| ())
+    }
+    fn route_del(&self, r: &super::routes::HostRoute) -> Result<()> {
+        self.ip(&[
+            "route",
+            "del",
+            &r.dst,
+            "dev",
+            &r.dev,
+            "proto",
+            super::routes::ROUTE_PROTO,
+        ])
+        .map(|_| ())
+    }
     fn link_stats(&self, dev: &str) -> Option<(u64, u64)> {
         let rd = |f: &str| {
             std::fs::read_to_string(format!("/sys/class/net/{dev}/statistics/{f}"))
@@ -945,6 +976,7 @@ pub struct FakeState {
     pub geneve_module: bool,
     pub wireguard_module: bool,
     pub nft_table: Option<String>,
+    pub host_routes: Vec<super::routes::HostRoute>,
     pub applied: Vec<Action>,
     pub next_ifindex: u32,
     /// Make a specific action kind fail (for error-path tests).
@@ -1393,6 +1425,24 @@ impl NetOps for FakeNetOps {
     }
     fn nft_table_exists(&self) -> bool {
         self.state.lock().unwrap().nft_table.is_some()
+    }
+    fn routes_ours(&self) -> Result<Vec<super::routes::HostRoute>> {
+        Ok(self.state.lock().unwrap().host_routes.clone())
+    }
+    fn route_replace(&self, r: &super::routes::HostRoute) -> Result<()> {
+        let mut st = self.state.lock().unwrap();
+        st.host_routes.retain(|x| x.dst != r.dst);
+        st.host_routes.push(r.clone());
+        st.host_routes.sort();
+        Ok(())
+    }
+    fn route_del(&self, r: &super::routes::HostRoute) -> Result<()> {
+        self.state
+            .lock()
+            .unwrap()
+            .host_routes
+            .retain(|x| x.dst != r.dst);
+        Ok(())
     }
     fn link_stats(&self, _dev: &str) -> Option<(u64, u64)> {
         None
