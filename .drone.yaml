@@ -84,7 +84,7 @@ steps:
         path: /secrets/apt-signing
     resources:
       limits:
-        memory: 1024MiB
+        memory: 2048MiB  # a release build of xdebbied: 1024MiB was OOM-killed (v0.22.0, exit 137)
     commands:
       # the package carries xdctl too (target/release/xdctl): build both here,
       # or it ships whatever xdctl the shared cache last held (v0.20.0 did:
