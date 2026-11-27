@@ -14,7 +14,7 @@
 # so a run recompiles only what changed. Each PVC is ReadWriteOnce: two runs
 # of the same pipeline take turns.
 #
-# w10's workers are small (2 vCPU / 4 GiB): two rustc jobs per build and a
+# w10's workers are small (2 vCPU / 8 GiB): two rustc jobs per build and a
 # memory limit each (2048MiB, the runner's cap; 2.5 GiB steps OOMed a 4 GiB worker
 # twice on 2026-11-18); the runner gives build pods real requests
 # (DRONE_RESOURCE_REQUEST_*), so the scheduler places them where there is
@@ -35,10 +35,14 @@ clone:
   skip_verify: true
 
 environment:
-  # One rustc at a time: with two, the test build reached its 1536MiB
-  # limit (build #46, 2026-11-18). capx and xdctl are small enough for two.
-  CARGO_BUILD_JOBS: "1"
+  # Two rustc jobs fit without debug info (below); with it, two reached
+  # the 1536MiB limit (build #46, 2026-11-18) and this ran one at a time.
+  CARGO_BUILD_JOBS: "2"
   CARGO_INCREMENTAL: "0"
+  # No debug info in CI: it is most of the memory and link time of the
+  # test binaries, and a CI build is never run under a debugger.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
   CARGO_TERM_COLOR: never
   CARGO_HOME: /cache/cargo
   CARGO_TARGET_DIR: /cache/target
@@ -148,6 +152,10 @@ clone:
 environment:
   CARGO_BUILD_JOBS: "2"
   CARGO_INCREMENTAL: "0"
+  # No debug info in CI: it is most of the memory and link time of the
+  # test binaries, and a CI build is never run under a debugger.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
   CARGO_TERM_COLOR: never
   CARGO_HOME: /cache/cargo
   CARGO_TARGET_DIR: /cache/target
@@ -190,6 +198,10 @@ clone:
 environment:
   CARGO_BUILD_JOBS: "2"
   CARGO_INCREMENTAL: "0"
+  # No debug info in CI: it is most of the memory and link time of the
+  # test binaries, and a CI build is never run under a debugger.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
   CARGO_TERM_COLOR: never
   CARGO_HOME: /cache/cargo
   CARGO_TARGET_DIR: /cache/target
