@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-11-27
+
 ### Fixed (joining a box that was set up before; found joining simplyaviary, 2026-11-25)
 - A renumbered box drops its old underlay address: the mesh removes every
   address on its own WireGuard link but `10.22.BOX.1` (new action
