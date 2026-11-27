@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-11-27
+
+Cut without the full release gate (baseline, load, backups and restore,
+live grow, a fresh box joining), at the user's call; `alpha` points here.
+
+### Added
+- Docs rewritten for 0.23.0 in six parts: getting started, network,
+  storage, compute, reference, glossary (every noun and verb), checked
+  against the code; a one-screen README.
+- `docs/network/proto230/`: proto 230 in seven CALM diagrams for people
+  (the mesh at a glance, owning a route, a packet from box 5 to box 0, a
+  tunnel drops, a laptop joins, auto MACs, renumbering a box), published
+  on the CALM hub as `aviary.proto230`.
+
 ### Changed
 - VMs are named `CLUSTER-ROLE-HOST-ID` in libvirt: the cluster (capx's
   `xdebbie.dev/cluster` without its namespace, or a hand-made VM's `role`
