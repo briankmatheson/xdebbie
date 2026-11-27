@@ -1,4 +1,4 @@
-# What to do with the new server: docs/how-to/cloud-mesh-client.md,
+# What to do with the new server: docs/network/clients.md,
 # "3. Register it on the hub".
 
 output "public_ip" {

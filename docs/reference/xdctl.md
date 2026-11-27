@@ -9,7 +9,7 @@ Placeholders are in capitals: replace `VM` with a VM's name or id.
 
 | Option | Environment | Default | Meaning |
 |---|---|---|---|
-| `--url URL[,URL...]` | `XDEBBIE_URL` | `https://127.0.0.1:23443` | Any xdebbied in the cluster. Several, comma-separated, are tried in order. |
+| `--url URL[,URL...]` | `XDEBBIE_URL` | `https://127.0.0.1:23443` | Any xdebbied in the cluster. A comma-separated list is tried in order. |
 | `--token TOKEN` | `XDEBBIE_TOKEN` | none | The API bearer token. |
 | `--ca PATHS` | `XDEBBIE_CA` | `/etc/xdebbie/api-ca.pem,/etc/xdebbie/peers` | CA certificates to trust: comma-separated files, or directories of `*.pem`. |
 | `--insecure` | `XDEBBIE_INSECURE` | off | Skip TLS verification. Lab use only. |
@@ -19,9 +19,11 @@ Placeholders are in capitals: replace `VM` with a VM's name or id.
 
 **Which box answers.** `xdctl` asks the box at `--url` who the leader is
 (`GET /v1/leader`) and sends the command there. It waits up to 20 seconds
-for an election to finish. `mesh`, `version` and `image` are the
-exceptions: `mesh` and `version` talk to the box at `--url` itself, and
-`image` talks to no daemon at all.
+for an election to finish. The exceptions: `mesh`, `version` and
+`ca --chain` talk to the box at `--url` itself, and `image` and
+`completion` talk to no daemon at all. `net` follows the leader like the
+rest, so with discovery on `xdctl net ls` shows the leader's responder; to
+see another box's, ask that box's `GET /v1/network` directly.
 
 ## Hosts
 
@@ -58,7 +60,7 @@ exceptions: `mesh` and `version` talk to the box at `--url` itself, and
 | `--memory-mib N` | `4096` | Memory, MiB (at least 256). |
 | `--disk-gib N` | `40` | Root disk, GiB. |
 | `--data-disk-gib N` | none | A second, blank disk. |
-| `--storage local\|abe` | `local` | Where the disks live. See [VM storage](../storage.md). |
+| `--storage local\|abe` | `local` | Where the disks live. See [Storage](../storage/README.md). |
 | `--ip ADDR` | allocated | Pin an overlay address. Needs `[network]`. |
 | `--user-data FILE` | none | cloud-init user-data. |
 | `--failure-domain FD` | any | Only hosts in this failure domain. |
@@ -68,7 +70,7 @@ exceptions: `mesh` and `version` talk to the box at `--url` itself, and
 | `--label KEY=VALUE` | none | Owner labels; repeatable. |
 | `--dry-run` | off | Show the ranked hosts; create nothing. |
 
-## Joining boxes and the CA
+## Boxes and the CA
 
 | Command | What it does |
 |---|---|
@@ -84,7 +86,7 @@ exceptions: `mesh` and `version` talk to the box at `--url` itself, and
 | Command | What it does |
 |---|---|
 | `xdctl token status` | Which tokens the leader accepts and where each box stands. |
-| `xdctl token rotate` | Mint a new token and distribute it. See [Rotate the API token](../how-to/rotate-token.md). |
+| `xdctl token rotate` | Mint a new token and distribute it. See [Rotate the token](../compute/security.md#rotate-the-token). |
 
 ## Mesh
 
@@ -114,7 +116,7 @@ These talk to the box at `--url`, not the leader: the mesh is per-box state.
 
 ## Volumes
 
-Standalone ABE volumes. See [VM storage](../storage.md).
+Standalone abe volumes. See [Volumes](../storage/volumes.md).
 
 | Command | What it does |
 |---|---|

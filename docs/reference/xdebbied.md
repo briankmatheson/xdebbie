@@ -39,7 +39,7 @@ from serving). `serve` instead checks, read-only, what bootstrap leaves
 behind and logs each gap with the command that fixes it: a missing API
 certificate, key or token file stops it (exit 78); an LVM volume group not
 there yet is retried; libvirt not answering, no libvirt TLS certificate or
-no `xdebbie_env` only turn that part off. See [Bootstrap](../bootstrap.md) for each step.
+no `xdebbie_env` only turn that part off. See [Boxes](../compute/boxes.md#what-bootstrap-does) for each step.
 
 | Option | Default | Meaning |
 |---|---|---|

@@ -1,6 +1,7 @@
 # Files, ports and interfaces
 
-What xdebbied puts on a box, and what it listens on.
+What xdebbied puts on a box, what it listens on, and what the package
+installs.
 
 ## Files
 
@@ -24,6 +25,8 @@ What xdebbied puts on a box, and what it listens on.
 | `/var/lib/xdebbie/enroll.json` | root | Enrolment requests (CA box). |
 | `/var/lib/xdebbie/join.json` | root | A pending `bootstrap --join`. |
 | `/var/lib/xdebbie/wg.key` | root 0600 | This box's WireGuard private key. Kept when the mesh is torn down. |
+| `/var/lib/xdebbie/mesh.nft` | root | The mesh's nftables table as last loaded. |
+| `/etc/pki/CA/cacert.pem`, `/etc/libvirt/pki/`, `/etc/pki/libvirt/` | root | libvirt's copies of the cluster CA and this box's certificate and key, for libvirt TLS. |
 | `/var/lib/libvirt/xdebbie/` | root 0711 | The `xdebbie` storage pool: VM disks and seed images, when LVM is not used. |
 | `/etc/sysctl.d/90-xdebbie-forward.conf` | root | Turns on IPv4 forwarding. |
 | `/etc/modules-load.d/xdebbie-mesh.conf` | root | Loads `geneve` and `wireguard` at boot. |
@@ -52,7 +55,7 @@ comment starting `xdebbie`.
 | 49152-49215 | TCP | other hosts | libvirt's live-migration data. Not opened by bootstrap. |
 
 ABE's own ports on the underlay are opened when ABE is set up; see
-[Use ABE volumes](../how-to/abe-volumes.md).
+[abe-backed disks](../storage/abe.md#set-up-abe-on-a-host).
 
 ## Interfaces and addresses
 
@@ -75,3 +78,33 @@ ABE's own ports on the underlay are opened when ABE is set up; see
 |---|---|
 | `inet xdebbie_mesh` | Drops Geneve arriving on any interface but the underlay. |
 | `ip xdebbie_host` | Masquerades this box's VM /24, forwards VM DNS to `upstream_dns`, and drops new flows into the bridge from other interfaces. |
+
+## The package
+
+One package, `xdebbied`, built with cargo-deb from
+`[package.metadata.deb]` in `crates/xdebbied/Cargo.toml` and published for
+each tagged release to <https://apt.xdebbie.org> (suite `stable`,
+component `main`, amd64). The version is the workspace's.
+
+```bash
+scripts/build-deb.sh        # build the release binaries and the .deb
+scripts/verify-package.sh   # control fields, maintainer scripts, files
+```
+
+| Path | What |
+|---|---|
+| `/usr/bin/xdebbied`, `/usr/bin/xdctl` | the daemon and the CLI |
+| `/usr/lib/systemd/system/xdebbied.service` | the unit |
+| `/etc/modules-load.d/xdebbie-mesh.conf` | loads `geneve` and `wireguard` at boot (conffile) |
+| `/etc/apparmor.d/local/wg` | lets `wg` read `/var/lib/xdebbie/wg.key` (conffile) |
+| `/usr/share/doc/xdebbied/` | `README.md`, `BOOTSTRAP.md` (from `docs/compute/boxes.md`), `mesh.md` (`docs/network/mesh.md`), `network.md` (`docs/network/addresses-and-dhcp.md`), `troubleshooting.md`, `configuration.md` (both from `docs/reference/`), `copyright` |
+
+Depends: libvirt-daemon-system, libvirt-clients, qemu-kvm, qemu-utils,
+cloud-image-utils, lvm2, thin-provisioning-tools, iproute2, nftables,
+wireguard-tools, ufw, systemd. The maintainer scripts are described in
+[Boxes](../compute/boxes.md#the-package).
+
+The shipped docs are flat files, so links between them do not resolve
+there. When a shipped page moves, update `assets` in
+`crates/xdebbied/Cargo.toml` and the list in `scripts/verify-package.sh`
+together.

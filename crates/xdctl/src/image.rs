@@ -254,7 +254,7 @@ pub fn import(i: Import) -> Result<()> {
     if exists {
         println!(
             "note: an ABE base already sealed from image {name:?} keeps the old contents; \
-             see docs/storage.md, \"Base volumes\""
+             see docs/storage/abe.md, \"Base volumes\""
         );
     }
     Ok(())

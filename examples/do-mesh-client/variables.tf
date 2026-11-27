@@ -1,4 +1,4 @@
-# Inputs: docs/how-to/cloud-mesh-client.md, "1. Fill in the variables".
+# Inputs: docs/network/clients.md, "A cloud server as a client".
 
 variable "name" {
   description = "Server name; also the client's name on the hub (xdctl mesh client add --name)."
@@ -10,7 +10,7 @@ variable "box" {
   type        = number
   validation {
     condition     = var.box >= 1 && var.box <= 254
-    error_message = "box must be 1-254 (docs/mesh.md, Clients)."
+    error_message = "box must be 1-254 (docs/network/clients.md)."
   }
 }
 

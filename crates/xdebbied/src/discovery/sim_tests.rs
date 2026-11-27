@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Discovery, announces and leader election on a simulated LAN (sim.rs):
 //! real engines, in-memory bus, paused clock. The timings asserted are the
-//! ones docs/autodiscovery.md promises.
+//! ones docs/network/discovery.md and docs/compute/leader.md promises.
 
 use std::time::Duration;
 

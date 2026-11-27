@@ -95,7 +95,7 @@ pub struct Config {
     #[serde(default = "d_multicast")]
     pub multicast_addr: String,
     /// Hear unsigned discovery messages too. Discovery is signed with the
-    /// cluster token (docs/autodiscovery.md); set this only while a rolling
+    /// cluster token (docs/network/discovery.md); set this only while a rolling
     /// upgrade still has boxes whose daemon does not sign.
     #[serde(default)]
     pub discovery_accept_unsigned: bool,
@@ -409,7 +409,7 @@ storage_pool = "boot"
         assert_eq!(s.bridge(), "virbr-xdebbie");
     }
 
-    /// docs/mesh.md, "Blackhole routes for the mesh networks".
+    /// docs/network/routes-and-firewall.md, "Blackhole routes for the mesh networks".
     #[test]
     fn mesh_blackholes_default_override_and_validation() {
         use crate::mesh::{

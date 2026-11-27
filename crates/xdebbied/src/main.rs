@@ -343,7 +343,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
     // Resolve listen address once: explicit config > default-route IP > loopback.
     let listen = cfg.effective_listen();
 
-    // Discovery and election (docs/autodiscovery.md). The leader runs the
+    // Discovery and election (docs/compute/leader.md). The leader runs the
     // reconciler and answers cluster routes; followers forward to it.
     // No discovery (disabled, or no multicast) means this box decides.
     let hostname = leader::local_hostname();

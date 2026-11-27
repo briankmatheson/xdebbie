@@ -1,74 +1,22 @@
-# XDebbie documentation
+# xdebbie documentation
 
-XDebbie turns a few Debian 13 servers running QEMU/KVM and libvirt into one
-small cloud: it places, runs, moves and heals VMs, joins every box's VM
-network into one encrypted mesh, and serves VMs to Kubernetes through
-Cluster API.
+xdebbie runs VMs on a few Debian 13 boxes as one cluster: it places them,
+moves them, joins every box's VM network into one encrypted mesh, and
+serves VMs to Kubernetes through Cluster API. These pages are for xdebbie
+0.23.0.
 
-These pages are organized by what you are doing.
-
-## Getting started
-
-Follow these in order to go from bare servers to a working cluster.
-
-1. [Install the first box](getting-started/install.md)
-2. [Join a second box](getting-started/join.md)
-3. [Create your first VM](getting-started/first-vm.md)
-4. [Run Kubernetes with Cluster API](getting-started/cluster-api.md)
-
-## How-to guides
-
-Steps for one task each.
-
-- [Use an LVM thin pool for VM disks](how-to/lvm-thin-pool.md)
-- [Use ABE volumes](how-to/abe-volumes.md)
-- [Drain a host and move VMs](how-to/drain-and-migrate.md)
-- [Connect a laptop with xdj](how-to/mesh-clients.md)
-- [Reserve addresses through DNS](how-to/dns-reserved-addresses.md)
-- [Give VMs NTP servers through DHCP](how-to/ntp.md)
-- [Rotate the API token](how-to/rotate-token.md)
-- [Upgrade xdebbied](how-to/upgrade.md)
-- [Back up and restore a box's state](how-to/backup-restore.md)
-
-## Reference
-
-Exact names, defaults and formats.
-
-- [Configuration file: xdebbied.toml](reference/configuration.md)
-- [REST API](reference/api.md)
-- [xdctl commands](reference/xdctl.md)
-- [xdebbied commands](reference/xdebbied.md)
-- [Files, ports and interfaces](reference/files-and-ports.md)
-- [DHCP options served](reference/dhcp-options.md)
-- [Cluster API contract](reference/capi-contract.md)
-- [The Debian package](reference/debian-package.md)
-
-## Explanation
-
-How it works and why.
-
-- [Architecture](architecture.md): state, the reconcile loop, the scheduler
-- [Bootstrap](bootstrap.md): what bootstrap does, the files it writes,
-  joining a cluster
-- [Discovery, election and the leader](autodiscovery.md)
-- [Geneve mesh over WireGuard](mesh.md)
-- [Overlay addressing and DHCP](network.md)
-- [VM storage: local or ABE](storage.md)
-- [Security model](security.md)
-
-## When things go wrong
-
-- [Troubleshooting](troubleshooting.md)
-- [Limits and known gaps](limits.md)
-
-## Conventions
-
-- Commands to type are in `bash` blocks. Words in capitals, such as
-  `NEW_BOX` or `VM`, are placeholders: replace them.
-- Examples use the product defaults: the WireGuard underlay is
-  `10.22.0.0/16` and the VM overlay `10.23.0.0/16`, where box N owns
-  `10.23.N.0/24`. Hostnames are under `example.org` (`box0.example.org`,
-  `box1.example.org`), and LAN addresses come from `192.0.2.0/24`.
+1. [Getting started](getting-started/README.md): one box to a running VM,
+   a second box, a Kubernetes cluster, a laptop on the mesh.
+2. [Network](network/README.md): the WireGuard underlay, the Geneve overlay,
+   addresses and DHCP, clients, routes and firewall, discovery.
+3. [Storage](storage/README.md): local disks and base images, abe-backed
+   disks, volumes, backups.
+4. [Compute](compute/README.md): VMs, scheduling, migration, capx, the
+   leader, joining boxes, security.
+5. [Reference](reference/README.md): configuration, `xdctl`, `xdebbied`,
+   the API, the mesh spec, files and ports, limits, troubleshooting.
+6. [Glossary](glossary.md): every noun and verb, with a link to where it
+   is explained.
 
 ## Building this site
 
@@ -80,6 +28,6 @@ mdbook build          # writes the site to book/
 mdbook serve --open   # preview with live reload
 ```
 
-`book/` is a plain static site: publish it with any web server, or with
-GitHub or Gitea Pages. Design records live in `specs/` and `milestones/` in
-the source tree, and every release is in `CHANGELOG.md`.
+`tests/check-book.py` checks the table of contents and every link without
+mdBook. Design records are in `specs/` and `milestones/`, and every release
+is in `CHANGELOG.md`.

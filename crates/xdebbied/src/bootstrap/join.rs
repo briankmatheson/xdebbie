@@ -393,7 +393,7 @@ pub fn fetch_network(
 
 /// Register this box's libvirt with the cluster: `PUT /v1/hosts/<name>` at
 /// the CA box, which forwards to the leader if that is someone else. The
-/// leader's store is the only one that matters (docs/autodiscovery.md), so
+/// leader's store is the only one that matters (docs/compute/leader.md), so
 /// the `[[hosts]]` entry in a joiner's own config is not enough.
 pub fn register_host(ca_url: &str, paths: &ApiTlsPaths, host: &xdebbie_core::Host) -> Result<()> {
     let ca_url = ca_url.trim_end_matches('/');

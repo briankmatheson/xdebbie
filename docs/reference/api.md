@@ -14,7 +14,13 @@ Any box in a cluster answers. Hosts, VMs, volumes, failure domains and
 there and relays the reply (503 with `Retry-After` during an election, 502
 if the leader is unreachable). `/v1/leader`, `/v1/network`, `/v1/mesh*` and
 `/v1/token`, `/v1/version`, `/v1/settings` and `/v1/client-config` describe
-the box you asked. See [Discovery, election and the leader](../autodiscovery.md).
+the box you asked. See [The leader](../compute/leader.md).
+
+## Health
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/healthz` | *Public, box-local, outside `/v1`.* Answers `ok` |
 
 ## Version
 
@@ -31,7 +37,7 @@ the box you asked. See [Discovery, election and the leader](../autodiscovery.md)
 ## Token
 
 One bearer token per cluster; rotation overlaps the old and new until every
-node accepts the new one ([Rotate the API token](../how-to/rotate-token.md)). Fingerprints are the first
+node accepts the new one ([Rotate the token](../compute/security.md#rotate-the-token)). Fingerprints are the first
 12 hex of SHA-256; the token itself is shown only by `rotate`.
 
 | Method | Path | Notes |
@@ -69,7 +75,7 @@ would fit before it asks a cluster for one.
 
 ## Enrolment
 
-How a box joins ([Bootstrap](../bootstrap.md#joining-a-cluster-enrolment-and-approval)). Decided by the box
+How a box joins ([Boxes](../compute/boxes.md#join-a-cluster-enrolment-and-approval)). Decided by the box
 holding the CA key; any other member forwards these to it (`ca_url`), 409
 if it cannot. `xdebbied bootstrap --join` is the only client of the
 public ones for boxes; xdj is the client for `kind: "client"`.
@@ -92,7 +98,7 @@ public ones for boxes; xdj is the client for `kind: "client"`.
 |---|---|---|
 | GET | `/v1/hosts` | List hosts, with discovered `capacity`, `lastSeen` and, for hosts with an `abe`, the last `/utilization` reading as `abeCapacity` (`thin`, `bytes`, `usedBytes`, `freeBytes`, `provisionedBytes`, `dataPercent`, `metadataPercent`, `tls` — the ABE's API is behind mutual TLS, abe ≥ 0.5.0 — `seen`) |
 | GET | `/v1/hosts/{name}` | |
-| PUT | `/v1/hosts/{name}` | Upsert. 201 created, 200 updated. Keeps runtime fields. `agent` (optional): API URL of the xdebbied on that host; the leader sends host-local work there (set by that daemon's registrar, see [Discovery](../autodiscovery.md#the-store-is-per-box-followers-keep-up)) |
+| PUT | `/v1/hosts/{name}` | Upsert. 201 created, 200 updated. Keeps runtime fields. `agent` (optional): API URL of the xdebbied on that host; the leader sends host-local work there (set by that daemon's registrar, see [The leader](../compute/leader.md#followers-keep-up)) |
 | DELETE | `/v1/hosts/{name}` | 409 if VMs remain — drain first |
 | POST | `/v1/hosts/{name}/cordon` | No new placements |
 | POST | `/v1/hosts/{name}/uncordon` | |
@@ -145,8 +151,8 @@ Vm status fields: `phase` (`Pending`, `Provisioning`, `Running`, `Stopped`,
 
 ## Volumes
 
-Standalone ABE volumes with their own lifecycle, hot-plugged into VMs as
-virtio disks. The host does the NVMe/TCP; the guest never needs a route to
+Standalone abe volumes with their own lifecycle, hot-plugged into VMs on
+their virtio-scsi controller. The host does the NVMe/TCP; the guest never needs a route to
 ABE. This is what the `abe-csi` driver uses from inside Kubernetes VMs.
 
 | Method | Path | Notes |
@@ -186,7 +192,7 @@ characterization when it ran one.
 
 ## Mesh
 
-Box-local, never forwarded. Details in [Geneve mesh over WireGuard](../mesh.md#api).
+Box-local, never forwarded. Details in [The mesh](../network/mesh.md) and [the mesh spec](mesh-spec.md).
 
 | Method | Path | Notes |
 |---|---|---|

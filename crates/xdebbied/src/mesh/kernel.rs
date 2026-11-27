@@ -21,7 +21,7 @@ use super::model::{NFT_TABLE, OWNER_ALIAS, parse_net, parse_tunnel_name};
 /// Per-command timeout.
 pub const CMD_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Metric of the mesh's blackhole routes (docs/mesh.md, "Blackhole routes
+/// Metric of the mesh's blackhole routes (docs/network/routes-and-firewall.md, "Blackhole routes
 /// for the mesh networks"). The kernel's route priority is a u32 and lower
 /// wins, so `u32::MAX` loses to every other route to the same net: the
 /// connected route (metric 0) always wins while its link has its address.
@@ -272,7 +272,7 @@ pub enum Action {
         dev: String,
     },
     /// `ip route replace blackhole <net>/<prefix> metric BLACKHOLE_METRIC`
-    /// (docs/mesh.md, "Blackhole routes for the mesh networks").
+    /// (docs/network/routes-and-firewall.md, "Blackhole routes for the mesh networks").
     BlackholeAdd {
         net: Ipv4Addr,
         prefix: u8,
@@ -617,7 +617,7 @@ pub fn parse_link_addrs(json: &str) -> Result<Vec<LinkAddr>> {
 }
 
 /// `ip -j -4 route show type blackhole` → our blackholes, as (net,
-/// prefix). Only `BLACKHOLE_METRIC` counts as ours (docs/mesh.md,
+/// prefix). Only `BLACKHOLE_METRIC` counts as ours (docs/network/routes-and-firewall.md,
 /// "Blackhole routes for the mesh networks"); a missing `metric` is 0.
 /// A host route prints its `dst` without `/32`.
 pub fn parse_blackholes(json: &str) -> Result<Vec<(Ipv4Addr, u8)>> {
@@ -1215,7 +1215,7 @@ impl NetOps for FakeNetOps {
             });
         }
         // A blackhole is more specific than the default route, but loses
-        // to the connected routes above (worst metric, docs/mesh.md).
+        // to the connected routes above (worst metric, docs/network/routes-and-firewall.md).
         if st
             .blackholes
             .iter()

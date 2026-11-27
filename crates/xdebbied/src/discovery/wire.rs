@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Signed discovery datagrams (docs/autodiscovery.md, "Authentication").
+//! Signed discovery datagrams (docs/network/discovery.md, "Signing").
 //!
 //! Multicast is open to anyone on the LAN, so a box that holds the cluster
 //! token signs what it sends and drops what does not verify. Without that,

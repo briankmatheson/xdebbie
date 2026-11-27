@@ -266,7 +266,7 @@ pub fn diff(input: PlanInput<'_>) -> Plan {
     Plan { actions, excluded }
 }
 
-/// Blackhole routes, desired − observed (docs/mesh.md, "Blackhole routes
+/// Blackhole routes, desired − observed (docs/network/routes-and-firewall.md, "Blackhole routes
 /// for the mesh networks"): an add for each wanted net that is missing, a
 /// delete for each of ours no longer wanted. `observed.blackholes` holds
 /// only routes at our metric, so a foreign blackhole is never deleted.
@@ -284,7 +284,7 @@ pub fn blackholes(spec: &MeshSpec, observed: &Observed) -> Vec<Action> {
 
 /// Teardown: every mesh-owned tunnel goes. Nothing else: the blackhole
 /// routes stay, so a box whose mesh is switched off still drops traffic
-/// to the mesh networks instead of leaking it (docs/mesh.md).
+/// to the mesh networks instead of leaking it (docs/network/routes-and-firewall.md).
 pub fn teardown(observed: &Observed) -> Vec<Action> {
     observed
         .links
@@ -638,7 +638,7 @@ mod tests {
         assert_eq!(t.len(), 2);
         assert!(t.iter().all(|a| a.dev() == "gnv-b1" || a.dev() == "gnv-b2"));
     }
-    // ---- blackholes (docs/mesh.md, "Blackhole routes for the mesh networks") ----
+    // ---- blackholes (docs/network/routes-and-firewall.md, "Blackhole routes for the mesh networks") ----
 
     fn wg_spec() -> MeshSpec {
         MeshSpec {

@@ -12,7 +12,7 @@ pub enum DiscoveryMessage {
         hostname: String,
         api_url: String,
         /// Addresses `api_url` can be reached at when its hostname does
-        /// not resolve on the receiver (docs/autodiscovery.md). Absent
+        /// not resolve on the receiver (docs/network/discovery.md). Absent
         /// from daemons before 0.15; the packet's source address still
         /// serves as a candidate.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]

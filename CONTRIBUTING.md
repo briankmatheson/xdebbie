@@ -19,7 +19,9 @@ your work is released under that license.
 The docs live in `docs/` and build into a site with
 [mdBook](https://rust-lang.github.io/mdBook/) (`mdbook build`, output in
 `book/`). `docs/SUMMARY.md` is the table of contents; a new page must be
-listed there.
+listed there. The book has six parts, in this order: getting started,
+network, storage, compute, reference, glossary. Every page goes in one of
+them.
 
 - Write plain, short sentences. How-to guides speak to the reader ("Run
   this").
@@ -32,13 +34,15 @@ listed there.
   `10.23.0.0/16`). No real hostnames or addresses.
 - A new config key goes in `docs/reference/configuration.md`, a new route in
   `docs/reference/api.md`, a new `xdctl` command in
-  `docs/reference/xdctl.md`.
+  `docs/reference/xdctl.md`. A new noun or verb gets a line in
+  `docs/glossary.md`.
 
 Before sending a change, run:
 
 ```bash
 tests/lint-links.sh        # links, fences, placeholders, site-specific names
 tests/lint-config-doc.sh   # every config key is documented
+tests/check-book.py        # SUMMARY entries, the six parts, links and anchors
 mdbook build               # if you have mdbook
 ```
 

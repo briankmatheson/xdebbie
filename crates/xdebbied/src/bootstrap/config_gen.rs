@@ -184,7 +184,7 @@ virsh = "virsh"
 # NoCloud seed ISO generation command
 seed_command = ["cloud-localds", "--network-config={{net}}", "--vendor-data={{vendor}}", "{{out}}", "{{user}}", "{{meta}}"]
 
-# Multicast discovery and leader election (docs/autodiscovery.md). The
+# Multicast discovery and leader election (docs/network/discovery.md). The
 # elected leader runs the reconciler and answers every cluster request;
 # followers forward to it. No peers = this box leads. Messages are signed
 # with the cluster token; discovery_accept_unsigned = true hears daemons that
@@ -201,7 +201,7 @@ advertise_url = "{advertise_url}"
 # unset on the box that was bootstrapped first.
 {ca_url_line}
 
-# Overlay addressing + built-in DHCP (docs/network.md). The scheduler binds an
+# Overlay addressing + built-in DHCP (docs/network/addresses-and-dhcp.md). The scheduler binds an
 # address to every VM at creation (`xdctl vm ls` shows it before first boot)
 # and the responder on the bridge answers only for those MACs. One /16 per
 # overlay, one /24 per box: every box shares `cidr`; box N's bridge is
@@ -209,7 +209,7 @@ advertise_url = "{advertise_url}"
 # reserve.
 {network_section}
 
-# Geneve overlay mesh (on by default; docs/mesh.md). One tunnel per peer is
+# Geneve overlay mesh (on by default; docs/network/mesh.md). One tunnel per peer is
 # enslaved to the overlay bridge. With zero peers this pins the bridge MTU,
 # installs the xdebbie_mesh nftables table and brings up the WireGuard
 # underlay so another box can enrol this one. Manage peers at runtime with

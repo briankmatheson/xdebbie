@@ -469,7 +469,7 @@ impl MeshManager {
         };
         // Blackhole routes are kept on purpose: with the mesh gone, traffic
         // to its networks must still be dropped, not sent out the default
-        // route (docs/mesh.md, "Blackhole routes for the mesh networks").
+        // route (docs/network/routes-and-firewall.md, "Blackhole routes for the mesh networks").
         let mut actions = plan::teardown(&observed);
         // The WireGuard link goes last: Geneve tunnels reference it via routes.
         actions.extend(self.wg_teardown_actions(&observed, &d.spec));
@@ -829,7 +829,7 @@ impl MeshManager {
             (!foreign.is_empty()).then(|| {
                 format!(
                     "{bridge} has {}, but box {b} owns 10.23.{b}.0/24 (bridge 10.23.{b}.1): \
-                     start over on this box (docs/getting-started/join.md, \"Start over on a box\")",
+                     start over on this box (docs/compute/boxes.md, \"Start over on a box\")",
                     foreign.join(", "),
                     b = spec.box_id
                 )
@@ -899,7 +899,7 @@ impl MeshManager {
         }
 
         // 7. plan. Blackholes for the mesh networks go first, so the safety
-        // net is in place before any tunnel exists (docs/mesh.md,
+        // net is in place before any tunnel exists (docs/network/routes-and-firewall.md,
         // "Blackhole routes for the mesh networks").
         let mut plan = plan::diff(plan::PlanInput {
             spec,
