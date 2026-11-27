@@ -6,7 +6,10 @@
 //! FDB deletes, FDB adds, bridge MTU. The firewall is handled by the
 //! manager because it is not a per-device action.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    net::Ipv4Addr,
+};
 
 use super::{
     kernel::{Action, Link, Observed, PortFlags},
@@ -263,7 +266,25 @@ pub fn diff(input: PlanInput<'_>) -> Plan {
     Plan { actions, excluded }
 }
 
-/// Teardown: every mesh-owned tunnel goes. Nothing else.
+/// Blackhole routes, desired − observed (docs/mesh.md, "Blackhole routes
+/// for the mesh networks"): an add for each wanted net that is missing, a
+/// delete for each of ours no longer wanted. `observed.blackholes` holds
+/// only routes at our metric, so a foreign blackhole is never deleted.
+pub fn blackholes(spec: &MeshSpec, observed: &Observed) -> Vec<Action> {
+    let want = spec.blackhole_nets();
+    let have: BTreeSet<(Ipv4Addr, u8)> = observed.blackholes.iter().copied().collect();
+    let dels = have
+        .difference(&want)
+        .map(|&(net, prefix)| Action::BlackholeDel { net, prefix });
+    let adds = want
+        .difference(&have)
+        .map(|&(net, prefix)| Action::BlackholeAdd { net, prefix });
+    dels.chain(adds).collect()
+}
+
+/// Teardown: every mesh-owned tunnel goes. Nothing else: the blackhole
+/// routes stay, so a box whose mesh is switched off still drops traffic
+/// to the mesh networks instead of leaking it (docs/mesh.md).
 pub fn teardown(observed: &Observed) -> Vec<Action> {
     observed
         .links
@@ -277,8 +298,6 @@ pub fn teardown(observed: &Observed) -> Vec<Action> {
 
 #[cfg(test)]
 mod tests {
-    use std::net::Ipv4Addr;
-
     use super::*;
     use crate::mesh::kernel::{FakeNetOps, FdbEntry, GeneveInfo, LinkKind, NetOps};
 
@@ -618,5 +637,112 @@ mod tests {
         let t = teardown(&obs);
         assert_eq!(t.len(), 2);
         assert!(t.iter().all(|a| a.dev() == "gnv-b1" || a.dev() == "gnv-b2"));
+    }
+    // ---- blackholes (docs/mesh.md, "Blackhole routes for the mesh networks") ----
+
+    fn wg_spec() -> MeshSpec {
+        MeshSpec {
+            wireguard: Some(WireguardSpec::default()),
+            ..spec(2)
+        }
+        .normalize()
+    }
+    fn net(a: &str, prefix: u8) -> (Ipv4Addr, u8) {
+        (a.parse().unwrap(), prefix)
+    }
+    fn bh_converge(f: &FakeNetOps, s: &MeshSpec) -> Vec<Action> {
+        let acts = blackholes(s, &f.observe(&s.bridge(), None).unwrap());
+        for a in &acts {
+            f.apply(a).unwrap();
+        }
+        acts
+    }
+
+    #[test]
+    fn blackholes_fresh_box_gets_three_then_noop() {
+        let f = fake();
+        let s = wg_spec();
+        let adds = bh_converge(&f, &s);
+        let want: Vec<Action> = DEFAULT_BLACKHOLES
+            .iter()
+            .map(|c| {
+                let (net, prefix) = parse_net(c).unwrap();
+                Action::BlackholeAdd { net, prefix }
+            })
+            .collect();
+        assert_eq!(adds, want);
+        assert!(bh_converge(&f, &s).is_empty(), "second pass is a no-op");
+    }
+
+    #[test]
+    fn blackholes_dropped_from_config_are_deleted() {
+        let f = fake();
+        let mut s = wg_spec();
+        bh_converge(&f, &s);
+        s.blackholes.retain(|c| c != "10.24.0.0/16");
+        let (n, p) = net("10.24.0.0", 16);
+        assert_eq!(
+            bh_converge(&f, &s),
+            vec![Action::BlackholeDel { net: n, prefix: p }]
+        );
+        s.blackholes.clear();
+        assert_eq!(bh_converge(&f, &s).len(), 2, "[] deletes ours");
+        assert!(f.snapshot().blackholes.is_empty());
+        assert!(bh_converge(&f, &s).is_empty(), "and then nothing");
+    }
+
+    #[test]
+    fn blackholes_leave_foreign_metrics_alone() {
+        let f = fake();
+        let (n, p) = net("10.23.0.0", 16);
+        f.add_blackhole(n, p, 100);
+        f.add_blackhole(Ipv4Addr::new(192, 0, 2, 0), 24, 0);
+        let mut s = wg_spec();
+        s.blackholes = vec![];
+        assert!(bh_converge(&f, &s).is_empty(), "not ours: never deleted");
+        s.blackholes = vec!["10.23.0.0/16".into()];
+        assert_eq!(
+            bh_converge(&f, &s),
+            vec![Action::BlackholeAdd { net: n, prefix: p }],
+            "a foreign one at another metric does not count as ours"
+        );
+        assert_eq!(f.snapshot().blackholes.len(), 3);
+    }
+
+    /// Without managed WireGuard the underlay is the operator's: a net that
+    /// holds a peer's `remote` is not blackholed (it could beat their route).
+    #[test]
+    fn blackholes_skip_plain_underlay_peer_nets() {
+        let s = spec(2);
+        assert_eq!(
+            s.blackhole_nets().into_iter().collect::<Vec<_>>(),
+            vec![net("10.23.0.0", 16), net("10.24.0.0", 16)]
+        );
+        assert_eq!(wg_spec().blackhole_nets().len(), 3);
+    }
+
+    #[test]
+    fn blackholes_lose_to_connected_routes_in_the_fake() {
+        let f = fake();
+        bh_converge(&f, &wg_spec());
+        f.set_link_addrs("br-int", &[(Ipv4Addr::new(10, 23, 0, 1), 16)]);
+        let dst = Ipv4Addr::new(10, 23, 4, 1);
+        assert_eq!(f.route_get(dst).unwrap().dev, "br-int");
+        f.set_link_addrs("br-int", &[]);
+        assert!(f.route_get(dst).is_err(), "dropped, not the default route");
+        assert_eq!(f.route_get(Ipv4Addr::new(192, 0, 2, 1)).unwrap().dev, "ul0");
+    }
+
+    #[test]
+    fn teardown_keeps_blackholes() {
+        let f = fake();
+        let s = wg_spec();
+        converge(&f, &s);
+        bh_converge(&f, &s);
+        for a in teardown(&f.observe(&s.bridge(), None).unwrap()) {
+            assert!(!a.kind().starts_with("blackhole"), "{a:?}");
+            f.apply(&a).unwrap();
+        }
+        assert_eq!(f.snapshot().blackholes.len(), 3);
     }
 }

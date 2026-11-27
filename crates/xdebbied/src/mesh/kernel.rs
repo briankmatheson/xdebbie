@@ -14,10 +14,20 @@ use anyhow::bail;
 use anyhow::{Context, Result, anyhow};
 use serde_json::Value;
 
-use super::model::{NFT_TABLE, OWNER_ALIAS, parse_tunnel_name};
+#[cfg(test)]
+use super::model::net_contains;
+use super::model::{NFT_TABLE, OWNER_ALIAS, parse_net, parse_tunnel_name};
 
 /// Per-command timeout.
 pub const CMD_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Metric of the mesh's blackhole routes (docs/mesh.md, "Blackhole routes
+/// for the mesh networks"). The kernel's route priority is a u32 and lower
+/// wins, so `u32::MAX` loses to every other route to the same net: the
+/// connected route (metric 0) always wins while its link has its address.
+/// It is also the ownership mark: a blackhole at any other metric is not
+/// ours and is never deleted.
+pub const BLACKHOLE_METRIC: u32 = u32::MAX;
 
 // ---------- observed state ----------
 
@@ -156,6 +166,8 @@ pub struct Observed {
     pub wg: Option<WgIface>,
     /// IPv4 addresses on the WireGuard link.
     pub wg_addrs: Vec<LinkAddr>,
+    /// Our blackhole routes (`BLACKHOLE_METRIC` only), as (net, prefix).
+    pub blackholes: Vec<(Ipv4Addr, u8)>,
 }
 
 impl Observed {
@@ -259,6 +271,18 @@ pub enum Action {
     DeleteLink {
         dev: String,
     },
+    /// `ip route replace blackhole <net>/<prefix> metric BLACKHOLE_METRIC`
+    /// (docs/mesh.md, "Blackhole routes for the mesh networks").
+    BlackholeAdd {
+        net: Ipv4Addr,
+        prefix: u8,
+    },
+    /// `ip route del blackhole <net>/<prefix> metric BLACKHOLE_METRIC`:
+    /// only ever one of ours, which the metric identifies.
+    BlackholeDel {
+        net: Ipv4Addr,
+        prefix: u8,
+    },
 }
 
 impl Action {
@@ -284,9 +308,12 @@ impl Action {
             Action::AddrAdd { .. } => "addr_add",
             Action::AddrDel { .. } => "addr_del",
             Action::DeleteLink { .. } => "delete_link",
+            Action::BlackholeAdd { .. } => "blackhole_add",
+            Action::BlackholeDel { .. } => "blackhole_del",
         }
     }
     /// The device this action touches (for per-peer error attribution).
+    /// Blackhole routes have none: `""`.
     pub fn dev(&self) -> &str {
         match self {
             Action::CreateTunnel { dev, .. }
@@ -307,6 +334,7 @@ impl Action {
             | Action::AddrDel { dev, .. }
             | Action::DeleteLink { dev } => dev,
             Action::SetBridgeMtu { bridge, .. } | Action::SetBridgeStpOff { bridge } => bridge,
+            Action::BlackholeAdd { .. } | Action::BlackholeDel { .. } => "",
         }
     }
 }
@@ -341,6 +369,8 @@ pub trait NetOps: Send + Sync {
     fn wg_pubkey(&self, private_key: &str) -> Result<String>;
     /// IPv4 addresses on a link.
     fn link_addrs(&self, dev: &str) -> Result<Vec<LinkAddr>>;
+    /// Our IPv4 blackhole routes (at `BLACKHOLE_METRIC`), as (net, prefix).
+    fn list_blackholes(&self) -> Result<Vec<(Ipv4Addr, u8)>>;
     /// Current unix time (injectable so handshake ages are testable).
     fn now_unix(&self) -> u64 {
         std::time::SystemTime::now()
@@ -370,6 +400,7 @@ pub trait NetOps: Send + Sync {
             fdb,
             wg,
             wg_addrs,
+            blackholes: self.list_blackholes()?,
         })
     }
 }
@@ -583,6 +614,27 @@ pub fn parse_link_addrs(json: &str) -> Result<Vec<LinkAddr>> {
         }
     }
     Ok(out)
+}
+
+/// `ip -j -4 route show type blackhole` → our blackholes, as (net,
+/// prefix). Only `BLACKHOLE_METRIC` counts as ours (docs/mesh.md,
+/// "Blackhole routes for the mesh networks"); a missing `metric` is 0.
+/// A host route prints its `dst` without `/32`.
+pub fn parse_blackholes(json: &str) -> Result<Vec<(Ipv4Addr, u8)>> {
+    let arr: Vec<Value> =
+        serde_json::from_str(json).context("parsing `ip -j route show type blackhole` output")?;
+    Ok(arr
+        .iter()
+        .filter(|v| u(v, "metric").unwrap_or(0) == u64::from(BLACKHOLE_METRIC))
+        .filter_map(|v| s(v, "dst"))
+        .filter_map(|d| {
+            parse_net(&if d.contains('/') {
+                d
+            } else {
+                format!("{d}/32")
+            })
+        })
+        .collect())
 }
 
 pub fn parse_local_addrs(json: &str) -> Result<Vec<Ipv4Addr>> {
@@ -873,8 +925,19 @@ impl NetOps for IpCliNetOps {
             Action::DeleteLink { dev } => {
                 self.ip(&["link", "del", dev])?;
             }
+            Action::BlackholeAdd { net, prefix } => {
+                let (dst, metric) = (format!("{net}/{prefix}"), BLACKHOLE_METRIC.to_string());
+                self.ip(&["route", "replace", "blackhole", &dst, "metric", &metric])?;
+            }
+            Action::BlackholeDel { net, prefix } => {
+                let (dst, metric) = (format!("{net}/{prefix}"), BLACKHOLE_METRIC.to_string());
+                self.ip(&["route", "del", "blackhole", &dst, "metric", &metric])?;
+            }
         }
         Ok(())
+    }
+    fn list_blackholes(&self) -> Result<Vec<(Ipv4Addr, u8)>> {
+        parse_blackholes(&self.ip(&["-j", "-4", "route", "show", "type", "blackhole"])?)
     }
     fn wireguard_module_present(&self) -> bool {
         std::path::Path::new("/sys/module/wireguard").exists()
@@ -986,6 +1049,8 @@ pub struct FakeState {
     pub addrs: BTreeMap<String, Vec<LinkAddr>>,
     pub keys_generated: u32,
     pub now: u64,
+    /// Blackhole routes as (net, prefix, metric); ours have `BLACKHOLE_METRIC`.
+    pub blackholes: std::collections::BTreeSet<(Ipv4Addr, u8, u32)>,
 }
 
 #[cfg(test)]
@@ -1073,6 +1138,14 @@ impl FakeNetOps {
             },
         );
     }
+    /// A blackhole route someone else installed (any metric).
+    pub fn add_blackhole(&self, net: Ipv4Addr, prefix: u8, metric: u32) {
+        self.state
+            .lock()
+            .unwrap()
+            .blackholes
+            .insert((net, prefix, metric));
+    }
     pub fn applied(&self) -> Vec<Action> {
         self.state.lock().unwrap().applied.clone()
     }
@@ -1140,6 +1213,15 @@ impl NetOps for FakeNetOps {
                 dev: dev.to_owned(),
                 prefsrc: Some(src),
             });
+        }
+        // A blackhole is more specific than the default route, but loses
+        // to the connected routes above (worst metric, docs/mesh.md).
+        if st
+            .blackholes
+            .iter()
+            .any(|&(n, p, _)| net_contains((n, p), dst))
+        {
+            bail!("no route to {dst}: blackhole");
         }
         match &st.default_route_dev {
             Some(d) => Ok(RouteInfo {
@@ -1379,6 +1461,14 @@ impl NetOps for FakeNetOps {
                 st.wg.remove(dev);
                 st.addrs.remove(dev);
             }
+            Action::BlackholeAdd { net, prefix } => {
+                st.blackholes.insert((*net, *prefix, BLACKHOLE_METRIC));
+            }
+            Action::BlackholeDel { net, prefix } => {
+                if !st.blackholes.remove(&(*net, *prefix, BLACKHOLE_METRIC)) {
+                    bail!("RTNETLINK answers: No such process");
+                }
+            }
         }
         Ok(())
     }
@@ -1414,6 +1504,15 @@ impl NetOps for FakeNetOps {
     }
     fn now_unix(&self) -> u64 {
         self.state.lock().unwrap().now
+    }
+    fn list_blackholes(&self) -> Result<Vec<(Ipv4Addr, u8)>> {
+        let st = self.state.lock().unwrap();
+        Ok(st
+            .blackholes
+            .iter()
+            .filter(|&&(_, _, m)| m == BLACKHOLE_METRIC)
+            .map(|&(n, p, _)| (n, p))
+            .collect())
     }
     fn nft_replace_table(&self, rendered: &str) -> Result<()> {
         self.state.lock().unwrap().nft_table = Some(rendered.to_owned());
@@ -1610,6 +1709,25 @@ mod tests {
         let a = parse_local_addrs(&fx("ip-addr.json")).unwrap();
         assert!(a.contains(&"10.22.0.1".parse().unwrap()));
         assert!(a.contains(&"10.23.0.1".parse().unwrap()));
+    }
+
+    /// Only our metric counts; a foreign blackhole (metric 100, or none) is
+    /// not ours, and a host route's bare `dst` reads as /32.
+    #[test]
+    fn parses_blackholes_fixture_keeping_only_ours() {
+        let b = parse_blackholes(&fx("ip-route-blackhole.json")).unwrap();
+        let net = |s: &str| s.parse::<Ipv4Addr>().unwrap();
+        assert_eq!(
+            b,
+            vec![
+                (net("10.22.0.0"), 16),
+                (net("10.23.0.0"), 16),
+                (net("10.24.0.0"), 16),
+                (net("10.99.0.7"), 32),
+            ]
+        );
+        assert!(parse_blackholes("[]").unwrap().is_empty());
+        assert!(parse_blackholes("nope").is_err());
     }
 
     #[test]

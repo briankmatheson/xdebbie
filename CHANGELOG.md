@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.3] - 2026-11-27
+
+### Added
+- Every box installs a blackhole route at metric 4294967295 for each mesh
+  network (`10.22.0.0/16`, `10.23.0.0/16`, `10.24.0.0/16` by default;
+  `blackholes` in `[mesh]` or the API spec, `[]` for none). The connected
+  and client routes win while they exist; when a bridge or the WireGuard
+  link goes, mesh traffic is dropped instead of leaving by the default
+  route. Ours are told apart by the metric; teardown keeps them
+  (docs/mesh.md, "Blackhole routes for the mesh networks").
+
 ## [0.22.2] - 2026-11-27
 
 ### Fixed
